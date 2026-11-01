@@ -1,0 +1,40 @@
+# Python / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+!.env.example
+
+# SQLite runtime databases (outside BookingInventory)
+*.db-journal
+*.sqlite3
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Build and test artifacts
+dist/
+dist-ssr/
+dist-test/
+frontend/dist/
+frontend/dist-test/
+
