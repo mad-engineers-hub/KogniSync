@@ -57,9 +57,22 @@ export const ResultsPage: React.FC = () => {
     data: journeys = [],
     isLoading,
   } = useQuery({
-    queryKey: ['journeys', origin, destination, query, budgetMax, date, costWeight],
+    queryKey: [
+      'journeys',
+      origin,
+      destination,
+      query,
+      date,
+      arrivalBefore,
+      budgetMax,
+      costWeight,
+      durationWeight,
+      comfortWeight,
+      carbonWeight,
+      passengers,
+    ],
     queryFn: () => searchJourneys(request),
-    staleTime: 60000,
+    staleTime: 10000,
   });
 
   return (
