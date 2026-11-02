@@ -11,11 +11,11 @@ export const Navbar: React.FC = () => {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200/80 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-      <div className="max-w-[1536px] mx-auto px-6 lg:px-12 h-16 flex items-center justify-between">
+      <div className="max-w-[1536px] mx-auto px-4 sm:px-6 lg:px-12 h-16 flex items-center justify-between">
         {/* Left: Brand + Navigation */}
-        <div className="flex items-center gap-10">
+        <div className="flex items-center gap-4 sm:gap-8 lg:gap-10">
           {/* Brand Logo */}
-          <Link to="/" className="flex items-center gap-2.5 group">
+          <Link to="/" className="flex items-center gap-2.5 group shrink-0">
             <div className="w-8 h-8 rounded-full bg-[#1769FF] flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
               <svg
                 viewBox="0 0 24 24"
@@ -38,7 +38,7 @@ export const Navbar: React.FC = () => {
           </Link>
 
           {/* Navigation Links */}
-          <nav className="flex items-center gap-8 h-16">
+          <nav className="hidden sm:flex items-center gap-5 sm:gap-6 lg:gap-8 h-16">
             <Link
               to="/"
               className={`h-full flex items-center text-sm font-semibold transition-all relative ${
@@ -84,7 +84,7 @@ export const Navbar: React.FC = () => {
         </div>
 
         {/* Right: Search, Notifications, Avatar */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 shrink-0">
           <button
             type="button"
             className="p-1.5 text-[#52627A] hover:text-[#071B49] transition-colors rounded-lg hover:bg-slate-50"
@@ -104,11 +104,11 @@ export const Navbar: React.FC = () => {
           <div className="h-4 w-px bg-slate-200" />
 
           {/* User profile */}
-          <div className="flex items-center gap-2 pl-1 cursor-pointer group">
+          <div className="flex items-center gap-1.5 sm:gap-2 pl-0.5 cursor-pointer group">
             <div className="w-7 h-7 rounded-full bg-[#8C5D42] text-white flex items-center justify-center font-bold text-xs shadow-2xs">
               G
             </div>
-            <span className="text-sm font-semibold text-[#071B49] group-hover:text-[#1769FF] transition-colors">
+            <span className="hidden sm:inline text-sm font-semibold text-[#071B49] group-hover:text-[#1769FF] transition-colors">
               Gagan
             </span>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors" />

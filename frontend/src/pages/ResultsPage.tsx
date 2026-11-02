@@ -76,19 +76,19 @@ export const ResultsPage: React.FC = () => {
   });
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex flex-col gap-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex flex-col gap-6 min-w-0 max-w-full">
       {/* Top Header Card */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-2xl border border-slate-200 bg-white shadow-xs">
-        <div className="flex items-center gap-3.5">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 sm:p-5 rounded-2xl border border-slate-200 bg-white shadow-xs min-w-0">
+        <div className="flex items-center gap-3.5 min-w-0">
           <Link
             to={`/?${searchParams.toString()}`}
-            className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors shadow-2xs"
+            className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors shadow-2xs shrink-0"
             title="Back to Journey Planner"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2.5">
+          <div className="flex flex-col min-w-0">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
               <h1 className="text-xl sm:text-2xl font-extrabold text-slate-950 font-display">
                 {origin} → {destination}
               </h1>

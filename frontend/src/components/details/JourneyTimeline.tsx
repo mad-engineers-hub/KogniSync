@@ -37,9 +37,9 @@ export const JourneyTimeline: React.FC<JourneyTimelineProps> = ({ journey }) => 
               {nextSeg && (
                 <div className="flex flex-col items-center justify-center my-1 relative">
                   <div className="w-0.5 h-5 bg-amber-300" />
-                  <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 border border-amber-200/90 text-xs text-amber-950 font-mono shadow-2xs">
+                  <div className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl bg-amber-50 border border-amber-200/90 text-xs text-amber-950 font-mono shadow-2xs max-w-full min-w-0 flex-wrap">
                     <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span>
+                    <span className="truncate">
                       <strong className="font-bold text-amber-900">{transferBuffer} min transfer</strong>
                       <span className="text-amber-400 mx-2">·</span>
                       Change at <strong className="font-bold text-slate-900">{segment.destination.name}</strong>

@@ -120,11 +120,11 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({ journey, isFeatured = 
 
                 {/* Explicit Transfer Node between segments */}
                 {idx < journey.segments.length - 1 && (
-                  <div className="flex items-center gap-2 pl-4 py-0.5 text-xs text-amber-900">
-                    <div className="w-0.5 h-6 bg-amber-300 ml-3" />
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-50 border border-amber-200/80 text-[11px] font-mono font-medium shadow-2xs">
+                  <div className="flex items-center gap-2 pl-2 sm:pl-4 py-0.5 text-xs text-amber-900 min-w-0 max-w-full">
+                    <div className="w-0.5 h-6 bg-amber-300 ml-2 sm:ml-3 shrink-0" />
+                    <div className="inline-flex items-center flex-wrap gap-1.5 px-3 py-1 rounded-xl sm:rounded-full bg-amber-50 border border-amber-200/80 text-[11px] font-mono font-medium shadow-2xs max-w-full min-w-0">
                       <Clock className="w-3 h-3 text-amber-600 shrink-0" />
-                      <span>
+                      <span className="truncate">
                         <strong className="font-bold">{seg.transferBufferMinutes || 15} min transfer</strong>
                         <span className="text-amber-500 mx-1.5">·</span>
                         Change at <span className="font-semibold text-slate-800">{seg.destination.name}</span>
