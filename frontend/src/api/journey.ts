@@ -185,7 +185,7 @@ export async function parseTravelIntent(
   return extractClientIntent(text, currentContext);
 }
 
-function extractClientIntent(text: string, currentContext?: TravelContext): TravelIntent {
+export function extractClientIntent(text: string, currentContext?: TravelContext): TravelIntent {
   const t = text.trim();
   const lower = t.toLowerCase();
 

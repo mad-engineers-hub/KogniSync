@@ -1,5 +1,5 @@
-const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
-export const USE_MOCK_FALLBACK = import.meta.env.VITE_USE_MOCK !== 'false'; // default true for standalone demo
+const BACKEND_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || 'http://127.0.0.1:8000';
+export const USE_MOCK_FALLBACK = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_USE_MOCK === 'false') ? false : true;
 
 export class ApiError extends Error {
   status: number;
