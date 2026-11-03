@@ -7,7 +7,8 @@ import { JourneyMap } from '../components/details/JourneyMap';
 import { AIRecommendationExplanation } from '../components/details/AIRecommendationExplanation';
 import { OptimizationBadge } from '../components/common/OptimizationBadge';
 import { formatCurrency, formatDuration } from '../lib/utils';
-import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle, Compass, Eye, Sparkles } from 'lucide-react';
+import { getJourneyXRReferences } from '../utils/xrMatching';
 
 export const DetailsPage: React.FC = () => {
   const { journeyId } = useParams<{ journeyId: string }>();
@@ -51,6 +52,8 @@ export const DetailsPage: React.FC = () => {
       </div>
     );
   }
+
+  const xrReferences = getJourneyXRReferences(journey);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex flex-col gap-8">
@@ -108,9 +111,61 @@ export const DetailsPage: React.FC = () => {
           <JourneyTimeline journey={journey} />
         </div>
 
-        {/* Right column (5 cols): Map & Invariants metadata */}
+        {/* Right column (5 cols): Map & Invariants metadata & XR Explorer */}
         <div className="lg:col-span-5 flex flex-col gap-6">
           <JourneyMap segments={journey.segments} />
+
+          {/* XR Spatial Previews & AR Wayfinding Card */}
+          {xrReferences.length > 0 && (
+            <div className="p-5 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50/80 via-white to-slate-50 shadow-xs flex flex-col gap-3.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-blue-900">
+                  <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
+                    <Compass className="w-4 h-4 animate-spin-slow" />
+                  </div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider font-mono">
+                    Explore This Journey in 360° & AR
+                  </h4>
+                </div>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold font-mono">
+                  <Sparkles className="w-2.5 h-2.5 text-blue-600" />
+                  {xrReferences.length} Locations
+                </span>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Step inside the key transfer stations and destination hubs on this route. View 360° concourse walkthroughs and step-by-step AR wayfinding between platforms, feeder buses, and cab stands.
+              </p>
+
+              <div className="flex flex-col gap-2 pt-1">
+                {xrReferences.map((ref) => (
+                  <Link
+                    key={ref.sceneId}
+                    to={`/xr/${ref.sceneId}`}
+                    className="flex items-center justify-between p-3 rounded-xl border border-blue-200/80 bg-white hover:border-blue-500 hover:shadow-sm transition-all group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="p-2 rounded-lg bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors shrink-0">
+                        <Eye className="w-4 h-4" />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+                          {ref.context.replace('_', ' ')}
+                        </span>
+                        <span className="text-xs font-bold text-slate-900 group-hover:text-blue-600 truncate transition-colors">
+                          {ref.title}
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="text-xs font-semibold text-blue-600 px-2.5 py-1 rounded-lg bg-blue-50 group-hover:bg-blue-100 transition-colors shrink-0">
+                      Open 360°
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Concurrency Invariant Card */}
           <div className="p-5 rounded-2xl border border-slate-200 bg-white flex flex-col gap-3 shadow-xs">

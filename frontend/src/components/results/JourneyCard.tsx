@@ -1,10 +1,19 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Clock, ArrowRight, ShieldCheck, Sparkles, Leaf, ArrowDown } from 'lucide-react';
+import {
+  Clock,
+  ArrowRight,
+  ShieldCheck,
+  Sparkles,
+  Leaf,
+  Eye,
+  Compass,
+} from 'lucide-react';
 import { Journey } from '../../types/journey';
 import { ModeIcon } from '../common/ModeIcon';
 import { OptimizationBadge } from '../common/OptimizationBadge';
 import { formatCurrency, formatDuration, formatTime } from '../../lib/utils';
+import { matchXRSceneForHub, getJourneyXRReferences } from '../../utils/xrMatching';
 
 interface JourneyCardProps {
   journey: Journey;
@@ -13,6 +22,7 @@ interface JourneyCardProps {
 
 export const JourneyCard: React.FC<JourneyCardProps> = ({ journey, isFeatured = false }) => {
   const navigate = useNavigate();
+  const xrRefs = getJourneyXRReferences(journey);
 
   return (
     <div
@@ -23,25 +33,27 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({ journey, isFeatured = 
       }`}
     >
       {/* 1. Top Banner: Recommendation category badge, title & AI match score */}
-      <div className="px-5 py-3 border-b border-slate-100 bg-slate-50/80 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <OptimizationBadge category={journey.recommendationCategory} size="sm" />
-          <span className="text-xs font-bold text-slate-800 truncate font-display">
-            {journey.title}
-          </span>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100">
+        <div className="flex items-center gap-2.5">
+          <OptimizationBadge category={journey.recommendationCategory} />
+          <span className="font-semibold text-slate-800 text-sm">{journey.title}</span>
         </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center gap-1 text-[11px] font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-semibold shadow-2xs">
-            <Sparkles className="w-3 h-3 text-blue-600" />
-            <span>Score: {journey.aiExplanation.score}/100</span>
-          </div>
+        <div className="flex items-center gap-2">
+          {xrRefs.length > 0 && (
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-100/90 text-blue-700 text-[10px] font-bold font-mono border border-blue-200">
+              <Eye className="w-3 h-3 text-blue-600" />
+              XR Ready
+            </span>
+          )}
+          <span className="text-xs font-mono font-medium text-slate-500">
+            Score: <strong className="text-slate-900">{journey.aiExplanation.score}</strong>
+          </span>
         </div>
       </div>
 
-      <div className="p-5 flex flex-col gap-4">
-        {/* 2. Overall Journey Origin & Destination Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+      <div className="p-4 sm:p-5 flex flex-col gap-4">
+        {/* 2. Primary Route & Timing Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
           <div className="flex flex-col">
             <div className="flex items-center gap-2">
               <span className="text-base sm:text-lg font-bold text-slate-950 font-display">
@@ -70,70 +82,85 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({ journey, isFeatured = 
         <div className="flex flex-col gap-2 p-3 sm:p-4 rounded-xl bg-slate-50/80 border border-slate-200/80">
           <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-slate-500 font-mono pb-1">
             <span>Synchronized Journey Legs</span>
-            <span>{journey.segments.length} Legs · {journey.totalTransfers} Transfers</span>
+            <span>
+              {journey.segments.length} Legs · {journey.totalTransfers} Transfers
+            </span>
           </div>
 
+          {/* Sequential Ordered Segments */}
           <div className="flex flex-col gap-1.5">
-            {journey.segments.map((seg, idx) => (
-              <React.Fragment key={seg.segmentId}>
-                {/* Individual Segment Card */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-white border border-slate-200/80 shadow-2xs hover:border-blue-300 transition-colors">
-                  <div className="flex items-start sm:items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-blue-50/80 border border-blue-200/60 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0 text-blue-700">
-                      <ModeIcon mode={seg.mode} size={16} />
+            {journey.segments.map((seg, idx) => {
+              const transferSceneId =
+                idx < journey.segments.length - 1
+                  ? matchXRSceneForHub(seg.destination.name)
+                  : null;
+
+              return (
+                <React.Fragment key={seg.segmentId || idx}>
+                  {/* Segment Row */}
+                  <div className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-white border border-slate-200/90 shadow-2xs">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="p-2 rounded-lg bg-slate-100 text-slate-700 shrink-0">
+                        <ModeIcon mode={seg.mode} className="w-4 h-4" />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 truncate">
+                          <span>{seg.provider}</span>
+                          {seg.vehicleNumber && (
+                            <span className="text-[10px] font-mono text-slate-500">
+                              ({seg.vehicleNumber})
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-600 truncate">
+                          <span>{seg.origin.name}</span>
+                          <span className="text-slate-400 mx-1">→</span>
+                          <span className="font-medium text-slate-900">
+                            {seg.destination.name}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="flex flex-col min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-900 truncate">
-                          {seg.provider}
-                        </span>
-                        {seg.vehicleNumber && (
-                          <span className="text-[10px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
-                            {seg.vehicleNumber}
-                          </span>
-                        )}
-                        {seg.seatClass && (
-                          <span className="text-[10px] text-blue-700 font-medium">
-                            {seg.seatClass}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-1.5 text-xs text-slate-600 truncate mt-0.5">
-                        <span className="font-semibold text-slate-800">{seg.origin.name}</span>
-                        <span className="text-slate-400">→</span>
-                        <span className="font-semibold text-slate-800">{seg.destination.name}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-center border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 shrink-0">
-                    <span className="text-xs sm:text-sm font-bold font-mono text-slate-900">
-                      {formatCurrency(seg.price, seg.currency)}
-                    </span>
-                    <span className="text-[11px] text-slate-500 font-mono">
-                      {formatDuration(seg.durationMinutes)} · {formatTime(seg.departureTime)} - {formatTime(seg.arrivalTime)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Explicit Transfer Node between segments */}
-                {idx < journey.segments.length - 1 && (
-                  <div className="flex items-center gap-2 pl-2 sm:pl-4 py-0.5 text-xs text-amber-900 min-w-0 max-w-full">
-                    <div className="w-0.5 h-6 bg-amber-300 ml-2 sm:ml-3 shrink-0" />
-                    <div className="inline-flex items-center flex-wrap gap-1.5 px-3 py-1 rounded-xl sm:rounded-full bg-amber-50 border border-amber-200/80 text-[11px] font-mono font-medium shadow-2xs max-w-full min-w-0">
-                      <Clock className="w-3 h-3 text-amber-600 shrink-0" />
-                      <span className="truncate">
-                        <strong className="font-bold">{seg.transferBufferMinutes || 15} min transfer</strong>
-                        <span className="text-amber-500 mx-1.5">·</span>
-                        Change at <span className="font-semibold text-slate-800">{seg.destination.name}</span>
+                    <div className="flex flex-col items-end shrink-0">
+                      <span className="text-xs font-extrabold text-slate-900 font-mono">
+                        {formatCurrency(seg.price, journey.currency)}
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {formatDuration(seg.durationMinutes)} · {formatTime(seg.departureTime)} - {formatTime(seg.arrivalTime)}
                       </span>
                     </div>
                   </div>
-                )}
-              </React.Fragment>
-            ))}
+
+                  {/* Explicit Transfer Node between segments */}
+                  {idx < journey.segments.length - 1 && (
+                    <div className="flex items-center gap-2 pl-2 sm:pl-4 py-0.5 text-xs text-amber-900 min-w-0 max-w-full">
+                      <div className="w-0.5 h-6 bg-amber-300 ml-2 sm:ml-3 shrink-0" />
+                      <div className="inline-flex items-center flex-wrap gap-1.5 px-3 py-1 rounded-xl sm:rounded-full bg-amber-50 border border-amber-200/80 text-[11px] font-mono font-medium shadow-2xs max-w-full min-w-0">
+                        <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+                        <span className="truncate">
+                          <strong className="font-bold">
+                            {seg.transferBufferMinutes || 15} min transfer
+                          </strong>
+                          <span className="text-amber-500 mx-1.5">·</span>
+                          Change at <span className="font-semibold text-slate-800">{seg.destination.name}</span>
+                        </span>
+                        {transferSceneId && (
+                          <Link
+                            to={`/xr/${transferSceneId}`}
+                            className="inline-flex items-center gap-1 ml-auto text-[10px] font-bold text-blue-700 bg-blue-100 hover:bg-blue-200 px-2 py-0.5 rounded-full transition-colors"
+                            title="Explore Intermodal Station Concourse in 360°"
+                          >
+                            <Compass className="w-2.5 h-2.5 text-blue-600" />
+                            <span>360° AR Guide</span>
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </div>
         </div>
 

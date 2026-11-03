@@ -9,6 +9,7 @@ import { ResultsPage } from './pages/ResultsPage';
 import { DetailsPage } from './pages/DetailsPage';
 import { BookingPage } from './pages/BookingPage';
 import { ConfirmationPage } from './pages/ConfirmationPage';
+import { XRExperiencePage } from './pages/XRExperiencePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { TravelRequestProvider } from './context/TravelRequestContext';
 
@@ -36,6 +37,7 @@ export const App: React.FC = () => {
                 <Route path="/plan/:journeyId" element={<DetailsPage />} />
                 <Route path="/booking/:journeyId" element={<BookingPage />} />
                 <Route path="/trips/:tripId" element={<ConfirmationPage />} />
+                <Route path="/xr/:sceneId" element={<XRExperiencePage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </main>

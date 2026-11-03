@@ -10,7 +10,8 @@ import {
   AITripInsight,
   SystemVerification,
 } from '../trip';
-import { Download, Calendar, Headphones, ArrowRight } from 'lucide-react';
+import { Download, Calendar, Headphones, ArrowRight, Compass, Eye, Sparkles } from 'lucide-react';
+import { getJourneyXRReferences } from '../../utils/xrMatching';
 
 interface TripConfirmationProps {
   trip: Trip;
@@ -18,6 +19,7 @@ interface TripConfirmationProps {
 
 export const TripConfirmation: React.FC<TripConfirmationProps> = ({ trip }) => {
   const { journey, pnr, bookingId, qrCodeUrl } = trip;
+  const xrRefs = getJourneyXRReferences(journey);
 
   const handleDownloadPdf = () => {
     alert(`Downloading synchronized PDF travel pass for PNR ${pnr}...`);
@@ -116,6 +118,59 @@ export const TripConfirmation: React.FC<TripConfirmationProps> = ({ trip }) => {
 
         {/* ── RIGHT COLUMN (30-35% width): Journey Summary, Trip Pass, Support, Actions ── */}
         <div className="w-full lg:w-[360px] shrink-0 flex flex-col gap-5">
+          {/* Spatial Transit & Destination XR Guide Card */}
+          {xrRefs.length > 0 && (
+            <div className="bg-gradient-to-br from-blue-900 via-indigo-950 to-slate-950 rounded-2xl p-5 text-white shadow-lg flex flex-col gap-3.5 border border-blue-500/30">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                    <Compass className="w-4 h-4 animate-spin-slow" />
+                  </div>
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-blue-300">
+                    Spatial Transit Guide
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold font-mono border border-emerald-500/30">
+                  XR Ready
+                </span>
+              </div>
+
+              <div>
+                <h3 className="text-base font-black font-display text-white">
+                  Explore your destination in XR
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed mt-1">
+                  Navigate transfer stations and preview destination arrival points in immersive 360° before your trip begins.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2 pt-1">
+                {xrRefs.map((ref) => (
+                  <Link
+                    key={ref.sceneId}
+                    to={`/xr/${ref.sceneId}`}
+                    className="flex items-center justify-between p-3 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 hover:border-blue-400 transition-all group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="p-1.5 rounded-lg bg-blue-500/20 text-blue-400 shrink-0">
+                        <Eye className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">
+                          {ref.context.replace('_', ' ')}
+                        </span>
+                        <span className="text-xs font-bold text-white group-hover:text-blue-300 truncate transition-colors">
+                          {ref.title}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-bold text-blue-400 shrink-0">Open 360° →</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Journey Summary 2x2 metrics */}
           <TripSummary trip={trip} />
 
