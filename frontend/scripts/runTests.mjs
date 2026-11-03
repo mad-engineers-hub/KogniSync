@@ -10,6 +10,9 @@ const tests = [
 
 for (const testPath of tests) {
   const baseName = testPath.split('/').pop().replace('.ts', '');
-  execSync(`npx vite build --ssr ${testPath} --outDir dist-test`, { stdio: 'inherit' });
+  execSync(`node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build --ssr ${testPath} --outDir dist-test`, {
+    stdio: 'inherit',
+    env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' },
+  });
   execSync(`node dist-test/${baseName}.js`, { stdio: 'inherit' });
 }

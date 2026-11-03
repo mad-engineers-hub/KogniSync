@@ -37,7 +37,7 @@ export const PaymentProcessor: React.FC<PaymentProcessorProps> = ({
         </h3>
         <span className="flex items-center gap-1 text-xs text-emerald-700 font-mono font-semibold">
           <Lock className="w-3.5 h-3.5" />
-          <span>256-Bit TLS Secured</span>
+          <span>256-Bit TLS Secured (Sandbox Escrow)</span>
         </span>
       </div>
 
@@ -184,6 +184,10 @@ export const PaymentProcessor: React.FC<PaymentProcessorProps> = ({
           </>
         )}
       </button>
+
+      <div className="text-center text-[10px] text-slate-400 font-mono">
+        Sandbox Simulation · Idempotent Test Gateway · No real charges incurred
+      </div>
     </form>
   );
 };

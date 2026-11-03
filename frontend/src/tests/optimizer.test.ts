@@ -187,6 +187,20 @@ console.log(`✓ Reasons: ${explanation.reasons.join(' | ')}`);
 console.log(`✓ Trade-offs: ${explanation.tradeoffs.join(' | ')}`);
 console.log('✓ 100% deterministic reproducibility verified across repeated executions.');
 
+// ============================================================================
+// TEST 8: Hard Constraint Zero-Relaxation & Feasible Empty Set
+// ============================================================================
+console.log('\n--- Test 8: Hard Constraint Zero-Relaxation ---');
+const candidates = composeMultiModalJourneys(baseReq);
+// Pass impossible budget ceiling of ₹200 (all candidates cost > ₹1,000)
+const impossibleBudgetResult = optimizeCandidateJourneys(candidates, undefined, 200);
+assert.strictEqual(
+  impossibleBudgetResult.length,
+  0,
+  'When no candidate meets the budget constraint, optimizeCandidateJourneys must strictly return an empty array (no silent relaxation)'
+);
+console.log('✓ Strict hard-constraint enforcement verified: impossible budget correctly returns 0 candidates.');
+
 console.log('\n=================================================================');
-console.log('ALL EXPLAINABLE OPTIMIZER TESTS PASSED (7/7)');
+console.log('ALL EXPLAINABLE OPTIMIZER TESTS PASSED (8/8)');
 console.log('=================================================================');

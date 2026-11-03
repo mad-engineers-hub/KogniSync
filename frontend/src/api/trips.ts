@@ -35,7 +35,11 @@ export async function getTripById(tripId: string): Promise<Trip | null> {
 }
 
 export function buildTripFromBooking(booking: Booking, payment: PaymentDetails): Trip {
-  const pnr = `KOGNI-${booking.journey.origin.city.slice(0, 3).toUpperCase()}${booking.journey.destination.city.slice(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const origCity = booking.journey?.origin?.city || booking.journey?.origin?.name || 'ORG';
+  const destCity = booking.journey?.destination?.city || booking.journey?.destination?.name || 'DST';
+  const origCode = (origCity.replace(/[^a-zA-Z]/g, '').slice(0, 3) || 'ORG').toUpperCase().padEnd(3, 'X');
+  const destCode = (destCity.replace(/[^a-zA-Z]/g, '').slice(0, 3) || 'DST').toUpperCase().padEnd(3, 'X');
+  const pnr = `KOGNI-${origCode}${destCode}-${Math.floor(1000 + Math.random() * 9000)}`;
 
   const tickets: TripSegmentTicket[] = booking.journey.segments.map((seg, idx) => ({
     segmentId: seg.segmentId,

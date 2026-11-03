@@ -276,3 +276,76 @@ def test_api_optimize_endpoint_empty_candidates_rejection():
     }
     response = client.post("/api/v1/optimizer/optimize", json=payload)
     assert response.status_code == 400
+
+
+def test_optimizer_hard_budget_constraint_no_silent_relaxation():
+    """Verify optimizer strictly returns 0 eligible candidates when all exceed budget."""
+    service = JourneyOptimizerService()
+    c1 = JourneyCandidateInput(
+        id="c1",
+        title="Route A",
+        total_price=2500,
+        total_duration_minutes=300,
+        total_transfers=1,
+        carbon_kg=12.0,
+        comfort_score=7.5,
+    )
+    c2 = JourneyCandidateInput(
+        id="c2",
+        title="Route B",
+        total_price=3500,
+        total_duration_minutes=210,
+        total_transfers=1,
+        carbon_kg=16.0,
+        comfort_score=8.0,
+    )
+
+    req = OptimizationRequest(
+        weights=OptimizationWeightsInput(cost=0.5, duration=0.5),
+        budget_max=1000,  # Both c1 and c2 exceed ₹1000
+        candidates=[c1, c2],
+    )
+
+    res = service.optimize_journeys(req)
+    assert res.total_candidates == 2
+    assert res.eligible_candidates == 0
+    assert res.pareto_frontier_count == 0
+    assert len(res.journeys) == 0
+    assert res.recommended_journey_id == ""
+
+
+def test_optimizer_hard_arrival_deadline_constraint():
+    """Verify optimizer excludes candidates arriving after preferred deadline."""
+    service = JourneyOptimizerService()
+    c1 = JourneyCandidateInput(
+        id="c1",
+        title="On-Time Route",
+        total_price=1500,
+        total_duration_minutes=180,
+        total_transfers=0,
+        carbon_kg=8.0,
+        comfort_score=7.5,
+        arrival_time="2026-11-04T16:00:00",
+    )
+    c2 = JourneyCandidateInput(
+        id="c2",
+        title="Late Route",
+        total_price=1000,
+        total_duration_minutes=240,
+        total_transfers=1,
+        carbon_kg=10.0,
+        comfort_score=6.5,
+        arrival_time="2026-11-04T20:00:00",
+    )
+
+    req = OptimizationRequest(
+        weights=OptimizationWeightsInput(cost=0.5, duration=0.5),
+        preferred_arrival_before="2026-11-04T18:00:00",
+        candidates=[c1, c2],
+    )
+
+    res = service.optimize_journeys(req)
+    assert res.total_candidates == 2
+    assert res.eligible_candidates == 1
+    assert len(res.journeys) == 1
+    assert res.journeys[0].id == "c1"

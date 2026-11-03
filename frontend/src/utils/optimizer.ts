@@ -432,9 +432,9 @@ export function optimizeCandidateJourneys(
   // 1. Enforce Hard Constraints First (budgetMax)
   let eligibleJourneys = candidateJourneys;
   if (budgetMax !== undefined && budgetMax > 0) {
-    const withinBudget = candidateJourneys.filter((j) => j.totalPrice <= budgetMax);
-    if (withinBudget.length > 0) {
-      eligibleJourneys = withinBudget;
+    eligibleJourneys = candidateJourneys.filter((j) => j.totalPrice <= budgetMax);
+    if (eligibleJourneys.length === 0) {
+      return [];
     }
   }
 

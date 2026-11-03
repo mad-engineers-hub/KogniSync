@@ -31,11 +31,23 @@ class JourneyOptimizerService:
             if request.budget_max is not None and request.budget_max > 0:
                 if cand.total_price > request.budget_max:
                     continue
+            if request.preferred_arrival_before and cand.arrival_time:
+                try:
+                    if cand.arrival_time > request.preferred_arrival_before:
+                        continue
+                except Exception:
+                    pass
             eligible_candidates.append(cand)
 
-        # If strict budget filtering leaves no candidate, allow closest candidates with warning
+        # If strict hard constraint filtering leaves no candidate, return empty response (never silently relax constraints)
         if not eligible_candidates:
-            eligible_candidates = list(request.candidates)
+            return OptimizationResponse(
+                recommended_journey_id="",
+                total_candidates=total_candidates,
+                eligible_candidates=0,
+                pareto_frontier_count=0,
+                journeys=[],
+            )
 
         # 2. Extract optimization metrics for all eligible candidates
         all_metrics = [extract_journey_metrics(c) for c in eligible_candidates]
