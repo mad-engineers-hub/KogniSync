@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { Journey, RecommendationCategory } from '../../types/journey';
 import { JourneyCard } from './JourneyCard';
 import { JourneyComparison } from './JourneyComparison';
-import { Sparkles, SlidersHorizontal, ArrowUpDown, AlertCircle } from 'lucide-react';
+import { JourneyMap } from '../map/JourneyMap';
+import { Sparkles, SlidersHorizontal, ArrowUpDown, AlertCircle, Map } from 'lucide-react';
 
 interface JourneyResultsProps {
   journeys: Journey[];
@@ -18,6 +19,8 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
   const [activeTab, setActiveTab] = useState<RecommendationCategory | 'all'>('all');
   const [sortBy, setSortBy] = useState<'score' | 'price' | 'duration' | 'carbon'>('score');
   const [showComparison, setShowComparison] = useState(false);
+  const [showMap, setShowMap] = useState(true);
+  const [selectedJourneyId, setSelectedJourneyId] = useState<string | null>(null);
 
   // Filter journeys by tab
   const filteredJourneys = journeys.filter((j) => {
@@ -33,6 +36,10 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
     if (sortBy === 'carbon') return a.carbonKg - b.carbonKg;
     return 0;
   });
+
+  // Active journey displayed on the map
+  const activeJourney =
+    journeys.find((j) => j.id === selectedJourneyId) || sortedJourneys[0] || journeys[0];
 
   const categories: { key: RecommendationCategory | 'all'; label: string; count: number }[] = [
     { key: 'all', label: 'All Journeys', count: journeys.length },
@@ -123,11 +130,23 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
           ))}
         </div>
 
-        {/* Controls: Matrix toggle & Sort By */}
-        <div className="flex items-center gap-3 self-end sm:self-auto">
+        {/* Controls: Map toggle, Matrix toggle & Sort By */}
+        <div className="flex items-center gap-2.5 self-end sm:self-auto flex-wrap">
+          <button
+            onClick={() => setShowMap(!showMap)}
+            className={`text-xs font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all shadow-2xs ${
+              showMap
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-blue-700 hover:text-blue-800 bg-blue-50 border border-blue-200'
+            }`}
+          >
+            <Map className="w-3.5 h-3.5" />
+            <span>{showMap ? 'Hide Route Map' : 'Show Route Map'}</span>
+          </button>
+
           <button
             onClick={() => setShowComparison(!showComparison)}
-            className="text-xs font-semibold text-blue-700 hover:text-blue-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200 transition-colors"
+            className="text-xs font-semibold text-blue-700 hover:text-blue-800 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200 transition-colors shadow-2xs"
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
             <span>{showComparison ? 'Hide Trade-Offs' : 'Compare Trade-Offs'}</span>
@@ -148,6 +167,13 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Interactive Google Routes & Geo Map Visualization */}
+      {showMap && activeJourney && (
+        <div className="animate-in fade-in duration-200">
+          <JourneyMap journey={activeJourney} segments={activeJourney.segments} />
+        </div>
+      )}
 
       {/* Trade-off Matrix Comparison Drawer */}
       {showComparison && (
@@ -174,6 +200,8 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
               key={journey.id}
               journey={journey}
               isFeatured={index === 0 && activeTab === 'all'}
+              isSelectedForMap={activeJourney?.id === journey.id}
+              onSelectForMap={() => setSelectedJourneyId(journey.id)}
             />
           ))
         )}

@@ -18,16 +18,26 @@ import { matchXRSceneForHub, getJourneyXRReferences } from '../../utils/xrMatchi
 interface JourneyCardProps {
   journey: Journey;
   isFeatured?: boolean;
+  isSelectedForMap?: boolean;
+  onSelectForMap?: () => void;
 }
 
-export const JourneyCard: React.FC<JourneyCardProps> = ({ journey, isFeatured = false }) => {
+export const JourneyCard: React.FC<JourneyCardProps> = ({
+  journey,
+  isFeatured = false,
+  isSelectedForMap = false,
+  onSelectForMap,
+}) => {
   const navigate = useNavigate();
   const xrRefs = getJourneyXRReferences(journey);
 
   return (
     <div
-      className={`rounded-2xl border transition-all duration-200 overflow-hidden ${
-        isFeatured
+      onClick={onSelectForMap}
+      className={`rounded-2xl border transition-all duration-200 overflow-hidden cursor-pointer ${
+        isSelectedForMap
+          ? 'bg-white border-blue-600 shadow-md ring-2 ring-blue-500/20'
+          : isFeatured
           ? 'bg-white border-blue-500 shadow-md ring-1 ring-blue-500/20'
           : 'bg-white hover:bg-slate-50/50 border-slate-200 hover:border-slate-300 shadow-sm'
       }`}

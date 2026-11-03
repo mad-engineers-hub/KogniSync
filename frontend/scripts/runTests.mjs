@@ -4,6 +4,7 @@ const tests = [
   'src/tests/journeyOrchestration.test.ts',
   'src/tests/e2eFlowSimulation.test.ts',
   'src/tests/xrExperience.test.ts',
+  'src/tests/journeyMap.test.ts',
 ];
 
 for (const testPath of tests) {

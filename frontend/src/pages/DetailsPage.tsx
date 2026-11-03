@@ -113,7 +113,7 @@ export const DetailsPage: React.FC = () => {
 
         {/* Right column (5 cols): Map & Invariants metadata & XR Explorer */}
         <div className="lg:col-span-5 flex flex-col gap-6">
-          <JourneyMap segments={journey.segments} />
+          <JourneyMap segments={journey.segments} journey={journey} />
 
           {/* XR Spatial Previews & AR Wayfinding Card */}
           {xrReferences.length > 0 && (
