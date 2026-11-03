@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.core.logging import logger, setup_logging
 from app.api.routes.health import router as health_router
 from app.api.routes.ai import router as ai_router
+from app.api.routes.xr import router as xr_router
 
 
 @asynccontextmanager
@@ -32,3 +33,4 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(ai_router)
+app.include_router(xr_router)
