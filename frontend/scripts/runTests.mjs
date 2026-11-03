@@ -5,6 +5,7 @@ const tests = [
   'src/tests/e2eFlowSimulation.test.ts',
   'src/tests/xrExperience.test.ts',
   'src/tests/journeyMap.test.ts',
+  'src/tests/optimizer.test.ts',
 ];
 
 for (const testPath of tests) {

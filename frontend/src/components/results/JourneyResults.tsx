@@ -168,6 +168,21 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
         </div>
       </div>
 
+      {/* Multi-Objective Pareto Frontier Telemetry Banner */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-slate-900 font-display">Deterministic Multi-Objective Optimizer:</span>
+          <span className="text-slate-600">
+            Evaluated across 5 normalized dimensions (Cost, Duration, Comfort, Carbon, Transfers).
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold font-mono border border-emerald-300">
+            {journeys.filter((j) => j.isParetoOptimal).length} of {journeys.length} on Pareto Frontier
+          </span>
+        </div>
+      </div>
+
       {/* Interactive Google Routes & Geo Map Visualization */}
       {showMap && activeJourney && (
         <div className="animate-in fade-in duration-200">

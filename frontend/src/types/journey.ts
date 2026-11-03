@@ -1,3 +1,5 @@
+import type { OptimizedJourneyOutput } from './optimizer';
+
 export type TransportMode =
   | 'flight'
   | 'train'
@@ -85,6 +87,8 @@ export interface Journey {
   carbonKg: number;
   comfortScore: number; // 1-10
   recommendationCategory: RecommendationCategory;
+  isParetoOptimal?: boolean;
+  optimization?: OptimizedJourneyOutput;
   aiExplanation: {
     summary: string;
     tradeOffs: string[];

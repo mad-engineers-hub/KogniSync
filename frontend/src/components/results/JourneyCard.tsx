@@ -8,6 +8,7 @@ import {
   Leaf,
   Eye,
   Compass,
+  CheckCircle,
 } from 'lucide-react';
 import { Journey } from '../../types/journey';
 import { ModeIcon } from '../common/ModeIcon';
@@ -44,8 +45,17 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
     >
       {/* 1. Top Banner: Recommendation category badge, title & AI match score */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2 flex-wrap">
           <OptimizationBadge category={journey.recommendationCategory} />
+          {journey.isParetoOptimal && (
+            <span
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold font-mono border border-emerald-300"
+              title="Pareto Optimal: Non-dominated choice across all 5 objectives"
+            >
+              <CheckCircle className="w-3 h-3 text-emerald-600" />
+              Pareto Frontier
+            </span>
+          )}
           <span className="font-semibold text-slate-800 text-sm">{journey.title}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -174,15 +184,39 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
           </div>
         </div>
 
-        {/* 4. AI Recommendation Explanation Banner */}
-        <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-100 text-xs text-slate-700 leading-relaxed flex items-start gap-2.5">
-          <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-          <div className="flex flex-col gap-0.5">
-            <span className="font-bold text-slate-900">
-              {journey.aiExplanation.rankReason}
-            </span>
-            <span className="text-slate-600">{journey.aiExplanation.summary}</span>
+        {/* 4. AI Recommendation Explanation Banner with Traceable Deterministic Decision Factors */}
+        <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-100 text-xs text-slate-700 leading-relaxed flex flex-col gap-2">
+          <div className="flex items-start gap-2.5">
+            <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+            <div className="flex flex-col gap-0.5">
+              <span className="font-bold text-slate-900">
+                {journey.optimization?.explanation?.headline || journey.aiExplanation.rankReason}
+              </span>
+              <span className="text-slate-600">{journey.aiExplanation.summary}</span>
+            </div>
           </div>
+
+          {/* Traceable Deterministic Decision Factors */}
+          {journey.optimization?.explanation && (journey.optimization.explanation.reasons.length > 0 || journey.optimization.explanation.tradeoffs.length > 0) && (
+            <div className="pl-6 pt-1.5 flex flex-wrap gap-1.5 border-t border-blue-100/80">
+              {journey.optimization.explanation.reasons.map((reason, rIdx) => (
+                <span
+                  key={`r-${rIdx}`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-blue-200/80 text-[11px] font-mono text-slate-700 font-medium"
+                >
+                  <span className="text-blue-600 font-bold">✓</span> {reason}
+                </span>
+              ))}
+              {journey.optimization.explanation.tradeoffs.map((tradeoff, tIdx) => (
+                <span
+                  key={`t-${tIdx}`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[11px] font-mono text-amber-900 font-medium"
+                >
+                  <span className="text-amber-600 font-bold">⚖</span> {tradeoff}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 5. Bottom bar: Complete Journey Pricing, Carbon, Feasibility & Actions */}

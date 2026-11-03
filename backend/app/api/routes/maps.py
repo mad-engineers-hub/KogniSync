@@ -24,3 +24,4 @@ async def enrich_journey_route(request: RouteEnrichRequest) -> EnrichedJourneyRo
             detail="Journey must contain at least one segment to enrich",
         )
     return await maps_service.enrich_journey_route(request)
+

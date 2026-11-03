@@ -1,4 +1,5 @@
 import { Journey, JourneySegment, Location, RecommendationCategory, TransportMode, TravelRequest } from '../types/journey';
+import { optimizeCandidateJourneys } from '../utils/optimizer';
 
 // ============================================================================
 // 1. COMPREHENSIVE CITY & HUB REGISTRY
@@ -927,65 +928,6 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
 
     const modes: TransportMode[] = Array.from(new Set(segments.map((s) => s.mode)));
 
-    // User preference weighting & scoring
-    const costWeight = request.weights?.cost ?? 0.4;
-    const durWeight = request.weights?.duration ?? 0.3;
-    const comfWeight = request.weights?.comfort ?? 0.2;
-    const carbWeight = request.weights?.carbon ?? 0.1;
-
-    // Normalization bounds
-    const minPossiblePrice = 600 + routeDistanceKm * 1.5;
-    const maxPossiblePrice = 2800 + routeDistanceKm * 3.5;
-    const normCost = Math.max(0, Math.min(100, Math.round(100 - ((totalPrice - minPossiblePrice) / (maxPossiblePrice - minPossiblePrice || 1)) * 100)));
-
-    const minPossibleDuration = flightDurationMin + 65;
-    const maxPossibleDuration = trainCheapestDurationMin + 110;
-    const normDur = Math.max(0, Math.min(100, Math.round(100 - ((totalDurationMinutes - minPossibleDuration) / (maxPossibleDuration - minPossibleDuration || 1)) * 100)));
-
-    const normComf = Math.round((avgComfort / 10) * 100);
-    const normCarb = Math.max(0, Math.min(100, Math.round(100 - (totalCarbonKg / (routeDistanceKm * 0.12 || 1)) * 100)));
-
-    let compositeScore = Math.round(
-      costWeight * normCost +
-      durWeight * normDur +
-      comfWeight * normComf +
-      carbWeight * normCarb
-    );
-
-    // Calibrate based on preference weights
-    const query = (request.naturalLanguageQuery ?? '').toLowerCase();
-    const queryPrefersCost = (query.includes('cheap') || query.includes('money') || query.includes('budget') || query.includes('cost')) && !query.includes('over money') && !query.includes('over cost');
-    const queryPrefersSpeed = (query.includes('speed') || query.includes('fast') || query.includes('quick') || query.includes('urgent')) && !query.includes('over speed');
-    const queryPrefersGreen = query.includes('green') || query.includes('eco');
-
-    const isCostDominant = (costWeight >= 0.5) || (costWeight > durWeight && (queryPrefersCost || costWeight >= 0.45));
-    const isSpeedDominant = (durWeight >= 0.45) || (durWeight > costWeight && (queryPrefersSpeed || durWeight >= 0.4));
-    const isGreenDominant = carbWeight >= 0.3 || queryPrefersGreen;
-
-    if (isCostDominant) {
-      // User prioritizes saving money
-      if (arch.category === 'cheapest') compositeScore = 98;
-      else if (arch.category === 'best_value') compositeScore = 92;
-      else compositeScore = Math.min(compositeScore, 85);
-    } else if (isSpeedDominant) {
-      // User prioritizes speed
-      if (arch.category === 'fastest') compositeScore = 98;
-      else if (arch.category === 'best_value') compositeScore = 91;
-      else compositeScore = Math.min(compositeScore, 88);
-    } else if (isGreenDominant) {
-      // User prioritizes eco-friendly / green
-      if (arch.category === 'greenest') compositeScore = 98;
-      else if (arch.category === 'best_value') compositeScore = 92;
-      else compositeScore = Math.min(compositeScore, 86);
-    } else {
-      // Balanced Pareto: Best Value ranks #1
-      if (arch.category === 'best_value') compositeScore = 97;
-      else if (arch.category === 'fastest') compositeScore = 94;
-      else if (arch.category === 'cheapest') compositeScore = 91;
-      else if (arch.category === 'greenest') compositeScore = 90;
-      else compositeScore = 88;
-    }
-
     const journey: Journey = {
       id: `jny-${routeSlug}-${arch.category}`,
       title: arch.title,
@@ -1012,7 +954,7 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
           `Arrival guaranteed by ${formatTime(seg3Arr.toISOString())} before deadline`,
           `Total transfer wait: ${waitingDurationMinutes} min with live synchronization`,
         ],
-        score: compositeScore,
+        score: 90,
         costVsFastestSaving: Math.max(0, flightPrice + 1100 - totalPrice),
         durationDiffMinutes: totalDurationMinutes - (flightDurationMin + 65),
       },
@@ -1026,20 +968,10 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
     return journey;
   });
 
-  // 3. Apply Budget Constraint:
-  // If budgetMax is specified, journeys exceeding budgetMax are strictly excluded
-  let eligibleJourneys = journeys;
-  if (budgetMax && budgetMax > 0) {
-    const withinBudget = journeys.filter((j) => j.totalPrice <= budgetMax);
-    if (withinBudget.length > 0) {
-      eligibleJourneys = withinBudget;
-    }
-  }
-
-  // 4. Sort journeys so the highest scoring recommendation appears first
-  eligibleJourneys.sort((a, b) => b.aiExplanation.score - a.aiExplanation.score);
-
-  return eligibleJourneys;
+  // 3. Multi-objective deterministic optimization & Pareto analysis:
+  // Enforces hard constraints, determines Pareto-optimal non-dominated options,
+  // computes objective contributions, and generates traceable explanations.
+  return optimizeCandidateJourneys(journeys, request.weights, budgetMax, request.naturalLanguageQuery);
 }
 
 function formatTime(isoString: string): string {

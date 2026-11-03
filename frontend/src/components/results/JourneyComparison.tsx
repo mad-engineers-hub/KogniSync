@@ -28,6 +28,7 @@ export const JourneyComparison: React.FC<JourneyComparisonProps> = ({ journeys }
           <thead>
             <tr className="border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500 font-mono">
               <th className="py-2.5 px-3">Option</th>
+              <th className="py-2.5 px-3">Score & Frontier</th>
               <th className="py-2.5 px-3">Price</th>
               <th className="py-2.5 px-3">Duration</th>
               <th className="py-2.5 px-3">Transfers</th>
@@ -47,6 +48,17 @@ export const JourneyComparison: React.FC<JourneyComparisonProps> = ({ journeys }
                   <div className="flex items-center gap-2">
                     <OptimizationBadge category={j.recommendationCategory} size="sm" />
                     <span className="font-semibold text-slate-800">{j.title}</span>
+                  </div>
+                </td>
+
+                <td className="py-3 px-3 font-mono text-xs">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-bold text-slate-900">{j.aiExplanation.score}</span>
+                    {j.isParetoOptimal && (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] bg-emerald-100 text-emerald-800 font-bold font-mono border border-emerald-300">
+                        Pareto
+                      </span>
+                    )}
                   </div>
                 </td>
 
