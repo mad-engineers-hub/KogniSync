@@ -212,6 +212,11 @@ class GeminiIntentService:
                     days_ahead = 7
                 intent.date = (ref_now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
+        # Check for comfort / luxury / unconstrained budget keywords if low
+        if re.search(r"\b(?:money\s+isn'?t\s+a\s+problem|money\s+is\s+not\s+a\s+problem|comfort|comfortable|luxury|premium)\b", t, re.IGNORECASE):
+            if intent.comfort < 0.7:
+                intent.comfort = 0.8
+
         # Check for sustainability keywords if low
         if re.search(r'\b(?:eco-friendly|eco\s+friendly|green\s+trip|sustainable)\b', t, re.IGNORECASE):
             if intent.sustainability < 0.8:
