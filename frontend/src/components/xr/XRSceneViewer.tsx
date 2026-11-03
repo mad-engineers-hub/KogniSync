@@ -356,7 +356,7 @@ export const XRSceneViewer: React.FC<XRSceneViewerProps> = ({ scene, onSelectWay
           <span>Pitch: {Math.round(pitch)}°</span>
         </div>
 
-        {/* AR Simulator Toggle Button */}
+        {/* AR Guidance Reticle Overlay Toggle */}
         <button
           type="button"
           onClick={() => setIsARSimulated((prev) => !prev)}
@@ -365,10 +365,10 @@ export const XRSceneViewer: React.FC<XRSceneViewerProps> = ({ scene, onSelectWay
               ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-500/20'
               : 'bg-slate-900/80 text-slate-300 border-slate-700/80 hover:bg-slate-800'
           }`}
-          title="Toggle AR Spatial Viewport Overlay"
+          title="Toggle AR Wayfinding Reticle Overlay"
         >
           <Camera className="w-3.5 h-3.5" />
-          <span>{isARSimulated ? 'AR Mode Active' : 'Enter AR Mode'}</span>
+          <span>{isARSimulated ? 'AR Reticle Active' : 'Show AR Overlay'}</span>
         </button>
       </div>
 

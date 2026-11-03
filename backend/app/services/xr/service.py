@@ -16,8 +16,8 @@ from app.services.xr.schemas import (
 from app.services.xr.data import CANONICAL_XR_SCENES
 
 CITY_ALIASES = {
-    "bangalore": ["bengaluru", "blr", "ksr", "majestic", "udayapalya"],
-    "bengaluru": ["bangalore", "blr", "ksr", "majestic", "udayapalya"],
+    "bangalore": ["bengaluru", "blr", "ksr", "majestic"],
+    "bengaluru": ["bangalore", "blr", "ksr", "majestic"],
     "chennai": ["maa", "madras", "central", "egmore"],
     "udupi": ["manipal", "mangalore", "ixe", "udupi"],
     "mangalore": ["mangaluru", "ixe", "udupi"],
