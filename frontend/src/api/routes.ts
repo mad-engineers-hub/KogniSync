@@ -116,7 +116,7 @@ export async function enrichJourneyRoute(journey: Journey): Promise<EnrichedJour
   };
 
   try {
-    const enriched = await apiClient<EnrichedJourneyRoute>('api/v1/routes/enrich', {
+    const enriched = await apiClient<EnrichedJourneyRoute>('/api/v1/maps/enrich', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
@@ -132,7 +132,7 @@ export async function enrichJourneyRoute(journey: Journey): Promise<EnrichedJour
  */
 export async function fetchRoutesHealth(): Promise<MapsHealthResponse> {
   try {
-    return await apiClient<MapsHealthResponse>('api/v1/routes/health');
+    return await apiClient<MapsHealthResponse>('/api/v1/maps/health');
   } catch {
     return {
       enabled: false,

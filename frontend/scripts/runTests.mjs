@@ -6,6 +6,7 @@ const tests = [
   'src/tests/xrExperience.test.ts',
   'src/tests/journeyMap.test.ts',
   'src/tests/optimizer.test.ts',
+  'src/tests/apiContracts.test.ts',
 ];
 
 for (const testPath of tests) {

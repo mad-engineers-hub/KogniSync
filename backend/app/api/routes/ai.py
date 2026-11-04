@@ -3,14 +3,21 @@ from app.services.ai.schemas import ParseIntentRequest, ParseIntentResponse
 from app.services.ai.gemini import intent_service
 from app.core.logging import logger
 
-router = APIRouter(prefix="/api/ai", tags=["AI Orchestration"])
+router = APIRouter(tags=["AI Orchestration"])
 
 
 @router.post(
-    "/parse-travel-intent",
+    "/api/v1/ai/parse-travel-intent",
     response_model=ParseIntentResponse,
     status_code=status.HTTP_200_OK,
-    summary="Extract structured travel intent from natural language using Gemini",
+    summary="Extract structured travel intent from natural language using Gemini (Canonical v1)",
+)
+@router.post(
+    "/api/ai/parse-travel-intent",
+    response_model=ParseIntentResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+    summary="Extract structured travel intent (Legacy alias)",
 )
 async def parse_travel_intent(request: ParseIntentRequest):
     """

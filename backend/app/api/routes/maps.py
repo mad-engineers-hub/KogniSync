@@ -6,16 +6,18 @@ from app.services.maps.schemas import (
 )
 from app.services.maps.service import maps_service
 
-router = APIRouter(prefix="/api/v1/routes", tags=["Routes & Maps"])
+router = APIRouter(tags=["Routes & Maps"])
 
 
-@router.get("/health", response_model=MapsHealthResponse)
+@router.get("/api/v1/maps/health", response_model=MapsHealthResponse, summary="Maps & routes engine health (Canonical v1)")
+@router.get("/api/v1/routes/health", response_model=MapsHealthResponse, include_in_schema=False, summary="Maps health (Legacy alias)")
 async def get_routes_health() -> MapsHealthResponse:
     """Returns the operational status and active backend provider for the maps/routes engine."""
     return maps_service.get_health()
 
 
-@router.post("/enrich", response_model=EnrichedJourneyRoute)
+@router.post("/api/v1/maps/enrich", response_model=EnrichedJourneyRoute, summary="Enrich journey route geometry (Canonical v1)")
+@router.post("/api/v1/routes/enrich", response_model=EnrichedJourneyRoute, include_in_schema=False, summary="Enrich journey route geometry (Legacy alias)")
 async def enrich_journey_route(request: RouteEnrichRequest) -> EnrichedJourneyRoute:
     """Enriches a multi-modal journey's segments with spatial route geometry and polyline data."""
     if not request.segments:

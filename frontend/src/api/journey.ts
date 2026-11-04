@@ -167,7 +167,7 @@ export async function parseTravelIntent(
   currentContext?: TravelContext
 ): Promise<TravelIntent> {
   try {
-    const res = await apiClient<{ intent: TravelIntent }>('/api/ai/parse-travel-intent', {
+    const res = await apiClient<{ intent: TravelIntent }>('/api/v1/ai/parse-travel-intent', {
       method: 'POST',
       body: JSON.stringify({
         text,
