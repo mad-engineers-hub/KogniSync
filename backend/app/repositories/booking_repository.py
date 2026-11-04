@@ -10,7 +10,7 @@ from app.repositories.exceptions import RepositoryConflictError
 
 class BookingRepository(BaseRepository[Booking]):
     """
-    Repository for bookings and booking_items persistence and idempotency key lookups.
+    Repository for bookings and booking_items persistence, row locking, and idempotency key lookups.
     Never calls session.commit(), session.rollback(), or session.close().
     """
 
@@ -31,6 +31,17 @@ class BookingRepository(BaseRepository[Booking]):
             select(Booking)
             .options(selectinload(Booking.booking_items))
             .where(Booking.booking_reference == booking_reference)
+        )
+        res = await self.session.execute(stmt)
+        return res.scalar_one_or_none()
+
+    async def lock_by_id(self, booking_id: str) -> Optional[Booking]:
+        """Fetch and lock booking row with SELECT ... FOR UPDATE."""
+        stmt = (
+            select(Booking)
+            .options(selectinload(Booking.booking_items))
+            .where(Booking.booking_id == booking_id)
+            .with_for_update()
         )
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()

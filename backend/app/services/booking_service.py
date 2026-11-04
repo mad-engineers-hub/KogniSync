@@ -12,7 +12,7 @@ import uuid
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.db.models.inventory import Hold, InventoryCalendar
 from app.db.models.booking import Booking, BookingItem
@@ -54,8 +54,12 @@ class BookingService:
         self.hold_repo = HoldRepository(session)
         self.booking_repo = BookingRepository(session)
         self.payment_repo = PaymentRepository(session)
+        factory = None
+        if self.session and self.session.bind:
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+            factory = async_sessionmaker(self.session.bind, expire_on_commit=False)
         self.hold_service = hold_service or HoldService(
-            session_factory=None,  # Not used when session is explicitly provided
+            session_factory=factory,
             redis_support=RedisHoldSupport(),
         )
 
@@ -102,6 +106,17 @@ class BookingService:
             session=self.session,
         )
         await self.session.commit()
+
+        # Advisory Redis registration strictly post-commit
+        try:
+            await self.hold_service.redis.register_hold_ttl(
+                hold.hold_id,
+                ttl_seconds,
+                metadata={"user_id": user_id, "inventory_id": target_inv_id, "units": units},
+            )
+        except Exception as e:
+            logger.warning(f"Advisory Redis TTL registration encountered error: {e}")
+
         return hold
 
     async def get_hold(self, hold_id: str) -> Hold:
@@ -119,6 +134,13 @@ class BookingService:
 
         await self.hold_service.expire_hold(hold_id=hold_id, force=True, session=self.session)
         await self.session.commit()
+
+        # Advisory Redis cleanup strictly post-commit
+        try:
+            await self.hold_service.redis.remove_hold_ttl(hold_id)
+        except Exception as e:
+            logger.warning(f"Advisory Redis cleanup encountered error: {e}")
+
         # Re-fetch updated hold
         refreshed = await self.hold_repo.get_by_id(hold_id)
         return refreshed or hold
@@ -286,23 +308,58 @@ class BookingService:
         reason: str = "user_cancelled",
         correlation_id: Optional[str] = None,
     ) -> Booking:
-        """Cancels a confirmed booking and restores booked units to inventory capacity."""
-        bkg = await self.get_booking(booking_id)
+        """
+        Cancels a confirmed booking and restores booked units to inventory capacity.
+        Guarantees:
+        - Row-level lock on booking via lock_by_id (FOR UPDATE).
+        - Idempotent: repeated cancellations return the cancelled booking without releasing inventory twice.
+        - Atomic conditional transition: only status == 'confirmed' is transitioned to 'cancelled'.
+        - Releases inventory booked_units under inventory row lock.
+        """
+        # 1. Acquire row lock on booking
+        bkg = await self.booking_repo.lock_by_id(booking_id)
+        if not bkg:
+            raise BookingNotFoundError(f"Booking '{booking_id}' not found")
+
+        # 2. If already cancelled, return immediately without touching inventory
         if bkg.status == "cancelled":
             return bkg
 
+        if bkg.status != "confirmed":
+            raise RepositoryConflictError(f"Booking '{booking_id}' cannot be cancelled because status is '{bkg.status}'")
+
         now = datetime.now(timezone.utc)
+
+        # 3. Atomic conditional update to prevent concurrent double-releases
+        stmt = (
+            update(Booking)
+            .where(Booking.booking_id == booking_id, Booking.status == "confirmed")
+            .values(
+                status="cancelled",
+                cancelled_at=now,
+                cancellation_reason=reason,
+                updated_at=now,
+            )
+        )
+        res = await self.session.execute(stmt)
+        if res.rowcount == 0:
+            refreshed = await self.booking_repo.get_by_id(booking_id)
+            return refreshed or bkg
+
+        # 4. Update in-memory booking object
         bkg.status = "cancelled"
         bkg.cancelled_at = now
         bkg.cancellation_reason = reason
         bkg.updated_at = now
 
-        # Restore booked units for items
+        # 5. Restore booked units for items under inventory row lock
         items = bkg.booking_items or []
         for it in items:
             if it.inventory_id:
                 inv = await self.inv_repo.lock_by_id(it.inventory_id)
                 inv.booked_units = max(0, inv.booked_units - it.units)
+                it.status = "cancelled"
+                it.updated_at = now
 
         await self.session.commit()
         return bkg

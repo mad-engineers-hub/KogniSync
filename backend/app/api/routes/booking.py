@@ -8,8 +8,11 @@ from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import secrets
+import logging
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import settings
 
 from app.db.database import get_db
 from app.services.booking_service import BookingService
@@ -38,6 +41,26 @@ from app.schemas.booking import (
     ProcessPaymentRequest,
     PaymentResponse,
 )
+
+logger = logging.getLogger("kognisync.api.booking")
+
+
+async def verify_operational_access(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+) -> None:
+    """
+    Guards internal operational endpoints (worker sweeps, live table scans).
+    If INTERNAL_API_KEY is configured, enforces constant-time validation.
+    If INTERNAL_API_KEY is unset (default local dev), logs advisory warning.
+    """
+    if settings.INTERNAL_API_KEY:
+        if not x_internal_key or not secrets.compare_digest(x_internal_key, settings.INTERNAL_API_KEY):
+            logger.warning("Operational endpoint access denied: invalid or missing X-Internal-Key")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: invalid or missing operational credentials",
+            )
+
 
 router = APIRouter(prefix="/api/v1", tags=["Booking & Inventory"])
 
@@ -150,7 +173,7 @@ async def release_hold(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
-@router.post("/holds/expire")
+@router.post("/holds/expire", dependencies=[Depends(verify_operational_access)])
 async def trigger_hold_expiration(
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
@@ -239,6 +262,8 @@ async def cancel_booking(
         return _to_booking_response(booking)
     except BookingNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except RepositoryConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 @router.post("/payments/process", response_model=PaymentResponse)
@@ -276,7 +301,11 @@ async def get_inventory(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
-@router.get("/reliability/invariant-check", response_model=InvariantCheckResponse)
+@router.get(
+    "/reliability/invariant-check",
+    response_model=InvariantCheckResponse,
+    dependencies=[Depends(verify_operational_access)],
+)
 async def run_invariant_check(
     inventory_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),

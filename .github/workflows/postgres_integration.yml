@@ -1,0 +1,79 @@
+name: PostgreSQL Integration & Booking Safety Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  postgres-integration:
+    name: PostgreSQL 16 & Redis 7 Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: kognisync
+          POSTGRES_PASSWORD: kognisync_pass
+          POSTGRES_DB: kognisync_db
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio anyio httpx
+
+      - name: Run Alembic migrations to head
+        env:
+          DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
+          POSTGRES_USER: kognisync
+          POSTGRES_PASSWORD: kognisync_pass
+          POSTGRES_DB: kognisync_db
+          POSTGRES_PORT: 5434
+        run: |
+          python scripts/init_db.py
+
+      - name: Execute PostgreSQL Concurrency & Locking Tests
+        env:
+          POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
+          REDIS_URL: redis://localhost:6380/0
+          PYTHONPATH: backend
+        run: |
+          pytest backend/tests/test_postgres_integration.py -v -rs
+
+      - name: Execute Full Backend Test Suite
+        env:
+          POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
+          REDIS_URL: redis://localhost:6380/0
+          PYTHONPATH: backend
+        run: |
+          pytest backend/tests -v

@@ -127,15 +127,16 @@ class HoldService:
             else:
                 await s.flush()
 
-        # 4. Advisory Redis registration (non-blocking, failure-safe)
-        try:
-            await self.redis.register_hold_ttl(
-                created_hold.hold_id,
-                ttl_seconds,
-                metadata={"user_id": user_id, "inventory_id": inventory_id, "units": units},
-            )
-        except Exception as e:
-            logger.warning(f"Advisory Redis TTL registration encountered error: {e}")
+        # 4. Advisory Redis registration (non-blocking, failure-safe, strictly post-commit)
+        if owns_session:
+            try:
+                await self.redis.register_hold_ttl(
+                    created_hold.hold_id,
+                    ttl_seconds,
+                    metadata={"user_id": user_id, "inventory_id": inventory_id, "units": units},
+                )
+            except Exception as e:
+                logger.warning(f"Advisory Redis TTL registration encountered error: {e}")
 
         return created_hold
 
@@ -203,11 +204,12 @@ class HoldService:
                 await s.flush()
             logger.info(f"Hold '{hold_id}' successfully expired. Released {hold.units} units for inventory '{hold.inventory_id}'.")
 
-        # 6. Advisory Redis cleanup
-        try:
-            await self.redis.remove_hold_ttl(hold_id)
-        except Exception as e:
-            logger.warning(f"Advisory Redis cleanup encountered error: {e}")
+        # 6. Advisory Redis cleanup (strictly post-commit)
+        if owns_session:
+            try:
+                await self.redis.remove_hold_ttl(hold_id)
+            except Exception as e:
+                logger.warning(f"Advisory Redis cleanup encountered error: {e}")
         return True
 
     async def confirm_hold(
@@ -281,11 +283,12 @@ class HoldService:
             hold.updated_at = now
             logger.info(f"Hold '{hold_id}' confirmed into booking '{booking_id}'.")
 
-        # Cleanup advisory Redis key
-        try:
-            await self.redis.remove_hold_ttl(hold_id)
-        except Exception as e:
-            logger.warning(f"Advisory Redis cleanup encountered error: {e}")
+        # Cleanup advisory Redis key (strictly post-commit)
+        if owns_session:
+            try:
+                await self.redis.remove_hold_ttl(hold_id)
+            except Exception as e:
+                logger.warning(f"Advisory Redis cleanup encountered error: {e}")
         return hold
 
     async def expire_stale_holds(
@@ -301,9 +304,14 @@ class HoldService:
         cutoff = ensure_utc(cutoff_time or datetime.now(timezone.utc))
         result = BatchExpireResult()
 
+        factory = self.session_factory
+        if factory is None:
+            from app.db.database import AsyncSessionLocal
+            factory = AsyncSessionLocal
+
         # Step 1: Query candidate hold IDs using row-level locking / skip_locked
         candidate_ids = []
-        async with self.session_factory() as session:
+        async with factory() as session:
             hold_repo = HoldRepository(session)
             candidates = await hold_repo.find_expired_active_holds(
                 cutoff_time=cutoff, limit=batch_size, skip_locked=True

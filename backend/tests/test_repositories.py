@@ -26,7 +26,13 @@ def anyio_backend():
 
 @pytest.fixture
 async def async_session():
-    test_engine = create_async_engine(settings.DATABASE_URL, echo=False)
+    try:
+        test_engine = create_async_engine(settings.DATABASE_URL, echo=False, connect_args={"timeout": 2})
+        async with test_engine.connect() as conn:
+            pass
+    except Exception:
+        pytest.skip(f"PostgreSQL database unreachable at {settings.DATABASE_URL}")
+
     session_factory = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
     async with session_factory() as session:
         yield session

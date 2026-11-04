@@ -565,3 +565,193 @@ async def test_10_booking_contracts_unchanged_and_camelcase_compatible(async_cli
     assert inv_check.status_code == 200
     assert inv_check.json()["passed"] is True
     assert inv_check.json()["totalViolations"] == 0
+
+
+@pytest.mark.anyio
+async def test_11_operational_endpoint_security_gate(async_client, api_test_env):
+    """
+    Verifies that worker and operational endpoints are strictly protected by X-Internal-Key
+    when INTERNAL_API_KEY is configured.
+    """
+    from app.core.config import settings
+
+    original_key = settings.INTERNAL_API_KEY
+    try:
+        settings.INTERNAL_API_KEY = "ops_super_secret_gate_key_456"
+
+        # 1. /api/v1/holds/expire without key -> 403 Forbidden
+        res_no_key = await async_client.post("/api/v1/holds/expire")
+        assert res_no_key.status_code == 403
+        assert "operational" in res_no_key.json()["detail"].lower()
+
+        # 2. /api/v1/holds/expire with invalid key -> 403 Forbidden
+        res_bad_key = await async_client.post(
+            "/api/v1/holds/expire",
+            headers={"X-Internal-Key": "invalid_intruder_key"},
+        )
+        assert res_bad_key.status_code == 403
+
+        # 3. /api/v1/holds/expire with valid key -> 200 OK
+        res_valid = await async_client.post(
+            "/api/v1/holds/expire",
+            headers={"X-Internal-Key": "ops_super_secret_gate_key_456"},
+        )
+        assert res_valid.status_code == 200
+
+        # 4. /api/v1/reliability/invariant-check without key -> 403 Forbidden
+        inv_no_key = await async_client.get("/api/v1/reliability/invariant-check")
+        assert inv_no_key.status_code == 403
+
+        # 5. /api/v1/reliability/invariant-check with valid key -> 200 OK
+        inv_valid = await async_client.get(
+            "/api/v1/reliability/invariant-check",
+            headers={"X-Internal-Key": "ops_super_secret_gate_key_456"},
+        )
+        assert inv_valid.status_code == 200
+        assert inv_valid.json()["passed"] is True
+    finally:
+        settings.INTERNAL_API_KEY = original_key
+
+
+@pytest.mark.anyio
+async def test_12_repeated_cancellation_idempotency_and_inventory_safety(async_client, api_test_env):
+    """
+    Verifies that:
+    1. First cancellation releases booked units back to capacity.
+    2. Repeated cancellation is idempotent and DOES NOT decrement inventory twice.
+    """
+    factory = api_test_env["session_factory"]
+    inv_id = api_test_env["inventory_id"]
+
+    # Record baseline booked_units
+    async with factory() as s:
+        res = await s.execute(select(InventoryCalendar).where(InventoryCalendar.inventory_id == inv_id))
+        inv = res.scalar_one()
+        baseline_booked = inv.booked_units
+
+    # 1. Create hold and confirm booking
+    hold_res = await async_client.post("/api/v1/holds", json={
+        "inventory_id": inv_id,
+        "user_id": "usr_test_cancel",
+        "units": 2,
+    })
+    assert hold_res.status_code == 201
+    hold_id = hold_res.json()["holdId"]
+
+    bkg_res = await async_client.post("/api/v1/bookings/confirm", json={
+        "holdId": hold_id,
+        "userId": "usr_test_cancel",
+        "paymentMethod": "card",
+    })
+    assert bkg_res.status_code == 200
+    booking_id = bkg_res.json()["bookingId"]
+
+    # Check inventory before cancellation: booked_units should be baseline + 2
+    async with factory() as s:
+        res = await s.execute(select(InventoryCalendar).where(InventoryCalendar.inventory_id == inv_id))
+        inv = res.scalar_one()
+        assert inv.booked_units == baseline_booked + 2
+
+    # 2. First cancellation
+    cancel_res_1 = await async_client.post(f"/api/v1/bookings/{booking_id}/cancel", json={
+        "reason": "traveler requested change of plans",
+    })
+    assert cancel_res_1.status_code == 200
+    assert cancel_res_1.json()["status"] == "cancelled"
+
+    # Check inventory after first cancellation: booked_units should return to baseline
+    async with factory() as s:
+        res = await s.execute(select(InventoryCalendar).where(InventoryCalendar.inventory_id == inv_id))
+        inv = res.scalar_one()
+        assert inv.booked_units == baseline_booked
+
+    # 3. Repeated second cancellation (idempotent duplicate)
+    cancel_res_2 = await async_client.post(f"/api/v1/bookings/{booking_id}/cancel", json={
+        "reason": "duplicate webhook or retry",
+    })
+    assert cancel_res_2.status_code == 200
+    assert cancel_res_2.json()["status"] == "cancelled"
+
+    # Inventory booked_units MUST remain at baseline, never released twice
+    async with factory() as s:
+        res = await s.execute(select(InventoryCalendar).where(InventoryCalendar.inventory_id == inv_id))
+        inv = res.scalar_one()
+        assert inv.booked_units == baseline_booked
+
+
+@pytest.mark.anyio
+async def test_13_unknown_booking_cancellation_returns_404(async_client, api_test_env):
+    """Verifies that cancellation of an unknown booking ID returns 404 Not Found."""
+    cancel_res = await async_client.post("/api/v1/bookings/bkg_does_not_exist_999/cancel", json={
+        "reason": "nonexistent test",
+    })
+    assert cancel_res.status_code == 404
+    assert "not found" in cancel_res.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_14_simulated_payment_failure_atomicity(async_client, api_test_env):
+    """
+    Verifies that when payment processing fails during confirmation:
+    - An HTTP 402 is returned.
+    - No booking or payment is persisted.
+    - The active hold remains untouched and active.
+    - Inventory held units are preserved without corruption.
+    """
+    factory = api_test_env["session_factory"]
+    inv_id = api_test_env["inventory_id"]
+
+    hold_res = await async_client.post("/api/v1/holds", json={
+        "inventory_id": inv_id,
+        "user_id": "usr_test_payfail",
+        "units": 1,
+    })
+    assert hold_res.status_code == 201
+    hold_id = hold_res.json()["holdId"]
+
+    # Attempt confirmation with payment failure
+    bkg_res = await async_client.post("/api/v1/bookings/confirm", json={
+        "holdId": hold_id,
+        "userId": "usr_test_payfail",
+        "simulatePaymentFailure": True,
+        "paymentFailureCode": "INSUFFICIENT_FUNDS_TEST",
+    })
+    assert bkg_res.status_code == 402
+    assert "INSUFFICIENT_FUNDS_TEST" in bkg_res.json()["detail"]
+
+    # Verify hold is still active and inventory held_units was preserved
+    async with factory() as s:
+        h_res = await s.execute(select(Hold).where(Hold.hold_id == hold_id))
+        hold = h_res.scalar_one()
+        assert hold.status == "active"
+        assert hold.booking_id is None
+
+        inv_res = await s.execute(select(InventoryCalendar).where(InventoryCalendar.inventory_id == inv_id))
+        inv = inv_res.scalar_one()
+        assert inv.held_units >= 1
+        assert inv.booked_units == 2  # initial baseline booked_units
+
+
+@pytest.mark.anyio
+async def test_15_redis_post_commit_strict_behavior(async_client, api_test_env):
+    """
+    Verifies that Redis TTL operations happen strictly after database commits,
+    and Redis failures do not fail or roll back the committed booking.
+    """
+    inv_id = api_test_env["inventory_id"]
+
+    with patch("app.services.redis_hold_support.RedisHoldSupport.remove_hold_ttl", side_effect=ConnectionError("Redis cluster down")):
+        hold_res = await async_client.post("/api/v1/holds", json={
+            "inventory_id": inv_id,
+            "user_id": "usr_test_redis_resilience",
+            "units": 1,
+        })
+        assert hold_res.status_code == 201
+        hold_id = hold_res.json()["holdId"]
+
+        bkg_res = await async_client.post("/api/v1/bookings/confirm", json={
+            "holdId": hold_id,
+            "userId": "usr_test_redis_resilience",
+        })
+        assert bkg_res.status_code == 200
+        assert bkg_res.json()["status"] == "confirmed"

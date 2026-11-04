@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
 
+    # Internal Security & Operational API Key
+    INTERNAL_API_KEY: str | None = None
+
     # Database Configuration
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_PORT: int = 5434
