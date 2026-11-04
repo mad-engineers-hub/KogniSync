@@ -10,7 +10,7 @@ Usage:
     python scripts/migrate.py current           # Display current migration revision
     python scripts/migrate.py check             # Verify schema compatibility & baseline
     python scripts/migrate.py history           # Show migration history
-    python scripts/migrate.py stamp [rev]       # Stamp database at specified revision (default: head)
+    python scripts/migrate.py stamp [rev]       # Stamp database at specified revision (default: baseline)
 """
 import argparse
 import os
@@ -28,6 +28,9 @@ from alembic import command
 import sqlalchemy as sa
 from app.core.config import settings
 
+# Canonical baseline revision constant
+CANONICAL_BASELINE_REVISION = "0001_canonical_baseline"
+
 CANONICAL_TABLES = [
     "currencies", "languages", "countries", "fx_rates", "cities", "airlines",
     "airports", "hotels", "hotel_room_types", "hotel_rate_plans", "flights",
@@ -38,7 +41,6 @@ CANONICAL_TABLES = [
 
 def get_alembic_config(db_url: str | None = None) -> Config:
     """Load Alembic configuration with correct path resolution."""
-    # Check root alembic.ini first, then backend/alembic.ini
     ini_path = REPO_ROOT / "alembic.ini"
     if not ini_path.exists():
         ini_path = BACKEND_DIR / "alembic.ini"
@@ -52,9 +54,8 @@ def get_alembic_config(db_url: str | None = None) -> Config:
 
 
 def check_schema_health(db_url: str | None = None) -> dict:
-    """Verify presence of canonical tables and migration status."""
+    """Verify presence of canonical tables, structural compatibility, and migration status."""
     target_url = db_url or settings.DATABASE_URL
-    # For inspection, use synchronous driver if asyncpg URL
     sync_url = target_url
     if "+asyncpg" in sync_url:
         sync_url = sync_url.replace("+asyncpg", "")
@@ -75,13 +76,30 @@ def check_schema_health(db_url: str | None = None) -> dict:
                 if res:
                     current_rev = res[0]
 
+        # Structural check
+        structural_errors = []
+        if len(missing_canonical) == 0:
+            try:
+                # Import verification helper from baseline revision
+                import importlib.util
+                baseline_path = BACKEND_DIR / "alembic" / "versions" / "0001_canonical_baseline.py"
+                spec = importlib.util.spec_from_file_location("baseline_module", baseline_path)
+                baseline_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(baseline_module)
+                baseline_module.verify_canonical_schema_structural_compatibility(engine)
+            except Exception as e:
+                structural_errors.append(str(e))
+
+        is_compatible = (len(missing_canonical) == 0) and (len(structural_errors) == 0)
+
         return {
             "total_tables": len(existing_tables),
             "canonical_present": len(CANONICAL_TABLES) - len(missing_canonical),
             "canonical_missing": missing_canonical,
             "has_alembic_version": has_alembic,
             "current_revision": current_rev,
-            "compatible": len(missing_canonical) == 0,
+            "structural_errors": structural_errors,
+            "compatible": is_compatible,
         }
     finally:
         engine.dispose()
@@ -104,11 +122,11 @@ def cmd_history(cfg: Config) -> None:
     command.history(cfg, verbose=True)
 
 
-def cmd_stamp(cfg: Config, revision: str = "head") -> None:
-    """Stamp database revision."""
+def cmd_stamp(cfg: Config, revision: str = CANONICAL_BASELINE_REVISION) -> None:
+    """Stamp database with specified revision (defaults to explicit canonical baseline)."""
     print(f"Stamping database with revision '{revision}'...")
     command.stamp(cfg, revision)
-    print("Database stamped successfully.")
+    print(f"Database successfully stamped with '{revision}'.")
 
 
 def cmd_check(cfg: Config, db_url: str | None = None) -> None:
@@ -120,8 +138,15 @@ def cmd_check(cfg: Config, db_url: str | None = None) -> None:
         print(f"  Missing canonical tables: {health['canonical_missing']}")
         print("  Status: INCOMPATIBLE (Run scripts/init_db.py on development DB first)")
         sys.exit(1)
+
+    if health["structural_errors"]:
+        print("  Structural compatibility: FAILED")
+        for err in health["structural_errors"]:
+            print(f"    - {err}")
+        print("  Status: INCOMPATIBLE")
+        sys.exit(1)
     else:
-        print("  Canonical schema: PASS (all 20 organizer tables intact)")
+        print("  Canonical schema: PASS (all 20 organizer tables intact & structurally compatible)")
 
     if health["has_alembic_version"]:
         print(f"  Current migration revision: {health['current_revision']}")
@@ -140,8 +165,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--revision",
-        default="head",
-        help="Target revision for upgrade or stamp (default: head)",
+        default=None,
+        help="Target revision for upgrade (default: head) or stamp (default: 0001_canonical_baseline)",
     )
     parser.add_argument(
         "--db-url",
@@ -153,7 +178,8 @@ def main() -> None:
     cfg = get_alembic_config(args.db_url)
 
     if args.action == "upgrade":
-        cmd_upgrade(cfg, args.revision)
+        target_rev = args.revision or "head"
+        cmd_upgrade(cfg, target_rev)
     elif args.action == "current":
         cmd_current(cfg)
     elif args.action == "check":
@@ -161,9 +187,9 @@ def main() -> None:
     elif args.action == "history":
         cmd_history(cfg)
     elif args.action == "stamp":
-        cmd_stamp(cfg, args.revision)
+        target_rev = args.revision or CANONICAL_BASELINE_REVISION
+        cmd_stamp(cfg, target_rev)
 
 
 if __name__ == "__main__":
     main()
-

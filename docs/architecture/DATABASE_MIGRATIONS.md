@@ -81,17 +81,25 @@ KogniSync/
 │       ├── env.py               # Async & Sync migration runner + safeguards
 │       ├── script.py.mako       # Migration template
 │       └── versions/
-│           └── 0001_canonical_baseline.py  # Baseline verification revision
+│           └── 0001_canonical_baseline.py  # Baseline structural verification
 └── scripts/
     ├── migrate.py               # Safe migration runner CLI
     └── init_db.py               # Disposable dev-only bootstrap (safeguarded)
 ```
 
 ### Baseline Revision (`0001_canonical_baseline`)
-The baseline revision acts as a pre-condition gate:
-- **Precondition Verification**: When `upgrade()` runs, it inspects the database to confirm that all 20 canonical tables already exist. If the database is uninitialized or missing tables, it raises `RuntimeError` and refuses to proceed.
+The baseline revision acts as a structural pre-condition gate:
+- **Structural Precondition Verification**: When `upgrade()` runs, it performs deep inspection of the database via SQLAlchemy reflection:
+  1. **Table Names**: Verifies all 20 canonical tables exist.
+  2. **Primary Keys**: Validates PK constraints on critical entities (`inventory_calendar`, `holds`, `bookings`, `booking_items`, `payments`, `users`, `hotels`, `flights`).
+  3. **Critical Columns**: Confirms presence of mandatory business columns (`booked_units`, `held_units`, `price`, `status`, `expires_at`, etc.).
+  4. **Foreign Keys**: Checks essential relationships (e.g., `holds -> users`, `bookings -> users`, `booking_items -> bookings`).
+  If any structural check fails or if the database is uninitialized, it raises `RuntimeError` and refuses to record the baseline.
 - **Zero Schema Duplication**: No DDL (`CREATE TABLE`) is executed for canonical tables; the revision simply stamps the canonical foundation.
 - **Downgrade Prohibition**: `downgrade()` raises `RuntimeError` to prevent any migration from ever dropping or unwinding past the canonical baseline.
+
+### Explicit Baseline Stamping Safety
+When bootstrap initializes a disposable database (`scripts/init_db.py`), it stamps the **explicit baseline revision (`0001_canonical_baseline`)**, NEVER `head`. This guarantees that future application-owned migrations (e.g. `0002_user_sessions`) are not marked as applied prematurely before their migration scripts have executed.
 
 ---
 
@@ -144,7 +152,7 @@ When adding new application features (e.g., table `user_saved_routes`):
 2. **Production Prohibition**: If `APP_ENV=production` or `ENVIRONMENT=production`, execution is strictly refused even if opt-in flags are passed.
 3. **Explicit Opt-In**: Requires `ALLOW_DESTRUCTIVE_DB_INIT=true` in the environment or the `--force-destructive` command line flag.
 4. **Target Logging**: Prints clear identification of the target database host, port, and database name before performing any destructive work.
-5. **Automatic Stamping**: Upon successful CSV loading and invariant verification, automatically stamps `0001_canonical_baseline` so the database is immediately migration-ready.
+5. **Explicit Baseline Stamping**: Upon successful CSV loading and invariant verification, automatically stamps `0001_canonical_baseline` (not `head`).
 
 Example usage for local development:
 ```bash
@@ -165,4 +173,3 @@ python scripts/init_db.py --force-destructive
 - **Pre-Migration Backups**: Take a snapshot or `pg_dump` of the PostgreSQL database before applying any application migrations in staging/production.
 - **Rollback Limitations**: Downgrading schema migrations in production carries significant data loss risks (e.g., dropping columns containing user-entered data).
 - **Forward-Fix Policy**: In the event of a migration issue, prefer rolling forward with an additive corrective migration rather than issuing destructive `downgrade` commands.
-

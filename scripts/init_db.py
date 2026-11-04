@@ -195,13 +195,20 @@ def verify_database(conn):
 
 
 def stamp_alembic_baseline():
-    """Stamp the newly initialized database with the canonical baseline revision."""
-    print("\nStamping database with Alembic migration baseline (0001_canonical_baseline)...")
+    """Stamp the newly initialized database with the canonical baseline revision.
+    
+    CRITICAL SAFETY RULE:
+    Explicitly stamps CANONICAL_BASELINE_REVISION ('0001_canonical_baseline'),
+    NEVER 'head'. This ensures that any future application-owned migrations
+    (e.g. 0002_user_sessions) are NOT incorrectly marked as applied before
+    their upgrade() migration scripts have actually run.
+    """
+    from scripts.migrate import CANONICAL_BASELINE_REVISION, get_alembic_config, cmd_stamp
+    print(f"\nStamping database with Alembic migration baseline ({CANONICAL_BASELINE_REVISION})...")
     try:
-        from scripts.migrate import get_alembic_config, cmd_stamp
         cfg = get_alembic_config()
-        cmd_stamp(cfg, "head")
-        print("Alembic baseline successfully recorded.")
+        cmd_stamp(cfg, CANONICAL_BASELINE_REVISION)
+        print(f"Alembic baseline '{CANONICAL_BASELINE_REVISION}' successfully recorded.")
     except Exception as e:
         print(f"Warning: Could not stamp Alembic baseline: {e}")
 
