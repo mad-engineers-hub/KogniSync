@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, ConfigDict
 class CreateHoldRequest(BaseModel):
     inventory_id: Optional[str] = Field(default=None, alias="inventoryId", description="Target inventory ID to hold")
     journey_id: Optional[str] = Field(default=None, alias="journeyId", description="Journey identifier")
-    user_id: str = Field(default="usr_demo_traveler", alias="userId", description="ID of traveler creating the hold")
+    user_id: Optional[str] = Field(default=None, alias="userId", description="ID of traveler creating the hold")
     units: int = Field(default=1, ge=1, description="Number of units to hold (must be positive)")
     idempotency_key: Optional[str] = Field(default=None, alias="idempotencyKey", description="Unique idempotency key")
     correlation_id: Optional[str] = Field(default=None, alias="correlationId", description="Request correlation identifier")
@@ -41,7 +41,7 @@ class HoldResponse(BaseModel):
 class ConfirmBookingRequest(BaseModel):
     hold_id: Optional[str] = Field(default=None, alias="holdId", description="Existing active hold ID to confirm")
     journey_id: Optional[str] = Field(default=None, alias="journeyId", description="Journey identifier")
-    user_id: str = Field(default="usr_demo_traveler", alias="userId")
+    user_id: Optional[str] = Field(default=None, alias="userId")
     passengers: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     contact_email: Optional[str] = Field(default=None, alias="contactEmail")
     contact_phone: Optional[str] = Field(default=None, alias="contactPhone")

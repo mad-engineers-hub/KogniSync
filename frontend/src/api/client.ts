@@ -13,14 +13,60 @@ export class ApiError extends Error {
   }
 }
 
+export function getAuthToken(): string | null {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    return window.localStorage.getItem('kognisync_auth_token');
+  }
+  return null;
+}
+
+export function setAuthToken(token: string | null): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    if (token) {
+      window.localStorage.setItem('kognisync_auth_token', token);
+    } else {
+      window.localStorage.removeItem('kognisync_auth_token');
+    }
+  }
+}
+
+export async function ensureDemoToken(): Promise<string | null> {
+  const existing = getAuthToken();
+  if (existing) return existing;
+
+  try {
+    const res = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/v1/auth/demo-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: 'usr_demo_traveler' }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.access_token) {
+        setAuthToken(data.access_token);
+        return data.access_token;
+      }
+    }
+  } catch {
+    // Offline or fallback handling
+  }
+  return null;
+}
+
 export async function apiClient<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${BACKEND_URL.replace(/\/$/, '')}/${endpoint.replace(/^\//, '')}`;
   
+  let token = getAuthToken();
+  if (!token && (endpoint.includes('holds') || endpoint.includes('bookings'))) {
+    token = await ensureDemoToken();
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers as Record<string, string>),
   };
 

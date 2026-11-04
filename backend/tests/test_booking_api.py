@@ -37,6 +37,24 @@ from app.services.hold_service import HoldService
 from app.services.hold_expiration_worker import HoldExpirationWorker
 from app.services.redis_hold_support import RedisHoldSupport
 from app.services.booking_service import BookingService
+from app.core.security import create_access_token
+
+
+class AuthTestClient(AsyncClient):
+    async def request(self, method, url, **kwargs):
+        headers = dict(kwargs.get("headers") or {})
+        if "Authorization" not in headers and "authorization" not in headers:
+            json_body = kwargs.get("json")
+            uid = "usr_test_1"
+            if isinstance(json_body, dict):
+                if "user_id" in json_body and json_body["user_id"]:
+                    uid = json_body["user_id"]
+                elif "userId" in json_body and json_body["userId"]:
+                    uid = json_body["userId"]
+            token = create_access_token(uid)
+            headers["Authorization"] = f"Bearer {token}"
+            kwargs["headers"] = headers
+        return await super().request(method, url, **kwargs)
 
 
 @pytest.fixture
@@ -166,7 +184,7 @@ async def api_test_env(tmp_path):
 @pytest.fixture
 async def async_client(api_test_env):
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AuthTestClient(transport=transport, base_url="http://test") as client:
         yield client
 
 
@@ -653,7 +671,7 @@ async def test_12_repeated_cancellation_idempotency_and_inventory_safety(async_c
         assert inv.booked_units == baseline_booked + 2
 
     # 2. First cancellation
-    cancel_res_1 = await async_client.post(f"/api/v1/bookings/{booking_id}/cancel", json={
+    cancel_res_1 = await async_client.post(f"/api/v1/bookings/{booking_id}/cancel", headers={"Authorization": f"Bearer {create_access_token('usr_test_cancel')}"}, json={
         "reason": "traveler requested change of plans",
     })
     assert cancel_res_1.status_code == 200
@@ -666,7 +684,7 @@ async def test_12_repeated_cancellation_idempotency_and_inventory_safety(async_c
         assert inv.booked_units == baseline_booked
 
     # 3. Repeated second cancellation (idempotent duplicate)
-    cancel_res_2 = await async_client.post(f"/api/v1/bookings/{booking_id}/cancel", json={
+    cancel_res_2 = await async_client.post(f"/api/v1/bookings/{booking_id}/cancel", headers={"Authorization": f"Bearer {create_access_token('usr_test_cancel')}"}, json={
         "reason": "duplicate webhook or retry",
     })
     assert cancel_res_2.status_code == 200

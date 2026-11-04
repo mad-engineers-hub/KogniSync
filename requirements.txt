@@ -15,6 +15,9 @@ alembic>=1.13.0
 # Caching & Distributed Locks
 redis>=5.0.0
 
+# Authentication & Security
+PyJWT>=2.8.0
+
 # Utilities
 python-dotenv>=1.0.1
 google-genai>=1.0.0

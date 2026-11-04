@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     # Internal Security & Operational API Key
     INTERNAL_API_KEY: str | None = None
 
+    # JWT Authentication Configuration
+    JWT_SECRET_KEY: str | None = None
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ISSUER: str | None = None
+    JWT_AUDIENCE: str | None = None
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+
     # Database Configuration
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_PORT: int = 5434

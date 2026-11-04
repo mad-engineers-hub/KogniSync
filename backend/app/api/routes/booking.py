@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
+from app.core.security import get_current_user_id
 
 from app.db.database import get_db
 from app.services.booking_service import BookingService
@@ -50,16 +51,31 @@ async def verify_operational_access(
 ) -> None:
     """
     Guards internal operational endpoints (worker sweeps, live table scans).
-    If INTERNAL_API_KEY is configured, enforces constant-time validation.
-    If INTERNAL_API_KEY is unset (default local dev), logs advisory warning.
+    In production, fails closed if INTERNAL_API_KEY is not configured or key is invalid.
+    Constant-time comparison is strictly enforced without leaking secrets in logs or responses.
     """
-    if settings.INTERNAL_API_KEY:
+    if settings.ENVIRONMENT == "production":
+        if not settings.INTERNAL_API_KEY:
+            logger.error("Operational access rejected: INTERNAL_API_KEY is missing in production configuration.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: operational credentials not configured",
+            )
         if not x_internal_key or not secrets.compare_digest(x_internal_key, settings.INTERNAL_API_KEY):
-            logger.warning("Operational endpoint access denied: invalid or missing X-Internal-Key")
+            logger.warning("Operational endpoint access denied: invalid or missing X-Internal-Key in production")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Forbidden: invalid or missing operational credentials",
             )
+    else:
+        # Development & test environment
+        if settings.INTERNAL_API_KEY:
+            if not x_internal_key or not secrets.compare_digest(x_internal_key, settings.INTERNAL_API_KEY):
+                logger.warning("Operational endpoint access denied: invalid or missing X-Internal-Key")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: invalid or missing operational credentials",
+                )
 
 
 router = APIRouter(prefix="/api/v1", tags=["Booking & Inventory"])
@@ -114,6 +130,7 @@ def _to_booking_response(booking, req: Optional[ConfirmBookingRequest] = None) -
 @router.post("/holds", response_model=HoldResponse, status_code=status.HTTP_201_CREATED)
 async def create_hold(
     req: CreateHoldRequest,
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> HoldResponse:
     """
@@ -121,13 +138,19 @@ async def create_hold(
     Enforces the central invariant: booked_units + held_units <= total_units.
     Registers an advisory Redis TTL after successful DB persistence.
     """
+    if req.user_id and req.user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: cannot create hold for another user identity",
+        )
+
     correlation_id = req.correlation_id or f"corr_{uuid.uuid4().hex[:16]}"
     service = BookingService(db)
 
     try:
         hold = await service.create_hold(
             inventory_id=req.inventory_id,
-            user_id=req.user_id,
+            user_id=current_user,
             units=req.units,
             idempotency_key=req.idempotency_key,
             correlation_id=correlation_id,
@@ -144,12 +167,15 @@ async def create_hold(
 @router.get("/holds/{hold_id}", response_model=HoldResponse)
 async def get_hold(
     hold_id: str,
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> HoldResponse:
-    """Retrieves hold details by ID."""
+    """Retrieves hold details by ID with ownership verification."""
     service = BookingService(db)
     try:
         hold = await service.get_hold(hold_id)
+        if hold.user_id != current_user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Hold '{hold_id}' not found")
         return _to_hold_response(hold)
     except HoldNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -159,14 +185,18 @@ async def get_hold(
 async def release_hold(
     hold_id: str,
     correlation_id: Optional[str] = None,
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> HoldResponse:
-    """Explicitly releases an active hold, immediately restoring inventory capacity."""
+    """Explicitly releases an active hold with ownership verification."""
     corr = correlation_id or f"corr_rel_{uuid.uuid4().hex[:16]}"
     service = BookingService(db)
     try:
-        hold = await service.release_hold(hold_id, corr)
-        return _to_hold_response(hold)
+        hold = await service.get_hold(hold_id)
+        if hold.user_id != current_user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Hold '{hold_id}' not found")
+        released = await service.release_hold(hold_id, corr)
+        return _to_hold_response(released)
     except HoldNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except HoldStatusError as e:
@@ -184,14 +214,33 @@ async def trigger_hold_expiration(
     return {"status": "success", "summary": expired_summary}
 
 
-async def _handle_confirm_booking(req: ConfirmBookingRequest, db: AsyncSession) -> BookingResponse:
+async def _handle_confirm_booking(
+    req: ConfirmBookingRequest,
+    current_user: str,
+    db: AsyncSession,
+) -> BookingResponse:
+    if req.user_id and req.user_id != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: cannot confirm booking for another user identity",
+        )
+
     correlation_id = req.correlation_id or f"corr_bkg_{uuid.uuid4().hex[:16]}"
     service = BookingService(db)
+
+    # Verify hold ownership before confirmation (cannot confirm another user's hold)
+    if req.hold_id:
+        try:
+            hold = await service.get_hold(req.hold_id)
+            if hold.user_id != current_user:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Hold '{req.hold_id}' not found")
+        except HoldNotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     try:
         booking = await service.confirm_booking(
             hold_id=req.hold_id,
-            user_id=req.user_id,
+            user_id=current_user,
             payment_method=req.payment_method,
             idempotency_key=req.idempotency_key,
             correlation_id=correlation_id,
@@ -216,33 +265,38 @@ async def _handle_confirm_booking(req: ConfirmBookingRequest, db: AsyncSession) 
 @router.post("/bookings/confirm", response_model=BookingResponse)
 async def confirm_booking(
     req: ConfirmBookingRequest,
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> BookingResponse:
     """
     Confirms an active hold into a confirmed booking.
     Executes simulated payment processing and compensation if payment fails.
     """
-    return await _handle_confirm_booking(req, db)
+    return await _handle_confirm_booking(req, current_user, db)
 
 
 @router.post("/bookings", response_model=BookingResponse)
 async def create_booking_alias(
     req: ConfirmBookingRequest,
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> BookingResponse:
     """Frontend-compatible alias for booking confirmation."""
-    return await _handle_confirm_booking(req, db)
+    return await _handle_confirm_booking(req, current_user, db)
 
 
 @router.get("/bookings/{booking_id}", response_model=BookingResponse)
 async def get_booking(
     booking_id: str,
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> BookingResponse:
-    """Retrieves booking record by ID."""
+    """Retrieves booking record by ID with ownership verification."""
     service = BookingService(db)
     try:
         booking = await service.get_booking(booking_id)
+        if booking.user_id != current_user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Booking '{booking_id}' not found")
         return _to_booking_response(booking)
     except BookingNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -252,12 +306,16 @@ async def get_booking(
 async def cancel_booking(
     booking_id: str,
     req: CancelBookingRequest = CancelBookingRequest(),
+    current_user: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> BookingResponse:
-    """Cancels a booking and restores inventory units."""
+    """Cancels a booking and restores inventory units with ownership verification."""
     corr = req.correlation_id or f"corr_can_{uuid.uuid4().hex[:16]}"
     service = BookingService(db)
     try:
+        existing = await service.get_booking(booking_id)
+        if existing.user_id != current_user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Booking '{booking_id}' not found")
         booking = await service.cancel_booking(booking_id, reason=req.reason, correlation_id=corr)
         return _to_booking_response(booking)
     except BookingNotFoundError as e:
