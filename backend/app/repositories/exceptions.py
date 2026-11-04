@@ -26,3 +26,29 @@ class HoldNotFoundError(RepositoryError):
 class HoldStatusError(RepositoryError):
     """Raised when an operation is invalid for the hold's current status."""
     pass
+
+
+class HoldExpiredError(HoldStatusError):
+    """Raised when an operation is attempted on an expired hold."""
+    pass
+
+
+class HoldNotActiveError(HoldStatusError):
+    """Raised when an operation requires an active hold but status is different."""
+    pass
+
+
+class BookingNotFoundError(RepositoryError):
+    """Raised when a requested booking record is not found."""
+    pass
+
+
+class PaymentFailedError(RepositoryError):
+    """Raised when payment authorization or capture fails."""
+    pass
+
+
+class IdempotencyPayloadConflictError(RepositoryConflictError):
+    """Raised when an idempotency key is reused with a conflicting payload."""
+    pass
+

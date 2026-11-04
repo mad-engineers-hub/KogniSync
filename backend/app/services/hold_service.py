@@ -13,6 +13,7 @@ CRITICAL INVARIANTS ENFORCED:
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
+from contextlib import asynccontextmanager
 import logging
 import uuid
 
@@ -25,6 +26,8 @@ from app.repositories.inventory_repository import InventoryRepository
 from app.repositories.exceptions import (
     HoldNotFoundError,
     HoldStatusError,
+    HoldExpiredError,
+    HoldNotActiveError,
     InsufficientInventoryError,
 )
 from app.services.redis_hold_support import RedisHoldSupport
@@ -65,6 +68,14 @@ class HoldService:
         self.session_factory = session_factory
         self.redis = redis_support or RedisHoldSupport()
 
+    @asynccontextmanager
+    async def _get_session(self, session: Optional[AsyncSession]):
+        if session is not None:
+            yield session, False
+        else:
+            async with self.session_factory() as s:
+                yield s, True
+
     async def create_hold(
         self,
         user_id: str,
@@ -72,6 +83,7 @@ class HoldService:
         units: int = 1,
         ttl_seconds: int = 600,
         idempotency_key: Optional[str] = None,
+        session: Optional[AsyncSession] = None,
     ) -> Hold:
         """
         Atomically allocates held_units in inventory_calendar and creates an active Hold.
@@ -85,9 +97,9 @@ class HoldService:
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=ttl_seconds)
 
-        async with self.session_factory() as session:
-            inv_repo = InventoryRepository(session)
-            hold_repo = HoldRepository(session)
+        async with self._get_session(session) as (s, owns_session):
+            inv_repo = InventoryRepository(s)
+            hold_repo = HoldRepository(s)
 
             # 1. Check idempotency first
             existing = await hold_repo.get_by_idempotency_key(idemp_key)
@@ -110,14 +122,20 @@ class HoldService:
                 updated_at=now,
             )
             created_hold = await hold_repo.create_hold(hold)
-            await session.commit()
+            if owns_session:
+                await s.commit()
+            else:
+                await s.flush()
 
         # 4. Advisory Redis registration (non-blocking, failure-safe)
-        await self.redis.register_hold_ttl(
-            created_hold.hold_id,
-            ttl_seconds,
-            metadata={"user_id": user_id, "inventory_id": inventory_id, "units": units},
-        )
+        try:
+            await self.redis.register_hold_ttl(
+                created_hold.hold_id,
+                ttl_seconds,
+                metadata={"user_id": user_id, "inventory_id": inventory_id, "units": units},
+            )
+        except Exception as e:
+            logger.warning(f"Advisory Redis TTL registration encountered error: {e}")
 
         return created_hold
 
@@ -126,6 +144,7 @@ class HoldService:
         hold_id: str,
         force: bool = False,
         now_override: Optional[datetime] = None,
+        session: Optional[AsyncSession] = None,
     ) -> bool:
         """
         Authoritatively and idempotently expires an active hold and releases held units.
@@ -144,9 +163,9 @@ class HoldService:
         """
         now = ensure_utc(now_override or datetime.now(timezone.utc))
 
-        async with self.session_factory() as session:
-            hold_repo = HoldRepository(session)
-            inv_repo = InventoryRepository(session)
+        async with self._get_session(session) as (s, owns_session):
+            hold_repo = HoldRepository(s)
+            inv_repo = InventoryRepository(s)
 
             # 1. Acquire row lock on hold
             hold = await hold_repo.lock_by_id(hold_id)
@@ -170,7 +189,7 @@ class HoldService:
                 .where(Hold.hold_id == hold_id, Hold.status == "active")
                 .values(status="expired", released_at=now, updated_at=now)
             )
-            res = await session.execute(stmt)
+            res = await s.execute(stmt)
             if res.rowcount == 0:
                 # Lost race to another concurrent worker or confirmation
                 logger.debug(f"Hold '{hold_id}' status update matched 0 rows (concurrent state change). Skipping.")
@@ -178,11 +197,17 @@ class HoldService:
 
             # 5. Release inventory held units under inventory row lock
             await inv_repo.release_held_units(hold.inventory_id, hold.units)
-            await session.commit()
+            if owns_session:
+                await s.commit()
+            else:
+                await s.flush()
             logger.info(f"Hold '{hold_id}' successfully expired. Released {hold.units} units for inventory '{hold.inventory_id}'.")
 
         # 6. Advisory Redis cleanup
-        await self.redis.remove_hold_ttl(hold_id)
+        try:
+            await self.redis.remove_hold_ttl(hold_id)
+        except Exception as e:
+            logger.warning(f"Advisory Redis cleanup encountered error: {e}")
         return True
 
     async def confirm_hold(
@@ -190,6 +215,7 @@ class HoldService:
         hold_id: str,
         booking_id: str,
         now_override: Optional[datetime] = None,
+        session: Optional[AsyncSession] = None,
     ) -> Hold:
         """
         Authoritatively confirms an active hold, converting held units to booked units.
@@ -203,22 +229,22 @@ class HoldService:
         """
         now = ensure_utc(now_override or datetime.now(timezone.utc))
 
-        async with self.session_factory() as session:
-            hold_repo = HoldRepository(session)
-            inv_repo = InventoryRepository(session)
+        async with self._get_session(session) as (s, owns_session):
+            hold_repo = HoldRepository(s)
+            inv_repo = InventoryRepository(s)
 
             hold = await hold_repo.lock_by_id(hold_id)
             if not hold:
                 raise HoldNotFoundError(f"Hold '{hold_id}' not found")
 
             if hold.status != "active":
-                raise HoldStatusError(
+                raise HoldNotActiveError(
                     f"Hold '{hold_id}' cannot be confirmed because status is '{hold.status}'"
                 )
 
             hold_expiry = ensure_utc(hold.expires_at)
             if hold_expiry <= now:
-                raise HoldStatusError(
+                raise HoldExpiredError(
                     f"Hold '{hold_id}' cannot be confirmed because it expired at {hold.expires_at}"
                 )
 
@@ -228,7 +254,7 @@ class HoldService:
                 .where(Hold.hold_id == hold_id, Hold.status == "active")
                 .values(status="confirmed", booking_id=booking_id, updated_at=now)
             )
-            res = await session.execute(stmt)
+            res = await s.execute(stmt)
             if res.rowcount == 0:
                 raise HoldStatusError(
                     f"Hold '{hold_id}' was already transitioned by a concurrent process"
@@ -246,14 +272,20 @@ class HoldService:
                     f"held ({inv.held_units}) exceeds total ({inv.total_units})"
                 )
 
-            await session.commit()
+            if owns_session:
+                await s.commit()
+            else:
+                await s.flush()
             hold.status = "confirmed"
             hold.booking_id = booking_id
             hold.updated_at = now
             logger.info(f"Hold '{hold_id}' confirmed into booking '{booking_id}'.")
 
         # Cleanup advisory Redis key
-        await self.redis.remove_hold_ttl(hold_id)
+        try:
+            await self.redis.remove_hold_ttl(hold_id)
+        except Exception as e:
+            logger.warning(f"Advisory Redis cleanup encountered error: {e}")
         return hold
 
     async def expire_stale_holds(

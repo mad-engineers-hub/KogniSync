@@ -8,6 +8,7 @@ from app.api.routes.ai import router as ai_router
 from app.api.routes.xr import router as xr_router
 from app.api.routes.maps import router as maps_router
 from app.api.routes.optimizer import router as optimizer_router
+from app.api.routes.booking import router as booking_router
 
 
 @asynccontextmanager
@@ -38,3 +39,4 @@ app.include_router(ai_router)
 app.include_router(xr_router)
 app.include_router(maps_router)
 app.include_router(optimizer_router)
+app.include_router(booking_router)

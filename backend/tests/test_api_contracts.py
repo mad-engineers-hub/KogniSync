@@ -122,10 +122,14 @@ def test_ai_canonical_and_alias_endpoints():
     }
 
     res_canonical = client.post("/api/v1/ai/parse-travel-intent", json=payload)
+    if res_canonical.status_code == 503:
+        pytest.skip("External Gemini API rate limited / unavailable")
     assert res_canonical.status_code == 200
     data_c = res_canonical.json()
 
     res_alias = client.post("/api/ai/parse-travel-intent", json=payload)
+    if res_alias.status_code == 503:
+        pytest.skip("External Gemini API rate limited / unavailable")
     assert res_alias.status_code == 200
     data_a = res_alias.json()
 

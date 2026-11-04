@@ -5,6 +5,11 @@ from app.repositories.exceptions import (
     RepositoryConflictError,
     HoldNotFoundError,
     HoldStatusError,
+    HoldExpiredError,
+    HoldNotActiveError,
+    BookingNotFoundError,
+    PaymentFailedError,
+    IdempotencyPayloadConflictError,
 )
 from app.repositories.base import BaseRepository
 from app.repositories.inventory_repository import InventoryRepository
@@ -20,6 +25,11 @@ __all__ = [
     "RepositoryConflictError",
     "HoldNotFoundError",
     "HoldStatusError",
+    "HoldExpiredError",
+    "HoldNotActiveError",
+    "BookingNotFoundError",
+    "PaymentFailedError",
+    "IdempotencyPayloadConflictError",
     "BaseRepository",
     "InventoryRepository",
     "HoldRepository",
