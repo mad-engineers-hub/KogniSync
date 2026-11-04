@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from app.repositories.exceptions import RepositoryConflictError
 
 class HoldRepository(BaseRepository[Hold]):
     """
-    Repository for holds table persistence and idempotency key lookups.
+    Repository for holds table persistence, row-level locking, and idempotency key lookups.
     Never calls session.commit(), session.rollback(), or session.close().
     """
 
@@ -20,6 +21,34 @@ class HoldRepository(BaseRepository[Hold]):
         stmt = select(Hold).where(Hold.idempotency_key == idempotency_key)
         res = await self.session.execute(stmt)
         return res.scalar_one_or_none()
+
+    async def lock_by_id(self, hold_id: str) -> Optional[Hold]:
+        """Fetch and lock hold row with SELECT ... FOR UPDATE."""
+        stmt = select(Hold).where(Hold.hold_id == hold_id).with_for_update()
+        res = await self.session.execute(stmt)
+        return res.scalar_one_or_none()
+
+    async def find_expired_active_holds(
+        self, cutoff_time: datetime, limit: int = 100, skip_locked: bool = True
+    ) -> Sequence[Hold]:
+        """
+        Finds active holds whose expires_at is <= cutoff_time.
+        Uses row-level locking (FOR UPDATE SKIP LOCKED on PostgreSQL)
+        so concurrent worker instances safely partition batches.
+        """
+        stmt = (
+            select(Hold)
+            .where(Hold.status == "active", Hold.expires_at <= cutoff_time)
+            .order_by(Hold.expires_at.asc())
+            .limit(limit)
+        )
+        if skip_locked:
+            stmt = stmt.with_for_update(skip_locked=True)
+        else:
+            stmt = stmt.with_for_update()
+
+        res = await self.session.execute(stmt)
+        return res.scalars().all()
 
     async def create_hold(self, hold: Hold) -> Hold:
         """

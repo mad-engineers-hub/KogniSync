@@ -16,3 +16,13 @@ class InsufficientInventoryError(RepositoryError):
 class RepositoryConflictError(RepositoryError):
     """Raised when a unique constraint or idempotency conflict occurs."""
     pass
+
+
+class HoldNotFoundError(RepositoryError):
+    """Raised when a requested hold record is not found."""
+    pass
+
+
+class HoldStatusError(RepositoryError):
+    """Raised when an operation is invalid for the hold's current status."""
+    pass

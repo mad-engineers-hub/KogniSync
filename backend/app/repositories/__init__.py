@@ -2,7 +2,9 @@ from app.repositories.exceptions import (
     RepositoryError,
     InventoryNotFoundError,
     InsufficientInventoryError,
-    RepositoryConflictError
+    RepositoryConflictError,
+    HoldNotFoundError,
+    HoldStatusError,
 )
 from app.repositories.base import BaseRepository
 from app.repositories.inventory_repository import InventoryRepository
@@ -16,10 +18,12 @@ __all__ = [
     "InventoryNotFoundError",
     "InsufficientInventoryError",
     "RepositoryConflictError",
+    "HoldNotFoundError",
+    "HoldStatusError",
     "BaseRepository",
     "InventoryRepository",
     "HoldRepository",
     "BookingRepository",
     "PaymentRepository",
-    "UserRepository"
+    "UserRepository",
 ]
