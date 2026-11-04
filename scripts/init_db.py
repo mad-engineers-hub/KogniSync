@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
-scripts/init_db.py — Local PostgreSQL Database Initializer for KogniSync.
+scripts/init_db.py — Local PostgreSQL Database Initializer for KogniSync (DISPOSABLE DEV BOOTSTRAP ONLY).
 
 Applies BookingInventory/data/schema.sql and imports CSV data from
 BookingInventory/data/csv/ in foreign-key load order into PostgreSQL.
 
-Reads environment configuration from .env or system environment.
+SAFETY SAFEGUARDS:
+- Refuses to execute by default to prevent accidental data loss.
+- Strictly prohibited when APP_ENV=production or ENVIRONMENT=production.
+- Requires explicit opt-in via ALLOW_DESTRUCTIVE_DB_INIT=true environment variable
+  or --force-destructive command line flag.
+- Never run against production or shared persistent databases.
+- For safe, non-destructive schema updates, use: python scripts/migrate.py upgrade.
 """
+import argparse
 import glob
 import os
 import re
@@ -26,6 +33,47 @@ DB_NAME = os.getenv("POSTGRES_DB", "kognisync_db")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCHEMA_SQL_PATH = os.path.join(BASE_DIR, "BookingInventory", "data", "schema.sql")
 CSV_DIR = os.path.join(BASE_DIR, "BookingInventory", "data", "csv")
+
+
+def check_destructive_safeguards(force_flag: bool = False) -> None:
+    """Enforce explicit safeguards before executing destructive operations.
+    
+    Raises:
+        PermissionError: If environment is production or opt-in is missing.
+    """
+    app_env = os.getenv("APP_ENV", "").lower()
+    environment = os.getenv("ENVIRONMENT", "").lower()
+
+    # 1. Prohibit in production under all circumstances
+    if app_env == "production" or environment == "production":
+        raise PermissionError(
+            "Destructive database initialization is strictly prohibited in production "
+            f"environments (APP_ENV={app_env}, ENVIRONMENT={environment}). "
+            "Operation aborted."
+        )
+
+    # 2. Require explicit opt-in
+    opt_in = os.getenv("ALLOW_DESTRUCTIVE_DB_INIT", "").lower() in ("true", "1", "yes")
+    if not (opt_in or force_flag):
+        raise PermissionError(
+            "Destructive database initialization refused by default.\n"
+            "scripts/init_db.py drops and recreates the public schema (DROP SCHEMA public CASCADE).\n\n"
+            "To execute this operation on a disposable development database:\n"
+            "  1. Ensure environment is NOT production.\n"
+            "  2. Set ALLOW_DESTRUCTIVE_DB_INIT=true in your environment, OR\n"
+            "  3. Pass the --force-destructive flag to this script.\n\n"
+            "To apply safe, non-destructive schema migrations to an existing database, run:\n"
+            "  python scripts/migrate.py upgrade"
+        )
+
+
+def print_destructive_warning() -> None:
+    """Print clear warning identifying the target database."""
+    print("=" * 72)
+    print("WARNING: EXECUTING DESTRUCTIVE DATABASE INITIALIZATION")
+    print(f"Target Database : {DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
+    print("All existing tables, data, and schema objects in 'public' will be destroyed!")
+    print("=" * 72)
 
 
 def get_connection():
@@ -146,7 +194,38 @@ def verify_database(conn):
     return table_count, counts
 
 
+def stamp_alembic_baseline():
+    """Stamp the newly initialized database with the canonical baseline revision."""
+    print("\nStamping database with Alembic migration baseline (0001_canonical_baseline)...")
+    try:
+        from scripts.migrate import get_alembic_config, cmd_stamp
+        cfg = get_alembic_config()
+        cmd_stamp(cfg, "head")
+        print("Alembic baseline successfully recorded.")
+    except Exception as e:
+        print(f"Warning: Could not stamp Alembic baseline: {e}")
+
+
 def main():
+    parser = argparse.ArgumentParser(
+        description="KogniSync Disposable Development Database Initializer"
+    )
+    parser.add_argument(
+        "--force-destructive",
+        action="store_true",
+        help="Explicitly confirm destructive initialization of the target development database",
+    )
+    args = parser.parse_args()
+
+    # Step 1: Check safeguards
+    try:
+        check_destructive_safeguards(force_flag=args.force_destructive)
+    except PermissionError as e:
+        print(f"\n{e}\n", file=sys.stderr)
+        sys.exit(1)
+
+    print_destructive_warning()
+
     print(f"Connecting to PostgreSQL at {DB_HOST}:{DB_PORT}/{DB_NAME}...")
     try:
         conn = get_connection()
@@ -158,6 +237,7 @@ def main():
         reset_and_apply_schema(conn)
         load_csv_data(conn)
         verify_database(conn)
+        stamp_alembic_baseline()
         print("\nSUCCESS: PostgreSQL database initialized and verified successfully.")
     except Exception as e:
         conn.rollback()
