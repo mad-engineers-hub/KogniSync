@@ -61,6 +61,7 @@ jobs:
           POSTGRES_PASSWORD: kognisync_pass
           POSTGRES_DB: kognisync_db
           DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
+          PYTHONPATH: .
         run: |
           python scripts/init_db.py --force-destructive
           python scripts/migrate.py upgrade

@@ -31,6 +31,8 @@ DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "kognisync_pass")
 DB_NAME = os.getenv("POSTGRES_DB", "kognisync_db")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 SCHEMA_SQL_PATH = os.path.join(BASE_DIR, "BookingInventory", "data", "schema.sql")
 CSV_DIR = os.path.join(BASE_DIR, "BookingInventory", "data", "csv")
 
@@ -203,7 +205,10 @@ def stamp_alembic_baseline():
     (e.g. 0002_user_sessions) are NOT incorrectly marked as applied before
     their upgrade() migration scripts have actually run.
     """
-    from scripts.migrate import CANONICAL_BASELINE_REVISION, get_alembic_config, cmd_stamp
+    try:
+        from scripts.migrate import CANONICAL_BASELINE_REVISION, get_alembic_config, cmd_stamp
+    except ModuleNotFoundError:
+        from migrate import CANONICAL_BASELINE_REVISION, get_alembic_config, cmd_stamp
     print(f"\nStamping database with Alembic migration baseline ({CANONICAL_BASELINE_REVISION})...")
     try:
         cfg = get_alembic_config()
