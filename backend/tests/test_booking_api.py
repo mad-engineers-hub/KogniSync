@@ -579,7 +579,11 @@ async def test_10_booking_contracts_unchanged_and_camelcase_compatible(async_cli
     assert p_data["status"] == "success"
 
     # 4. Invariant check endpoint test
-    inv_check = await async_client.get("/api/v1/reliability/invariant-check")
+    inv_headers = {}
+    from app.core.config import settings
+    if settings.INTERNAL_API_KEY:
+        inv_headers["X-Internal-Key"] = settings.INTERNAL_API_KEY
+    inv_check = await async_client.get("/api/v1/reliability/invariant-check", headers=inv_headers)
     assert inv_check.status_code == 200
     assert inv_check.json()["passed"] is True
     assert inv_check.json()["totalViolations"] == 0

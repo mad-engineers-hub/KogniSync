@@ -13,7 +13,9 @@ client = TestClient(app)
 
 def test_organizer_enums_conformance():
     """Verify XR enums strictly match BookingInventory/data/enums.json."""
-    with open("E:/KogniSync/KogniSync/BookingInventory/data/enums.json", "r") as f:
+    from pathlib import Path
+    enums_path = Path(__file__).resolve().parents[2] / "BookingInventory" / "data" / "enums.json"
+    with open(enums_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     enums = data["enums"]

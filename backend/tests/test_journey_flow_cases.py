@@ -1,7 +1,10 @@
 import pytest
 from datetime import datetime
+from app.core.config import settings
 from app.services.ai.gemini import GeminiIntentService
 from app.services.ai.schemas import TravelContext, TravelIntent
+
+pytestmark = pytest.mark.skipif(not settings.GEMINI_API_KEY, reason="GEMINI_API_KEY not configured")
 
 
 @pytest.fixture

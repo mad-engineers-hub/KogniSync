@@ -22,14 +22,15 @@ def test_postgres_tables_and_rows():
     except psycopg2.OperationalError:
         pytest.skip("PostgreSQL service unreachable on localhost:5434")
     with conn.cursor() as cur:
-        # Verify 20 canonical tables exist
+        # Verify 20 canonical tables exist (excluding alembic_version if migrations applied)
         cur.execute("""
             SELECT COUNT(*) 
             FROM information_schema.tables 
             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+              AND table_name != 'alembic_version'
         """)
         table_count = cur.fetchone()[0]
-        assert table_count == 20, f"Expected 20 tables, found {table_count}"
+        assert table_count == 20, f"Expected 20 canonical tables, found {table_count}"
 
         # Verify inventory invariant (booked_units + held_units <= total_units)
         cur.execute("""
