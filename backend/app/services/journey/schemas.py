@@ -1,7 +1,8 @@
 """
 backend/app/services/journey/schemas.py
 
-Pydantic v2 schemas for multimodal journey search, composition, and optimization.
+Pydantic v2 schemas for multimodal journey search, composition, optimization,
+and explicit data provenance & credibility tracking (Milestone M2.1).
 Supports camelCase and snake_case transparently for frontend API alignment.
 """
 from typing import Any, Literal
@@ -14,6 +15,10 @@ TransportMode = Literal[
 
 RecommendationCategory = Literal[
     "cheapest", "fastest", "best_value", "greenest", "comfortable", "all"
+]
+
+ProvenanceSourceType = Literal[
+    "provider_live", "deterministic_estimate", "simulated", "unknown"
 ]
 
 
@@ -38,6 +43,40 @@ class SegmentAvailabilitySchema(BaseModel):
     status: Literal["available", "limited", "waitlist", "sold_out"] = "available"
     remaining_units: int = Field(default=20, alias="remainingUnits")
     inventory_id: str | None = Field(default=None, alias="inventoryId")
+    is_real_inventory: bool = Field(default=False, alias="isRealInventory")
+
+
+class AttributeProvenanceSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    source_type: ProvenanceSourceType = Field(default="deterministic_estimate", alias="sourceType")
+    provider_name: str | None = Field(default=None, alias="providerName")
+    is_estimate: bool = Field(default=True, alias="isEstimate")
+    notes: str | None = None
+    last_updated_at: str | None = Field(default=None, alias="lastUpdatedAt")
+
+
+class SegmentProvenanceSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    source_type: ProvenanceSourceType = Field(default="deterministic_estimate", alias="sourceType")
+    provider_name: str = Field(alias="providerName")
+    is_estimate: bool = Field(default=True, alias="isEstimate")
+    has_live_provider: bool = Field(default=False, alias="hasLiveProvider")
+    last_updated_at: str | None = Field(default=None, alias="lastUpdatedAt")
+    attributes: dict[str, AttributeProvenanceSchema] = Field(default_factory=dict, alias="attributes")
+
+
+class JourneyProvenanceSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    overall_source_type: Literal["provider_live", "deterministic_estimate", "simulated", "mixed", "unknown"] = Field(
+        default="deterministic_estimate", alias="overallSourceType"
+    )
+    is_fully_confirmed: bool = Field(default=False, alias="isFullyConfirmed")
+    has_live_attributes: bool = Field(default=False, alias="hasLiveAttributes")
+    has_simulated_attributes: bool = Field(default=True, alias="hasSimulatedAttributes")
+    summary: str = Field(
+        default="Composed of deterministic estimates and simulated availability; real-world booking requires provider verification.",
+        alias="summary",
+    )
 
 
 class JourneySegmentSchema(BaseModel):
@@ -62,6 +101,7 @@ class JourneySegmentSchema(BaseModel):
     seat_class: str | None = Field(default=None, alias="seatClass")
     notes: str | None = None
     transfer_buffer_minutes: int = Field(default=15, alias="transferBufferMinutes")
+    provenance: SegmentProvenanceSchema | None = Field(default=None, alias="provenance")
 
 
 class AIExplanationSchema(BaseModel):
@@ -72,6 +112,13 @@ class AIExplanationSchema(BaseModel):
     score: float = 90.0
     cost_vs_fastest_saving: float | None = Field(default=None, alias="costVsFastestSaving")
     duration_diff_minutes: int | None = Field(default=None, alias="durationDiffMinutes")
+    data_credibility_notice: str = Field(
+        default="Fares, travel durations, and schedules are deterministic estimates. Availability is unverified synthetic data and requires live provider confirmation prior to booking.",
+        alias="dataCredibilityNotice",
+    )
+    is_fare_estimated: bool = Field(default=True, alias="isFareEstimated")
+    is_duration_estimated: bool = Field(default=True, alias="isDurationEstimated")
+    is_availability_verified: bool = Field(default=False, alias="isAvailabilityVerified")
 
 
 class BookingFeasibilitySchema(BaseModel):
@@ -104,6 +151,7 @@ class JourneySchema(BaseModel):
     optimization: OptimizedJourneyOutput | None = None
     ai_explanation: AIExplanationSchema = Field(alias="aiExplanation")
     booking_feasibility: BookingFeasibilitySchema = Field(default_factory=BookingFeasibilitySchema, alias="bookingFeasibility")
+    provenance: JourneyProvenanceSchema = Field(default_factory=JourneyProvenanceSchema, alias="provenance")
 
 
 class JourneySearchRequest(BaseModel):
