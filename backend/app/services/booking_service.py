@@ -267,7 +267,7 @@ class BookingService:
             payment_id=f"pay_{uuid.uuid4().hex[:12]}",
             booking_id=booking_id,
             method=payment_method,
-            status="success",
+            status="captured",
             authorised_amount=total_fare + tax,
             captured_amount=total_fare + tax,
             refunded_amount=Decimal("0.00"),

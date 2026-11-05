@@ -327,7 +327,7 @@ async def test_4_successful_confirmation_via_api(async_client, api_test_env):
 
         payments = (await session.execute(select(Payment).where(Payment.booking_id == bkg_data["bookingId"]))).scalars().all()
         assert len(payments) == 1
-        assert payments[0].status == "success"
+        assert payments[0].status == "captured"
 
 
 # ============================================================================
