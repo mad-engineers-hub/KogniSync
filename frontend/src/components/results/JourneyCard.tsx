@@ -13,6 +13,7 @@ import {
 import { Journey } from '../../types/journey';
 import { ModeIcon } from '../common/ModeIcon';
 import { OptimizationBadge } from '../common/OptimizationBadge';
+import { ProvenanceBadge } from '../common/ProvenanceBadge';
 import { formatCurrency, formatDuration, formatTime } from '../../lib/utils';
 import { matchXRSceneForHub, getJourneyXRReferences } from '../../utils/xrMatching';
 
@@ -56,6 +57,10 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
               Pareto Frontier
             </span>
           )}
+          <ProvenanceBadge
+            sourceType={journey.provenance?.overallSourceType || 'deterministic_estimate'}
+            isFullyConfirmed={journey.provenance?.isFullyConfirmed}
+          />
           <span className="font-semibold text-slate-800 text-sm">{journey.title}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -143,12 +148,22 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
                     </div>
 
                     <div className="flex flex-col items-end shrink-0">
-                      <span className="text-xs font-extrabold text-slate-900 font-mono">
-                        {formatCurrency(seg.price, journey.currency)}
-                      </span>
+                      <div className="flex items-center gap-1 font-mono">
+                        <span className="text-xs font-extrabold text-slate-900">
+                          {formatCurrency(seg.price, journey.currency)}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-semibold">
+                          {seg.provenance?.attributes?.fare?.isEstimate === false ? '(Live)' : '(Est.)'}
+                        </span>
+                      </div>
                       <span className="text-[11px] text-slate-500 font-mono">
                         {formatDuration(seg.durationMinutes)} · {formatTime(seg.departureTime)} - {formatTime(seg.arrivalTime)}
                       </span>
+                      {seg.availability.isRealInventory === false && (
+                        <span className="text-[9px] font-mono text-amber-700 bg-amber-50 px-1 rounded border border-amber-200 mt-0.5">
+                          Simulated Seats
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -223,11 +238,16 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-3 border-t border-slate-100">
           <div className="flex items-center gap-4">
             <div className="flex flex-col">
-              <span className="text-2xl font-extrabold font-display text-slate-900">
-                {formatCurrency(journey.totalPrice, journey.currency)}
-              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-2xl font-extrabold font-display text-slate-900">
+                  {formatCurrency(journey.totalPrice, journey.currency)}
+                </span>
+                <span className="text-xs font-mono font-semibold text-slate-500">
+                  {journey.provenance?.overallSourceType === 'provider_live' ? '(Live Quote)' : '(Est.)'}
+                </span>
+              </div>
               <span className="text-[11px] text-slate-500 font-medium">
-                Total fare · All {journey.segments.length} segments combined
+                {journey.provenance?.overallSourceType === 'provider_live' ? 'Provider-confirmed fare' : 'Corridor estimated fare'} · All {journey.segments.length} segments combined
               </span>
             </div>
 
@@ -242,8 +262,12 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
                 <span className="text-slate-500">{journey.totalTransfers} Transfers</span>
               </div>
               <div className="flex items-center gap-1 text-[11px] text-slate-500">
-                <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                <span>Holdable (10m atomic reservation)</span>
+                <ShieldCheck className={`w-3 h-3 ${journey.provenance?.isFullyConfirmed ? 'text-emerald-600' : 'text-amber-600'}`} />
+                <span>
+                  {journey.provenance?.isFullyConfirmed
+                    ? 'Confirmed Holdable (10m live lock)'
+                    : 'Sandbox Demo Hold (Simulated Inventory)'}
+                </span>
               </div>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import React from 'react';
-import { Sparkles, TrendingDown, Clock, CheckCircle2, Sliders, ShieldCheck } from 'lucide-react';
+import { Sparkles, TrendingDown, Clock, CheckCircle2, Sliders, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { Journey } from '../../types/journey';
+import { ProvenanceBadge } from '../common/ProvenanceBadge';
 import { formatCurrency, formatDuration } from '../../lib/utils';
 
 interface AIRecommendationExplanationProps {
@@ -30,13 +31,18 @@ export const AIRecommendationExplanation: React.FC<AIRecommendationExplanationPr
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {journey.isParetoOptimal && (
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-mono font-bold">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
               Pareto Optimal
             </span>
           )}
+          <ProvenanceBadge
+            sourceType={journey.provenance?.overallSourceType || 'deterministic_estimate'}
+            isFullyConfirmed={journey.provenance?.isFullyConfirmed}
+            size="sm"
+          />
           <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-100/80 border border-blue-200 text-xs font-mono font-bold text-blue-800">
             <span>Match Score: {aiExplanation.score}/100</span>
           </div>
@@ -51,6 +57,46 @@ export const AIRecommendationExplanation: React.FC<AIRecommendationExplanationPr
       <p className="text-xs text-slate-700 leading-relaxed">
         {aiExplanation.summary}
       </p>
+
+      {/* Data Credibility & Verification Boundary Notice */}
+      <div className="p-3.5 rounded-xl bg-amber-50/90 border border-amber-200 text-xs text-amber-950 flex flex-col gap-2">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-bold">Data Credibility & Verification Notice</span>
+            <span className="leading-relaxed text-slate-700">
+              {aiExplanation.dataCredibilityNotice ||
+                'Fares, travel durations, and schedules are corridor estimates. Carrier availability is unverified simulation data and requires live partner confirmation prior to booking.'}
+            </span>
+          </div>
+        </div>
+
+        {/* Granular Attribute Status Checklist */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-amber-200/80 text-[11px] font-mono">
+          <div className="flex items-center gap-1.5 p-1.5 rounded-md bg-white border border-amber-200/60">
+            <span className="text-slate-500">Fare:</span>
+            <span className="font-bold text-slate-800">
+              {aiExplanation.isFareEstimated === false ? 'Live Carrier Quote' : 'Corridor Estimate'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 p-1.5 rounded-md bg-white border border-amber-200/60">
+            <span className="text-slate-500">Duration:</span>
+            <span className="font-bold text-slate-800">
+              {aiExplanation.isDurationEstimated === false ? 'Live Telematics' : 'Corridor Estimate'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 p-1.5 rounded-md bg-white border border-amber-200/60">
+            <span className="text-slate-500">Inventory:</span>
+            <span className="font-bold text-amber-800">
+              {aiExplanation.isAvailabilityVerified ? 'Real-Time Lock' : 'Simulated (Unconfirmed)'}
+            </span>
+          </div>
+        </div>
+
+        <span className="text-[10px] text-amber-800 font-mono">
+          Prerequisites before travel: Authoritative partner inventory lock and formal carrier PNR issuance.
+        </span>
+      </div>
 
       {/* Objective Score Breakdown (Deterministic Mathematical Proof) */}
       {optimization?.scoreBreakdown && (

@@ -6,6 +6,7 @@ import { JourneyTimeline } from '../components/details/JourneyTimeline';
 import { JourneyMap } from '../components/details/JourneyMap';
 import { AIRecommendationExplanation } from '../components/details/AIRecommendationExplanation';
 import { OptimizationBadge } from '../components/common/OptimizationBadge';
+import { ProvenanceBadge } from '../components/common/ProvenanceBadge';
 import { formatCurrency, formatDuration } from '../lib/utils';
 import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle, Compass, Eye, Sparkles } from 'lucide-react';
 import { getJourneyXRReferences } from '../utils/xrMatching';
@@ -68,8 +69,12 @@ export const DetailsPage: React.FC = () => {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="flex flex-col">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <OptimizationBadge category={journey.recommendationCategory} size="sm" />
+              <ProvenanceBadge
+                sourceType={journey.provenance?.overallSourceType || 'deterministic_estimate'}
+                isFullyConfirmed={journey.provenance?.isFullyConfirmed}
+              />
               <h1 className="text-xl sm:text-2xl font-black text-slate-950 font-display">
                 {journey.title}
               </h1>
@@ -88,8 +93,8 @@ export const DetailsPage: React.FC = () => {
             <span className="text-2xl sm:text-3xl font-black font-display text-slate-900">
               {formatCurrency(journey.totalPrice, journey.currency)}
             </span>
-            <span className="text-[11px] text-slate-500">
-              Complete journey fare
+            <span className="text-[11px] text-slate-500 font-mono">
+              {journey.provenance?.overallSourceType === 'provider_live' ? 'Live Provider Quote' : 'Corridor Estimated Total'}
             </span>
           </div>
 
@@ -172,17 +177,19 @@ export const DetailsPage: React.FC = () => {
             <div className="flex items-center gap-2 text-emerald-700">
               <ShieldCheck className="w-5 h-5 text-emerald-600" />
               <h4 className="text-xs font-bold uppercase tracking-wider font-mono">
-                Hold Invariant Guarantee
+                {journey.provenance?.isFullyConfirmed
+                  ? 'Live Inventory Hold Guarantee'
+                  : 'Sandbox Hold Invariant (Simulation Mode)'}
               </h4>
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              When you proceed, KogniSync atomically reserves capacity across all{' '}
-              {journey.segments.length} carriers simultaneously. If any segment hold expires or rejects,
-              the saga compensator rolls back previous holds without charging you.
+              {journey.provenance?.isFullyConfirmed
+                ? `When you proceed, KogniSync atomically reserves capacity across all ${journey.segments.length} carriers simultaneously. If any segment hold expires or rejects, the saga compensator rolls back previous holds without charging you.`
+                : `Demonstrates multi-vendor saga compensation across all ${journey.segments.length} legs in the demonstration database. In sandbox mode, holds atomically lock local demo capacity without creating real-world airline or railway reservations.`}
             </p>
             <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-mono">
               <span>Hold TTL: 600 seconds (10 mins)</span>
-              <span>Backend: PostgreSQL + Redis</span>
+              <span>{journey.provenance?.isFullyConfirmed ? 'Live Carrier API' : 'Sandbox Demo Database'}</span>
             </div>
           </div>
         </div>

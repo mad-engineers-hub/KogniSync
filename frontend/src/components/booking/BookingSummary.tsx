@@ -3,7 +3,8 @@ import { Journey } from '../../types/journey';
 import { Passenger } from '../../types/booking';
 import { formatCurrency, formatDuration, formatTime } from '../../lib/utils';
 import { ModeIcon } from '../common/ModeIcon';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, AlertTriangle } from 'lucide-react';
+import { ProvenanceBadge } from '../common/ProvenanceBadge';
 
 interface BookingSummaryProps {
   journey: Journey;
@@ -18,14 +19,35 @@ export const BookingSummary: React.FC<BookingSummaryProps> = ({ journey, passeng
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col gap-4 shadow-sm">
-      <div className="border-b border-slate-100 pb-3">
-        <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 font-display">
-          Synchronized Journey Summary
-        </h3>
-        <span className="text-xs text-slate-500 font-mono">
-          {journey.origin.name} → {journey.destination.name} ({formatDuration(journey.totalDurationMinutes)} · {journey.segments.length} Legs)
-        </span>
+      <div className="border-b border-slate-100 pb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 font-display">
+            Synchronized Journey Summary
+          </h3>
+          <span className="text-xs text-slate-500 font-mono">
+            {journey.origin.name} → {journey.destination.name} ({formatDuration(journey.totalDurationMinutes)} · {journey.segments.length} Legs)
+          </span>
+        </div>
+        <ProvenanceBadge
+          sourceType={journey.provenance?.overallSourceType || 'deterministic_estimate'}
+          isFullyConfirmed={journey.provenance?.isFullyConfirmed}
+          size="xs"
+        />
       </div>
+
+      {/* Sandbox Simulation Notice if inventory is not real/confirmed */}
+      {(!journey.provenance?.isFullyConfirmed || journey.segments.some((s) => s.availability.isRealInventory === false)) && (
+        <div className="p-3 rounded-xl bg-amber-50/90 border border-amber-200 text-xs text-amber-950 flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-0.5">
+            <span className="font-bold">Sandbox Reservation Simulation</span>
+            <span className="leading-relaxed text-slate-700">
+              This journey uses simulated carrier inventory and deterministic fare estimates.
+              Holds created in this demo reserve simulated seats in the demonstration database and cannot be used for real-world travel.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Segments mini-list */}
       <div className="flex flex-col gap-2.5">
@@ -59,7 +81,12 @@ export const BookingSummary: React.FC<BookingSummaryProps> = ({ journey, passeng
       {/* Price breakdown */}
       <div className="pt-3 border-t border-slate-100 flex flex-col gap-1.5 text-xs">
         <div className="flex items-center justify-between text-slate-600">
-          <span>Base Transit Fare ({paxCount} traveler{paxCount > 1 ? 's' : ''})</span>
+          <span>
+            Base Transit Fare ({paxCount} traveler{paxCount > 1 ? 's' : ''}){' '}
+            <span className="text-[11px] font-mono text-slate-400">
+              {journey.provenance?.overallSourceType === 'provider_live' ? '(Live Quote)' : '(Corridor Est.)'}
+            </span>
+          </span>
           <span className="font-mono font-medium text-slate-800">
             {formatCurrency(basePrice, journey.currency)}
           </span>
@@ -76,7 +103,12 @@ export const BookingSummary: React.FC<BookingSummaryProps> = ({ journey, passeng
         </div>
 
         <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-base font-bold text-slate-900">
-          <span>Total Payable</span>
+          <div className="flex flex-col">
+            <span>Total Payable</span>
+            <span className="text-[11px] font-mono font-normal text-slate-500">
+              {journey.provenance?.overallSourceType === 'provider_live' ? 'Confirmed carrier total' : 'Estimated total fare'}
+            </span>
+          </div>
           <span className="font-display font-extrabold text-2xl text-blue-700">
             {formatCurrency(finalTotal, journey.currency)}
           </span>

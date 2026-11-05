@@ -1,4 +1,13 @@
-import { Journey, JourneySegment, Location, RecommendationCategory, TransportMode, TravelRequest } from '../types/journey';
+import {
+  Journey,
+  JourneyProvenance,
+  JourneySegment,
+  Location,
+  RecommendationCategory,
+  SegmentProvenance,
+  TransportMode,
+  TravelRequest,
+} from '../types/journey';
 import { optimizeCandidateJourneys } from '../utils/optimizer';
 
 // ============================================================================
@@ -847,6 +856,21 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
     const seg1Arr = new Date(seg2Dep.getTime() - arch.firstMile.transferBufferMin * 60000);
     const seg1Dep = new Date(seg1Arr.getTime() - arch.firstMile.durationMin * 60000);
 
+    const buildFallbackSegmentProvenance = (provider: string): SegmentProvenance => ({
+      sourceType: 'deterministic_estimate',
+      providerName: provider,
+      isEstimate: true,
+      hasLiveProvider: false,
+      attributes: {
+        fare: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Corridor distance-modeled estimate' },
+        duration: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Corridor speed model' },
+        departureTime: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Estimated schedule anchored to deadline' },
+        arrivalTime: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Estimated arrival' },
+        carbon: { sourceType: 'deterministic_estimate', providerName: 'KogniSync Multi-Modal Emission Factors', isEstimate: true },
+        availability: { sourceType: 'simulated', providerName: 'KogniSync Demo Fleet Simulator', isEstimate: true, notes: 'Simulated capacity for demonstration' },
+      },
+    });
+
     // Build ordered segments
     const segment1: JourneySegment = {
       segmentId: `seg-${routeSlug}-${arch.category}-01`,
@@ -861,12 +885,13 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       durationMinutes: arch.firstMile.durationMin,
       price: arch.firstMile.price,
       currency: 'INR',
-      availability: { status: 'available', remainingUnits: 45 },
+      availability: { status: 'available', remainingUnits: 45, isRealInventory: false },
       distanceKm: arch.firstMile.distanceKm,
       carbonKg: arch.firstMile.carbonKg,
       comfortScore: arch.firstMile.comfortScore,
       transferBufferMinutes: arch.firstMile.transferBufferMin,
       notes: `Direct pickup at ${originHubs.userNode.name}. Sync transfer buffer: ${arch.firstMile.transferBufferMin}m.`,
+      provenance: buildFallbackSegmentProvenance(arch.firstMile.provider),
     };
 
     const segment2: JourneySegment = {
@@ -883,13 +908,14 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       durationMinutes: arch.mainTransport.durationMin,
       price: arch.mainTransport.price,
       currency: 'INR',
-      availability: { status: 'available', remainingUnits: 18 },
+      availability: { status: 'available', remainingUnits: 18, isRealInventory: false },
       distanceKm: arch.mainTransport.distanceKm,
       carbonKg: arch.mainTransport.carbonKg,
       comfortScore: arch.mainTransport.comfortScore,
       seatClass: arch.mainTransport.seatClass,
       transferBufferMinutes: arch.mainTransport.transferBufferMin,
       notes: arch.mainTransport.notes,
+      provenance: buildFallbackSegmentProvenance(arch.mainTransport.provider),
     };
 
     const segment3: JourneySegment = {
@@ -905,11 +931,12 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       durationMinutes: arch.lastMile.durationMin,
       price: arch.lastMile.price,
       currency: 'INR',
-      availability: { status: 'available', remainingUnits: 99 },
+      availability: { status: 'available', remainingUnits: 99, isRealInventory: false },
       distanceKm: arch.lastMile.distanceKm,
       carbonKg: arch.lastMile.carbonKg,
       comfortScore: arch.lastMile.comfortScore,
       notes: `Final transfer to ${destHubs.userNode.name}. Driver will meet at ${arrHub.name} arrival exit.`,
+      provenance: buildFallbackSegmentProvenance(arch.lastMile.provider),
     };
 
     const segments: JourneySegment[] = [segment1, segment2, segment3];
@@ -927,6 +954,14 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
     );
 
     const modes: TransportMode[] = Array.from(new Set(segments.map((s) => s.mode)));
+
+    const journeyProvenance: JourneyProvenance = {
+      overallSourceType: 'deterministic_estimate',
+      isFullyConfirmed: false,
+      hasLiveAttributes: false,
+      hasSimulatedAttributes: true,
+      summary: 'Composed of deterministic estimates and simulated availability; real-world booking requires provider verification.',
+    };
 
     const journey: Journey = {
       id: `jny-${routeSlug}-${arch.category}`,
@@ -953,16 +988,22 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
           `3 synchronized legs: ${segment1.provider} → ${segment2.provider} → ${segment3.provider}`,
           `Arrival guaranteed by ${formatTime(seg3Arr.toISOString())} before deadline`,
           `Total transfer wait: ${waitingDurationMinutes} min with live synchronization`,
+          'Corridor-modeled estimates: fare and transit duration are unverified until live booking lock',
         ],
         score: 90,
         costVsFastestSaving: Math.max(0, flightPrice + 1100 - totalPrice),
         durationDiffMinutes: totalDurationMinutes - (flightDurationMin + 65),
+        dataCredibilityNotice: 'Fares, travel durations, and schedules are deterministic estimates. Availability is unverified synthetic data and requires live provider confirmation prior to booking.',
+        isFareEstimated: true,
+        isDurationEstimated: true,
+        isAvailabilityVerified: false,
       },
       bookingFeasibility: {
         holdSupported: true,
         concurrencySafe: true,
         holdTtlSeconds: 600,
       },
+      provenance: journeyProvenance,
     };
 
     return journey;

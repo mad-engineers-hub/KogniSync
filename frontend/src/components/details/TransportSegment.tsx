@@ -3,6 +3,7 @@ import { JourneySegment } from '../../types/journey';
 import { ModeIcon } from '../common/ModeIcon';
 import { formatCurrency, formatDuration, formatTime } from '../../lib/utils';
 import { Clock, ShieldCheck, AlertCircle, Info } from 'lucide-react';
+import { AttributeProvenanceTag } from '../common/ProvenanceBadge';
 
 interface TransportSegmentProps {
   segment: JourneySegment;
@@ -34,9 +35,14 @@ export const TransportSegment: React.FC<TransportSegmentProps> = ({
         </div>
 
         <div className="flex flex-col items-end">
-          <span className="text-base font-bold font-mono text-slate-900">
-            {formatCurrency(segment.price, segment.currency)}
-          </span>
+          <div className="flex items-center gap-1.5 font-mono">
+            <span className="text-base font-bold text-slate-900">
+              {formatCurrency(segment.price, segment.currency)}
+            </span>
+            <span className="text-[10px] font-semibold text-slate-500">
+              {segment.provenance?.attributes?.fare?.isEstimate === false ? '(Live Quote)' : '(Corridor Est.)'}
+            </span>
+          </div>
           {segment.seatClass && (
             <span className="text-[11px] text-blue-700 font-semibold">
               {segment.seatClass}
@@ -80,6 +86,31 @@ export const TransportSegment: React.FC<TransportSegmentProps> = ({
         </div>
       </div>
 
+      {/* Granular Attribute Provenance Indicators */}
+      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+        <AttributeProvenanceTag
+          attributeName="fare"
+          sourceType={segment.provenance?.attributes?.fare?.sourceType}
+          isEstimate={segment.provenance?.attributes?.fare?.isEstimate}
+        />
+        <AttributeProvenanceTag
+          attributeName="duration"
+          sourceType={segment.provenance?.attributes?.duration?.sourceType}
+          isEstimate={segment.provenance?.attributes?.duration?.isEstimate}
+          providerName={segment.provenance?.attributes?.duration?.providerName}
+        />
+        <AttributeProvenanceTag
+          attributeName="timing"
+          sourceType={segment.provenance?.attributes?.departure_time?.sourceType}
+          isEstimate={segment.provenance?.attributes?.departure_time?.isEstimate}
+        />
+        <AttributeProvenanceTag
+          attributeName="inventory"
+          sourceType={segment.provenance?.attributes?.availability?.sourceType || 'simulated'}
+          isEstimate={segment.availability.isRealInventory !== true}
+        />
+      </div>
+
       {/* Segment Telemetry Bar: Distance, Duration, Carbon & Availability */}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs text-slate-600 font-mono">
         <div className="flex items-center gap-3">
@@ -95,11 +126,19 @@ export const TransportSegment: React.FC<TransportSegmentProps> = ({
 
         {/* Availability tag */}
         <div className="flex items-center gap-1.5">
-          {segment.availability.status === 'available' ? (
+          {segment.availability.isRealInventory === false ? (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-amber-900 bg-amber-50 px-2.5 py-0.5 rounded-md border border-amber-200 font-medium font-mono"
+              title="Simulated inventory: seats are demonstration capacity and not a real-world carrier lock."
+            >
+              <AlertCircle className="w-3 h-3 text-amber-600" />
+              Demo Capacity (Simulated) · Unverified
+            </span>
+          ) : segment.availability.status === 'available' ? (
             <span className="inline-flex items-center gap-1 text-[11px] text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 font-medium">
               <ShieldCheck className="w-3 h-3 text-emerald-600" />
               {segment.availability.remainingUnits
-                ? `${segment.availability.remainingUnits} seats available`
+                ? `${segment.availability.remainingUnits} seats confirmed`
                 : 'Available'}
             </span>
           ) : (

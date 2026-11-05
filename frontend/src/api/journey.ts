@@ -6,6 +6,17 @@ import { composeMultiModalJourneys } from './orchestrationEngine';
 // Cache to store dynamically generated journeys so details and booking flows succeed seamlessly
 export const journeySessionCache = new Map<string, Journey>();
 
+// Provenance diagnostic tracking for UI and verification tests
+let currentSearchSource: 'backend_orchestrator' | 'client_fallback' | null = null;
+
+export function getLastSearchSource(): 'backend_orchestrator' | 'client_fallback' | null {
+  return currentSearchSource;
+}
+
+export function setLastSearchSource(source: 'backend_orchestrator' | 'client_fallback' | null): void {
+  currentSearchSource = source;
+}
+
 export async function searchJourneysBackend(request: TravelRequest): Promise<JourneySearchResponse> {
   return await apiClient<JourneySearchResponse>('/api/v1/journeys/search', {
     method: 'POST',
@@ -14,33 +25,41 @@ export async function searchJourneysBackend(request: TravelRequest): Promise<Jou
 }
 
 export async function searchJourneys(request: TravelRequest): Promise<Journey[]> {
-  try {
-    if (!USE_MOCK_FALLBACK) {
-      const liveResults = await apiClient<Journey[] | JourneySearchResponse>('/api/v1/journeys/search', {
-        method: 'POST',
-        body: JSON.stringify(request),
-      });
-      const resultsArray: Journey[] = Array.isArray(liveResults)
-        ? liveResults
-        : liveResults?.journeys || [];
-      if (resultsArray && resultsArray.length > 0) {
-        resultsArray.forEach((j) => {
-          journeySessionCache.set(j.id, j);
-          try {
-            if (typeof window !== 'undefined' && window.sessionStorage) {
-              sessionStorage.setItem(`kogni_jny_${j.id}`, JSON.stringify(j));
-            }
-          } catch {}
-        });
-        return resultsArray;
-      }
-    }
-  } catch (err) {
-    console.warn('Backend journey search unavailable, utilizing mock orchestration engine.', err);
+  // Input validation boundary
+  if (!request.origin?.trim() || !request.destination?.trim()) {
+    console.warn('[searchJourneys] Invalid search request: origin and destination are required.');
+    return [];
   }
 
+  // Preferred live search path: Backend Journey Orchestration (M2.0 / M2.1)
+  try {
+    const liveResponse = await searchJourneysBackend(request);
+    const resultsArray: Journey[] = Array.isArray(liveResponse)
+      ? liveResponse
+      : liveResponse?.journeys || [];
+
+    if (resultsArray && resultsArray.length > 0) {
+      currentSearchSource = 'backend_orchestrator';
+      resultsArray.forEach((j) => {
+        journeySessionCache.set(j.id, j);
+        try {
+          if (typeof window !== 'undefined' && window.sessionStorage) {
+            sessionStorage.setItem(`kogni_jny_${j.id}`, JSON.stringify(j));
+          }
+        } catch {}
+      });
+      return resultsArray;
+    }
+  } catch (err) {
+    // Record diagnostic context: never silently swallow backend errors
+    console.warn('[searchJourneys] Backend journey search failed/offline, activating client fallback:', err);
+  }
+
+  // Graceful client fallback path (Never represented as provider-confirmed data)
+  currentSearchSource = 'client_fallback';
+
   // Realistic mock latency
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await new Promise((resolve) => setTimeout(resolve, 150));
 
   // Generate parametric journeys tailored strictly to request.origin and request.destination
   const generated = generateMockJourneys(request);
@@ -55,18 +74,33 @@ export async function searchJourneys(request: TravelRequest): Promise<Journey[]>
     return true;
   });
 
-  // If budget specified, categorize any edge cases
+  // Ensure fallback journeys carry explicit unverified / simulated provenance
   const scoredJourneys = validJourneys.map((j) => {
+    let explanationSummary = j.aiExplanation.summary;
     if (request.budgetMax && request.budgetMax > 0 && j.totalPrice > request.budgetMax) {
-      return {
-        ...j,
-        aiExplanation: {
-          ...j.aiExplanation,
-          summary: `${j.aiExplanation.summary} Note: Exceeds specified budget of ₹${request.budgetMax} by ₹${j.totalPrice - request.budgetMax}.`,
-        },
-      };
+      explanationSummary = `${explanationSummary} Note: Exceeds specified budget of ₹${request.budgetMax} by ₹${j.totalPrice - request.budgetMax}.`;
     }
-    return j;
+
+    return {
+      ...j,
+      provenance: j.provenance || {
+        overallSourceType: 'deterministic_estimate' as const,
+        isFullyConfirmed: false,
+        hasLiveAttributes: false,
+        hasSimulatedAttributes: true,
+        summary: 'Client fallback simulation. Estimates are unverified and live inventory is unconfirmed.',
+      },
+      aiExplanation: {
+        ...j.aiExplanation,
+        summary: explanationSummary,
+        dataCredibilityNotice:
+          j.aiExplanation.dataCredibilityNotice ||
+          'Client fallback simulation. All values are corridor estimates; inventory is unverified simulated demo data.',
+        isFareEstimated: true,
+        isDurationEstimated: true,
+        isAvailabilityVerified: false,
+      },
+    };
   });
 
   scoredJourneys.forEach((j) => {
@@ -296,7 +330,6 @@ function capitalize(s: string): string {
   if (!s) return '';
   return s.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
-
 
 export interface ExtractedIntent {
   origin?: string;
