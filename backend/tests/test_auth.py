@@ -26,9 +26,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import select
 
-from app.main import app
+import jwt
+from app.main import app, lifespan
 from app.core.config import settings
-from app.core.security import create_access_token
+from app.core.security import create_access_token, decode_access_token, get_jwt_secret
 from app.db.database import get_db
 from app.db.models.base import Base
 from app.db.models.inventory import InventoryCalendar, Hold
@@ -531,3 +532,276 @@ async def test_12_existing_booking_idempotency_remains_intact(async_client, auth
     # Returns identical booking reference and ID without duplicate records
     assert bkg_1_data["bookingId"] == bkg_2_data["bookingId"]
     assert bkg_1_data["bookingReference"] == bkg_2_data["bookingReference"]
+
+
+# ============================================================================
+# MILESTONE M1.6: SECURITY VERIFICATION & DEPLOYMENT READINESS TESTS
+# ============================================================================
+
+@pytest.mark.anyio
+async def test_13_demo_token_disabled_in_production(async_client):
+    """Test 13: Demo token endpoint is strictly hidden and returns 404 in production."""
+    orig_env = settings.ENVIRONMENT
+    try:
+        settings.ENVIRONMENT = "production"
+        res = await async_client.post("/api/v1/auth/demo-token", json={"user_id": "usr_demo_traveler"})
+        assert res.status_code == 404
+        assert "not found" in res.json()["detail"].lower()
+    finally:
+        settings.ENVIRONMENT = orig_env
+
+
+@pytest.mark.anyio
+async def test_14_demo_token_anti_impersonation(async_client):
+    """
+    Test 14: Demo token issuance rejects arbitrary real/existing user identities with 403.
+    Only designated demo identities (usr_demo_*) are permitted.
+    """
+    # 1. Attempting to acquire token for an arbitrary existing user
+    res_bad = await async_client.post("/api/v1/auth/demo-token", json={"user_id": "usr_test_alice"})
+    assert res_bad.status_code == 403
+    assert "demo token issuance is restricted" in res_bad.json()["detail"].lower()
+
+    # 2. Designated demo traveler succeeds
+    res_good_1 = await async_client.post("/api/v1/auth/demo-token", json={"user_id": "usr_demo_traveler"})
+    assert res_good_1.status_code == 200
+    assert res_good_1.json()["user_id"] == "usr_demo_traveler"
+
+    # 3. Designated demo tester succeeds
+    res_good_2 = await async_client.post("/api/v1/auth/demo-token", json={"user_id": "usr_demo_tester"})
+    assert res_good_2.status_code == 200
+    assert res_good_2.json()["user_id"] == "usr_demo_tester"
+
+
+@pytest.mark.anyio
+async def test_15_demo_token_short_explicit_ttl(async_client):
+    """Test 15: Demo tokens have a strictly short, explicit 15-minute (900s) TTL."""
+    res = await async_client.post("/api/v1/auth/demo-token", json={"user_id": "usr_demo_traveler"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["expires_in_seconds"] == 900
+
+    payload = decode_access_token(data["access_token"])
+    assert payload["exp"] - payload["iat"] == 900
+
+
+@pytest.mark.anyio
+async def test_16_demo_token_cannot_bypass_booking_ownership(async_client, auth_test_env, alice_headers):
+    """
+    Test 16: An identity with a demo token cannot access, confirm, or cancel Alice's bookings.
+    Anti-bypass guarantee: returns 404 Not Found without leaking existence.
+    """
+    inv_id = auth_test_env["inventory_id"]
+
+    # 1. Alice creates hold and confirms booking
+    hold_res = await async_client.post("/api/v1/holds", headers=alice_headers, json={
+        "inventory_id": inv_id,
+        "units": 1,
+    })
+    alice_hold_id = hold_res.json()["holdId"]
+
+    bkg_res = await async_client.post("/api/v1/bookings/confirm", headers=alice_headers, json={
+        "holdId": alice_hold_id,
+        "idempotencyKey": "idemp_alice_demo_bypass_test",
+    })
+    alice_booking_id = bkg_res.json()["bookingId"]
+
+    # 2. Acquire a valid demo token
+    demo_res = await async_client.post("/api/v1/auth/demo-token")
+    demo_token = demo_res.json()["access_token"]
+    demo_headers = {"Authorization": f"Bearer {demo_token}"}
+
+    # 3. Demo user attempts to retrieve Alice's booking
+    res_get = await async_client.get(f"/api/v1/bookings/{alice_booking_id}", headers=demo_headers)
+    assert res_get.status_code == 404
+
+    # 4. Demo user attempts to cancel Alice's booking
+    res_cancel = await async_client.post(f"/api/v1/bookings/{alice_booking_id}/cancel", headers=demo_headers)
+    assert res_cancel.status_code == 404
+
+    # 5. Demo user attempts to confirm Alice's hold
+    res_confirm = await async_client.post("/api/v1/bookings/confirm", headers=demo_headers, json={
+        "holdId": alice_hold_id,
+    })
+    assert res_confirm.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_17_production_refuses_without_strong_secret():
+    """Test 17: In production, missing or short (<32 bytes) JWT secrets fail closed immediately."""
+    from fastapi import HTTPException
+    orig_env = settings.ENVIRONMENT
+    orig_key = settings.JWT_SECRET_KEY
+    try:
+        settings.ENVIRONMENT = "production"
+
+        # Missing secret
+        settings.JWT_SECRET_KEY = None
+        with pytest.raises(HTTPException) as exc_info:
+            get_jwt_secret()
+        assert exc_info.value.status_code == 500
+        assert "missing in production" in exc_info.value.detail.lower()
+
+        # Weak secret (< 32 chars)
+        settings.JWT_SECRET_KEY = "weak_short_secret_key"
+        with pytest.raises(HTTPException) as exc_info2:
+            get_jwt_secret()
+        assert exc_info2.value.status_code == 500
+        assert "too short" in exc_info2.value.detail.lower()
+
+        # Strong secret (>= 32 chars)
+        settings.JWT_SECRET_KEY = "strong_production_secret_key_with_at_least_32_characters_123"
+        assert get_jwt_secret() == settings.JWT_SECRET_KEY
+    finally:
+        settings.ENVIRONMENT = orig_env
+        settings.JWT_SECRET_KEY = orig_key
+
+
+@pytest.mark.anyio
+async def test_18_startup_lifespan_refuses_insecure_production_config():
+    """Test 18: FastAPI lifespan raises RuntimeError at application startup in insecure production."""
+    orig_env = settings.ENVIRONMENT
+    orig_jwt = settings.JWT_SECRET_KEY
+    orig_internal = settings.INTERNAL_API_KEY
+    try:
+        settings.ENVIRONMENT = "production"
+        settings.JWT_SECRET_KEY = "short_key"
+        settings.INTERNAL_API_KEY = "ci_valid_internal_key_123"
+
+        with pytest.raises(RuntimeError) as exc:
+            async with lifespan(app):
+                pass
+        assert "startup aborted" in str(exc.value).lower()
+        assert "jwt_secret_key" in str(exc.value).lower()
+    finally:
+        settings.ENVIRONMENT = orig_env
+        settings.JWT_SECRET_KEY = orig_jwt
+        settings.INTERNAL_API_KEY = orig_internal
+
+
+@pytest.mark.anyio
+async def test_19_untrusted_algorithm_rejected(async_client, auth_test_env):
+    """Test 19: Tokens signed with unconfigured or dangerous algorithms (e.g. 'none') are rejected with 401."""
+    # Attempt algorithm='none' attack
+    payload = {
+        "sub": "usr_test_alice",
+        "exp": int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+    }
+    none_token = jwt.encode(payload, key="", algorithm="none")
+    bad_headers = {"Authorization": f"Bearer {none_token}"}
+
+    res = await async_client.post("/api/v1/holds", headers=bad_headers, json={
+        "inventory_id": auth_test_env["inventory_id"],
+        "units": 1,
+    })
+    assert res.status_code == 401
+    assert "invalid" in res.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_20_issuer_and_audience_validation(async_client, auth_test_env):
+    """Test 20: Issuer and audience requirements are strictly verified when configured."""
+    orig_iss = settings.JWT_ISSUER
+    orig_aud = settings.JWT_AUDIENCE
+    try:
+        settings.JWT_ISSUER = "kognisync-auth-service"
+        settings.JWT_AUDIENCE = "kognisync-booking-api"
+
+        # 1. Token without issuer -> 401
+        token_no_iss = create_access_token("usr_test_alice", extra_claims={"aud": "kognisync-booking-api"})
+        # override issuer to None in token
+        token_wrong_iss = jwt.encode(
+            {
+                "sub": "usr_test_alice",
+                "iat": int(datetime.now(timezone.utc).timestamp()),
+                "exp": int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+                "iss": "rogue-issuer",
+                "aud": "kognisync-booking-api",
+            },
+            get_jwt_secret(),
+            algorithm="HS256",
+        )
+        res_iss = await async_client.post("/api/v1/holds", headers={"Authorization": f"Bearer {token_wrong_iss}"}, json={
+            "inventory_id": auth_test_env["inventory_id"],
+            "units": 1,
+        })
+        assert res_iss.status_code == 401
+
+        # 2. Token with wrong audience -> 401
+        token_wrong_aud = jwt.encode(
+            {
+                "sub": "usr_test_alice",
+                "iat": int(datetime.now(timezone.utc).timestamp()),
+                "exp": int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+                "iss": "kognisync-auth-service",
+                "aud": "wrong-audience",
+            },
+            get_jwt_secret(),
+            algorithm="HS256",
+        )
+        res_aud = await async_client.post("/api/v1/holds", headers={"Authorization": f"Bearer {token_wrong_aud}"}, json={
+            "inventory_id": auth_test_env["inventory_id"],
+            "units": 1,
+        })
+        assert res_aud.status_code == 401
+
+        # 3. Valid issuer and audience -> succeeds
+        token_valid = jwt.encode(
+            {
+                "sub": "usr_test_alice",
+                "iat": int(datetime.now(timezone.utc).timestamp()),
+                "exp": int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+                "iss": "kognisync-auth-service",
+                "aud": "kognisync-booking-api",
+            },
+            get_jwt_secret(),
+            algorithm="HS256",
+        )
+        res_ok = await async_client.post("/api/v1/holds", headers={"Authorization": f"Bearer {token_valid}"}, json={
+            "inventory_id": auth_test_env["inventory_id"],
+            "units": 1,
+        })
+        assert res_ok.status_code == 201
+    finally:
+        settings.JWT_ISSUER = orig_iss
+        settings.JWT_AUDIENCE = orig_aud
+
+
+@pytest.mark.anyio
+async def test_21_missing_exp_claim_rejected(async_client, auth_test_env):
+    """Test 21: Tokens lacking mandatory expiration claim ('exp') are rejected with 401."""
+    # Token with sub but no exp
+    payload = {"sub": "usr_test_alice"}
+    token_no_exp = jwt.encode(payload, get_jwt_secret(), algorithm="HS256")
+    headers = {"Authorization": f"Bearer {token_no_exp}"}
+
+    res = await async_client.post("/api/v1/holds", headers=headers, json={
+        "inventory_id": auth_test_env["inventory_id"],
+        "units": 1,
+    })
+    assert res.status_code == 401
+    assert "invalid" in res.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_22_missing_or_whitespace_sub_rejected(async_client, auth_test_env):
+    """Test 22: Tokens with missing or whitespace-only subject claim ('sub') are rejected with 401."""
+    now = datetime.now(timezone.utc)
+    exp = int((now + timedelta(minutes=15)).timestamp())
+
+    # Empty sub
+    token_empty_sub = jwt.encode({"sub": "", "exp": exp}, get_jwt_secret(), algorithm="HS256")
+    res1 = await async_client.post("/api/v1/holds", headers={"Authorization": f"Bearer {token_empty_sub}"}, json={
+        "inventory_id": auth_test_env["inventory_id"],
+        "units": 1,
+    })
+    assert res1.status_code == 401
+
+    # Whitespace sub
+    token_ws_sub = jwt.encode({"sub": "   ", "exp": exp}, get_jwt_secret(), algorithm="HS256")
+    res2 = await async_client.post("/api/v1/holds", headers={"Authorization": f"Bearer {token_ws_sub}"}, json={
+        "inventory_id": auth_test_env["inventory_id"],
+        "units": 1,
+    })
+    assert res2.status_code == 401
+

@@ -54,19 +54,23 @@ jobs:
 
       - name: Run Alembic migrations to head
         env:
-          DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
+          ALLOW_DESTRUCTIVE_DB_INIT: "true"
+          POSTGRES_SERVER: localhost
+          POSTGRES_PORT: 5434
           POSTGRES_USER: kognisync
           POSTGRES_PASSWORD: kognisync_pass
           POSTGRES_DB: kognisync_db
-          POSTGRES_PORT: 5434
+          DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
         run: |
-          python scripts/init_db.py
+          python scripts/init_db.py --force-destructive
+          python scripts/migrate.py upgrade
+          python scripts/migrate.py check
 
       - name: Execute PostgreSQL Concurrency & Locking Tests
         env:
           POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
           REDIS_URL: redis://localhost:6380/0
-          JWT_SECRET_KEY: ci_super_secret_jwt_key_999
+          JWT_SECRET_KEY: ci_super_secret_jwt_key_999_32bytes_long
           INTERNAL_API_KEY: ci_super_secret_ops_key_888
           PYTHONPATH: backend
         run: |
@@ -76,7 +80,7 @@ jobs:
         env:
           POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
           REDIS_URL: redis://localhost:6380/0
-          JWT_SECRET_KEY: ci_super_secret_jwt_key_999
+          JWT_SECRET_KEY: ci_super_secret_jwt_key_999_32bytes_long
           INTERNAL_API_KEY: ci_super_secret_ops_key_888
           PYTHONPATH: backend
         run: |

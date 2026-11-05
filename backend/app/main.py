@@ -16,6 +16,16 @@ from app.api.routes.auth import router as auth_router
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info(f"Starting {settings.PROJECT_NAME} backend service...")
+    
+    # Startup readiness gate: fail closed in production if security prerequisites are absent
+    if settings.ENVIRONMENT == "production":
+        if not settings.JWT_SECRET_KEY or len(settings.JWT_SECRET_KEY.strip()) < 32:
+            logger.critical("Startup aborted: JWT_SECRET_KEY must be configured with >= 32 characters in production.")
+            raise RuntimeError("Startup aborted: JWT_SECRET_KEY must be configured with >= 32 characters in production.")
+        if not settings.INTERNAL_API_KEY or len(settings.INTERNAL_API_KEY.strip()) < 16:
+            logger.critical("Startup aborted: INTERNAL_API_KEY must be configured in production.")
+            raise RuntimeError("Startup aborted: INTERNAL_API_KEY must be configured in production.")
+
     yield
     logger.info(f"Shutting down {settings.PROJECT_NAME} backend service...")
 

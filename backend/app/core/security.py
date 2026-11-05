@@ -22,10 +22,16 @@ logger = logging.getLogger("kognisync.security")
 def get_jwt_secret() -> str:
     """
     Authoritatively resolves the JWT secret.
-    Fails closed in production if JWT_SECRET_KEY is missing.
+    Fails closed in production if JWT_SECRET_KEY is missing or shorter than 32 characters.
     In development and test environments, falls back to a development-only secret if unset.
     """
     if settings.JWT_SECRET_KEY:
+        if settings.ENVIRONMENT == "production" and len(settings.JWT_SECRET_KEY.strip()) < 32:
+            logger.error("Authentication configuration error: JWT_SECRET_KEY must be at least 32 characters in production.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Authentication service misconfigured: secret key too short for production (min 32 bytes required)",
+            )
         return settings.JWT_SECRET_KEY
 
     if settings.ENVIRONMENT == "production":
@@ -149,10 +155,11 @@ async def get_current_user_id(
 
     payload = decode_access_token(token.strip())
     user_id = payload.get("sub")
-    if not user_id:
+    if not user_id or not str(user_id).strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: subject (sub) claim missing",
+            detail="Invalid token: subject (sub) claim missing or empty",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return str(user_id)
+

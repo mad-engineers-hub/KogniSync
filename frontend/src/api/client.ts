@@ -31,6 +31,11 @@ export function setAuthToken(token: string | null): void {
 }
 
 export async function ensureDemoToken(): Promise<string | null> {
+  // Strictly disable demo-token acquisition in production builds
+  if (typeof import.meta !== 'undefined' && import.meta.env?.PROD) {
+    return null;
+  }
+
   const existing = getAuthToken();
   if (existing) return existing;
 
@@ -77,6 +82,10 @@ export async function apiClient<T>(
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        // Clear stale or expired token so subsequent requests do not loop on dead credentials
+        setAuthToken(null);
+      }
       let errorData;
       try {
         errorData = await response.json();
