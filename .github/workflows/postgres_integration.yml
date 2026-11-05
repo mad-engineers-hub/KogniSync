@@ -73,7 +73,7 @@ jobs:
           REDIS_URL: redis://localhost:6380/0
           JWT_SECRET_KEY: ci_super_secret_jwt_key_999_32bytes_long
           INTERNAL_API_KEY: ci_super_secret_ops_key_888
-          PYTHONPATH: backend
+          PYTHONPATH: backend:.
         run: |
           pytest backend/tests/test_postgres_integration.py -v -rs
 
@@ -83,7 +83,7 @@ jobs:
           REDIS_URL: redis://localhost:6380/0
           JWT_SECRET_KEY: ci_super_secret_jwt_key_999_32bytes_long
           INTERNAL_API_KEY: ci_super_secret_ops_key_888
-          PYTHONPATH: backend
+          PYTHONPATH: backend:.
         run: |
           pytest backend/tests -v
 
