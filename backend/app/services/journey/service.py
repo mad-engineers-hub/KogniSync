@@ -3,10 +3,14 @@ backend/app/services/journey/service.py
 
 Authoritative JourneyOrchestrationService for KogniSync backend.
 Coordinates request validation, hub resolution, multimodal corridor composition,
-first/last mile integration, and deterministic Pareto multi-objective optimization.
+first/last mile integration, deterministic Pareto multi-objective optimization,
+and explicit attribute-level data provenance & credibility tracking (Milestone M2.1).
 """
+import asyncio
+import inspect
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
+from app.core.logging import logger
 from app.services.optimizer.schemas import (
     JourneyCandidateInput,
     OptimizationRequest,
@@ -15,14 +19,18 @@ from app.services.optimizer.schemas import (
 from app.services.optimizer.service import JourneyOptimizerService, optimizer_service
 from app.services.journey.schemas import (
     AIExplanationSchema,
+    AttributeProvenanceSchema,
     BookingFeasibilitySchema,
+    JourneyProvenanceSchema,
     JourneySchema,
     JourneySearchRequest,
     JourneySearchResponse,
     JourneySegmentSchema,
     LocationSchema,
+    ProvenanceSourceType,
     RecommendationCategory,
     SegmentAvailabilitySchema,
+    SegmentProvenanceSchema,
     TransportMode,
 )
 from app.services.journey.hubs import (
@@ -35,11 +43,157 @@ from app.services.journey.hubs import (
 )
 
 
-class JourneyOrchestrationService:
-    """Authoritative multimodal journey orchestration service."""
+def build_default_segment_provenance(
+    provider: str,
+    mode: str,
+    attribute_overrides: dict[str, AttributeProvenanceSchema] | None = None,
+) -> SegmentProvenanceSchema:
+    """
+    Constructs comprehensive attribute-level provenance for a journey segment.
+    Explicitly distinguishes deterministic estimates from simulated availability and live data.
+    """
+    overrides = attribute_overrides or {}
 
-    def __init__(self, optimizer: JourneyOptimizerService | None = None):
+    default_attrs: dict[str, AttributeProvenanceSchema] = {
+        "fare": AttributeProvenanceSchema(
+            source_type="deterministic_estimate",
+            provider_name=f"KogniSync Corridor Fare Model ({provider})",
+            is_estimate=True,
+            notes="Calculated proportionally from corridor distance baseline; subject to live fare rules.",
+        ),
+        "duration": AttributeProvenanceSchema(
+            source_type="deterministic_estimate",
+            provider_name=f"KogniSync Transit Speed Model ({provider})",
+            is_estimate=True,
+            notes="Estimated from corridor distance, typical operating speeds, and connection buffers.",
+        ),
+        "departure_time": AttributeProvenanceSchema(
+            source_type="deterministic_estimate",
+            provider_name="KogniSync Timetable Synthesizer",
+            is_estimate=True,
+            notes="Estimated backward from arrival deadline; not a confirmed booking schedule.",
+        ),
+        "arrival_time": AttributeProvenanceSchema(
+            source_type="deterministic_estimate",
+            provider_name="KogniSync Timetable Synthesizer",
+            is_estimate=True,
+            notes="Estimated arrival anchored to user deadline; subject to real-world delays.",
+        ),
+        "carbon": AttributeProvenanceSchema(
+            source_type="deterministic_estimate",
+            provider_name="KogniSync Multi-Modal Emission Factors",
+            is_estimate=True,
+            notes="Calculated using mode-specific emission factors (kg CO2 / passenger-km).",
+        ),
+        "availability": AttributeProvenanceSchema(
+            source_type="simulated",
+            provider_name="KogniSync Demo Fleet Simulator",
+            is_estimate=True,
+            notes="Simulated capacity for demonstration; unverified live inventory.",
+        ),
+    }
+
+    # Apply any attribute-level overrides (e.g. from live external provider)
+    for attr_key, attr_prov in overrides.items():
+        default_attrs[attr_key] = attr_prov
+
+    has_live = any(attr.source_type == "provider_live" for attr in default_attrs.values())
+    all_live = all(attr.source_type == "provider_live" for attr in default_attrs.values())
+    has_unknown = any(attr.source_type == "unknown" for attr in default_attrs.values())
+
+    # Segment-level source type: never label entire leg as live if only partial attributes are live
+    if all_live:
+        seg_source: ProvenanceSourceType = "provider_live"
+    elif has_unknown and not has_live:
+        seg_source = "unknown"
+    else:
+        seg_source = "deterministic_estimate"
+
+    return SegmentProvenanceSchema(
+        source_type=seg_source,
+        provider_name=provider,
+        is_estimate=not all_live,
+        has_live_provider=has_live,
+        attributes=default_attrs,
+    )
+
+
+def build_journey_provenance(segments: list[JourneySegmentSchema]) -> JourneyProvenanceSchema:
+    """Aggregates leg-level provenance into overall journey provenance and credibility summary."""
+    has_live = any(s.provenance.has_live_provider for s in segments if s.provenance)
+    has_simulated = any(
+        s.provenance and any(a.source_type == "simulated" for a in s.provenance.attributes.values())
+        for s in segments
+    )
+    has_unknown = any(
+        s.provenance and any(a.source_type == "unknown" for a in s.provenance.attributes.values())
+        for s in segments
+    )
+
+    if has_live and (has_simulated or not all(s.provenance and s.provenance.source_type == "provider_live" for s in segments)):
+        overall = "mixed"
+        summary = "Contains both provider-backed attributes and deterministic estimates. Availability is unverified."
+    elif has_unknown and not has_live:
+        overall = "unknown"
+        summary = "Contains unverified attributes with unknown provenance. Live verification required."
+    else:
+        overall = "deterministic_estimate"
+        summary = "Composed of deterministic estimates and simulated availability; real-world booking requires provider verification."
+
+    return JourneyProvenanceSchema(
+        overall_source_type=overall,
+        is_fully_confirmed=False,  # Never claims confirmed availability based on generated estimates
+        has_live_attributes=has_live,
+        has_simulated_attributes=has_simulated,
+        summary=summary,
+    )
+
+
+class JourneyOrchestrationService:
+    """Authoritative multimodal journey orchestration and data credibility service."""
+
+    def __init__(
+        self,
+        optimizer: JourneyOptimizerService | None = None,
+        provider_registry: dict[str, Callable] | None = None,
+    ):
         self.optimizer = optimizer or optimizer_service
+        self.provider_registry = provider_registry or {}
+
+    async def _query_provider(
+        self,
+        provider_key: str,
+        context: dict[str, Any],
+        provider_status: dict[str, str],
+    ) -> dict[str, AttributeProvenanceSchema] | None:
+        """
+        Safely invokes registered external providers with strict timeout and error boundaries.
+        Never leaks internal exceptions or credentials.
+        """
+        provider_fn = self.provider_registry.get(provider_key)
+        if not provider_fn:
+            return None
+
+        try:
+            if inspect.iscoroutinefunction(provider_fn):
+                result = await asyncio.wait_for(provider_fn(context), timeout=3.0)
+            else:
+                result = provider_fn(context)
+
+            if result is None or (isinstance(result, dict) and len(result) == 0):
+                provider_status[provider_key] = "empty_fallback_deterministic"
+                return None
+
+            provider_status[provider_key] = "active_live"
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(f"Transport provider '{provider_key}' timed out during journey search")
+            provider_status[provider_key] = "timeout_fallback_deterministic"
+            return None
+        except Exception as e:
+            logger.error(f"Transport provider '{provider_key}' encountered an error: {type(e).__name__}")
+            provider_status[provider_key] = "error_fallback_deterministic"
+            return None
 
     async def search_journeys(self, request: JourneySearchRequest) -> JourneySearchResponse:
         """
@@ -48,7 +202,7 @@ class JourneyOrchestrationService:
         2. Dynamic corridor metric estimation (distance, duration, fares).
         3. Multimodal composition of 5 canonical archetypes (Flight, Train, Bus, Cab, Rapido, Metro, Walk).
         4. Hard constraint enforcement (budget cap, arrival deadline) via backend Pareto optimizer.
-        5. Deterministic multi-objective scoring and ranking.
+        5. Deterministic multi-objective scoring, Pareto ranking, and explicit data provenance tracking.
         """
         origin_str = request.origin.strip()
         dest_str = request.destination.strip()
@@ -66,7 +220,7 @@ class JourneyOrchestrationService:
 
         target_hour, target_min = parse_target_arrival(request.preferred_arrival_before)
 
-        # Dynamic corridor speed & fare baseline
+        # Baseline corridor fares & transit speeds
         flight_duration_min = round(45 + (route_distance_km / 750.0) * 60)
         flight_price = round(1800 + route_distance_km * 2.3)
 
@@ -81,6 +235,12 @@ class JourneyOrchestrationService:
 
         train_comfort_duration_min = round((route_distance_km / 78.0) * 60)
         train_comfort_price = round(700 + route_distance_km * 3.6)
+
+        provider_status: dict[str, str] = {
+            "transport": "catalog_modelled",
+            "optimizer": "authoritative_pareto",
+            "maps": "coordinate_geometry",
+        }
 
         # 5 Multimodal Archetype definitions
         archetypes = [
@@ -110,7 +270,7 @@ class JourneyOrchestrationService:
                     "dep_hub": origin_hubs.airport_hub,
                     "arr_hub": dest_hubs.airport_hub,
                     "duration_min": flight_duration_min,
-                    "price": float(flightPrice := flight_price),
+                    "price": float(flight_price),
                     "distance_km": float(route_distance_km),
                     "carbon_kg": round(route_distance_km * 0.082, 1),
                     "comfort_score": 8.5,
@@ -338,6 +498,16 @@ class JourneyOrchestrationService:
             seg1_dep = seg1_arr - timedelta(minutes=arch["first_mile"]["duration_min"])
 
             cat = arch["category"]
+
+            # Query any registered live provider for this archetype/leg
+            live_seg2_overrides = await self._query_provider(
+                arch["main_transport"]["provider"],
+                {"origin": dep_hub.city, "destination": arr_hub.city, "mode": arch["main_transport"]["mode"]},
+                provider_status,
+            )
+
+            # Leg 1: First-Mile
+            prov1 = build_default_segment_provenance(arch["first_mile"]["provider"], arch["first_mile"]["mode"])
             segment1 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-01",
                 sequence=1,
@@ -351,14 +521,21 @@ class JourneyOrchestrationService:
                 duration_minutes=arch["first_mile"]["duration_min"],
                 price=arch["first_mile"]["price"],
                 currency="INR",
-                availability=SegmentAvailabilitySchema(status="available", remaining_units=45),
+                availability=SegmentAvailabilitySchema(status="available", remaining_units=45, is_real_inventory=False),
                 distance_km=arch["first_mile"]["distance_km"],
                 carbon_kg=arch["first_mile"]["carbon_kg"],
                 comfort_score=arch["first_mile"]["comfort_score"],
                 transfer_buffer_minutes=arch["first_mile"]["transfer_buffer_min"],
                 notes=f"Direct pickup at {origin_hubs.user_node.name}. Sync transfer buffer: {arch['first_mile']['transfer_buffer_min']}m.",
+                provenance=prov1,
             )
 
+            # Leg 2: Main Transit Corridor
+            prov2 = build_default_segment_provenance(
+                arch["main_transport"]["provider"],
+                arch["main_transport"]["mode"],
+                attribute_overrides=live_seg2_overrides,
+            )
             segment2 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-02",
                 sequence=2,
@@ -373,15 +550,18 @@ class JourneyOrchestrationService:
                 duration_minutes=arch["main_transport"]["duration_min"],
                 price=arch["main_transport"]["price"],
                 currency="INR",
-                availability=SegmentAvailabilitySchema(status="available", remaining_units=18),
+                availability=SegmentAvailabilitySchema(status="available", remaining_units=18, is_real_inventory=False),
                 distance_km=arch["main_transport"]["distance_km"],
                 carbon_kg=arch["main_transport"]["carbon_kg"],
                 comfort_score=arch["main_transport"]["comfort_score"],
                 seat_class=arch["main_transport"]["seat_class"],
                 transfer_buffer_minutes=arch["main_transport"]["transfer_buffer_min"],
                 notes=arch["main_transport"]["notes"],
+                provenance=prov2,
             )
 
+            # Leg 3: Last-Mile Drop-Off
+            prov3 = build_default_segment_provenance(arch["last_mile"]["provider"], arch["last_mile"]["mode"])
             segment3 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-03",
                 sequence=3,
@@ -395,11 +575,12 @@ class JourneyOrchestrationService:
                 duration_minutes=arch["last_mile"]["duration_min"],
                 price=arch["last_mile"]["price"],
                 currency="INR",
-                availability=SegmentAvailabilitySchema(status="available", remaining_units=99),
+                availability=SegmentAvailabilitySchema(status="available", remaining_units=99, is_real_inventory=False),
                 distance_km=arch["last_mile"]["distance_km"],
                 carbon_kg=arch["last_mile"]["carbon_kg"],
                 comfort_score=arch["last_mile"]["comfort_score"],
                 notes=f"Final transfer to {dest_hubs.user_node.name}. Driver will meet at {arr_hub.name} arrival exit.",
+                provenance=prov3,
             )
 
             segments = [segment1, segment2, segment3]
@@ -411,6 +592,8 @@ class JourneyOrchestrationService:
             total_carbon = round(sum(s.carbon_kg for s in segments), 1)
             avg_comfort = round(sum(s.comfort_score * s.duration_minutes for s in segments) / travel_dur, 1)
             modes: list[TransportMode] = list(dict.fromkeys(s.mode for s in segments))
+
+            journey_prov = build_journey_provenance(segments)
 
             journey = JourneySchema(
                 id=f"jny-{route_slug}-{cat}",
@@ -433,21 +616,27 @@ class JourneyOrchestrationService:
                 is_pareto_optimal=True,
                 ai_explanation=AIExplanationSchema(
                     summary=arch["summary"],
-                    rank_reason=arch["rank_reason"],
+                    rank_reason=f"{arch['rank_reason']} (Evaluated against deterministic corridor estimates; live availability unconfirmed).",
                     trade_offs=[
                         f"3 synchronized legs: {segment1.provider} → {segment2.provider} → {segment3.provider}",
                         f"Arrival guaranteed by {seg3_arr.strftime('%I:%M %p')} before deadline",
                         f"Total transfer wait: {waiting_dur} min with live synchronization",
+                        "Corridor-modeled estimates: fare and transit duration are unverified until live booking lock",
                     ],
                     score=90.0,
                     cost_vs_fastest_saving=max(0.0, float(flight_price + 1100 - total_price)),
                     duration_diff_minutes=total_duration_minutes - (flight_duration_min + 65),
+                    data_credibility_notice="Fares, travel durations, and schedules are deterministic estimates. Availability is unverified synthetic data and requires live provider confirmation prior to booking.",
+                    is_fare_estimated=True,
+                    is_duration_estimated=True,
+                    is_availability_verified=False,
                 ),
                 booking_feasibility=BookingFeasibilitySchema(
                     hold_supported=True,
                     concurrency_safe=True,
                     hold_ttl_seconds=600,
                 ),
+                provenance=journey_prov,
             )
             raw_journeys.append(journey)
 
@@ -492,7 +681,9 @@ class JourneyOrchestrationService:
                 j.is_pareto_optimal = opt_out.is_pareto_optimal
                 j.optimization = opt_out
                 j.ai_explanation.score = round(opt_out.score * 100.0, 1)
-                j.ai_explanation.trade_offs = opt_out.explanation.tradeoffs
+                j.ai_explanation.trade_offs = opt_out.explanation.tradeoffs + [
+                    "Corridor-modeled estimates: fare and transit duration are unverified until live booking lock"
+                ]
                 j.ai_explanation.rank_reason = "; ".join(opt_out.explanation.reasons) or j.ai_explanation.rank_reason
                 final_journeys.append(j)
 
@@ -503,11 +694,7 @@ class JourneyOrchestrationService:
             eligible_candidates=len(final_journeys),
             pareto_frontier_count=opt_res.pareto_frontier_count,
             source="backend_orchestrator",
-            provider_status={
-                "transport": "catalog_modelled",
-                "optimizer": "authoritative_pareto",
-                "maps": "coordinate_geometry",
-            },
+            provider_status=provider_status,
         )
 
 
