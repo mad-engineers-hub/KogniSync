@@ -88,12 +88,12 @@ async def pg_engine():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine
-    # Cleanup test data after tests
+    # Cleanup test data after tests in reverse foreign key order
     async with engine.begin() as conn:
-        await conn.execute(text("DELETE FROM payments WHERE payment_id LIKE 'pg_test_%'"))
-        await conn.execute(text("DELETE FROM booking_items WHERE booking_item_id LIKE 'pg_test_%'"))
-        await conn.execute(text("DELETE FROM bookings WHERE booking_id LIKE 'pg_test_%'"))
-        await conn.execute(text("DELETE FROM holds WHERE hold_id LIKE 'pg_test_%'"))
+        await conn.execute(text("DELETE FROM payments WHERE booking_id LIKE 'pg_test_%' OR payment_id LIKE 'pg_test_%'"))
+        await conn.execute(text("DELETE FROM booking_items WHERE booking_id LIKE 'pg_test_%' OR booking_item_id LIKE 'pg_test_%' OR inventory_id LIKE 'pg_test_%'"))
+        await conn.execute(text("DELETE FROM holds WHERE user_id = 'usr_pg_test' OR inventory_id LIKE 'pg_test_%' OR hold_id LIKE 'pg_test_%'"))
+        await conn.execute(text("DELETE FROM bookings WHERE user_id = 'usr_pg_test' OR booking_id LIKE 'pg_test_%'"))
         await conn.execute(text("DELETE FROM inventory_calendar WHERE inventory_id LIKE 'pg_test_%'"))
         await conn.execute(text("DELETE FROM users WHERE user_id = 'usr_pg_test'"))
     await engine.dispose()
@@ -267,6 +267,11 @@ async def test_pg_2_for_update_skip_locked(session_factory, pg_seed_inventory):
     # SKIP LOCKED guarantees non-overlapping batch acquisition
     assert w1_ids[0] != w2_ids[0]
 
+    # Clean up holds created in test_pg_2 so they do not contaminate test_pg_3
+    async with session_factory() as s:
+        await s.execute(text("DELETE FROM holds WHERE hold_id LIKE 'pg_test_hld_skip_%'"))
+        await s.commit()
+
 
 @pytest.mark.anyio
 async def test_pg_3_two_concurrent_expiration_workers(session_factory, pg_seed_inventory):
@@ -279,6 +284,11 @@ async def test_pg_3_two_concurrent_expiration_workers(session_factory, pg_seed_i
     stale_time = now - timedelta(minutes=2)
 
     hold_service = HoldService(session_factory=session_factory)
+
+    # Clean up any leftover active holds on inv_id before seeding
+    async with session_factory() as s:
+        await s.execute(text("DELETE FROM holds WHERE inventory_id = :inv_id").bindparams(inv_id=inv_id))
+        await s.commit()
 
     # Seed 6 expired active holds with 1 held unit each
     async with session_factory() as s:
@@ -414,8 +424,25 @@ async def test_pg_5_booking_confirmation_rollback_atomicity(session_factory, pg_
     try:
         async with session_factory() as s:
             svc = BookingService(session=s, hold_service=hold_service)
+            # Create booking row first so foreign key fk_holds_booking_id is satisfied
+            bkg = Booking(
+                booking_id="pg_test_bkg_rb",
+                user_id="usr_pg_test",
+                booking_reference="KOGNI-RBTEST",
+                channel="web",
+                total_amount=Decimal("3000.00"),
+                tax_amount=Decimal("0.00"),
+                currency="INR",
+                idempotency_key="idemp_pg_bkg_rb",
+                status="confirmed",
+                confirmed_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            s.add(bkg)
+            await s.flush()
             # Confirm hold internally
-            await svc.hold_service.confirm_hold("pg_test_hld_rollback_1", "bkg_rb_test", session=s)
+            await svc.hold_service.confirm_hold("pg_test_hld_rollback_1", "pg_test_bkg_rb", session=s)
             # Raise artificial error before commit
             raise RuntimeError("Database connection interrupted during payment processing")
     except RuntimeError:

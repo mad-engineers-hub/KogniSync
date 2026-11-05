@@ -215,24 +215,16 @@ class BookingService:
         booking_id = f"bkg_{uuid.uuid4().hex[:12]}"
         booking_ref = f"KOGNI-{uuid.uuid4().hex[:8].upper()}"
 
-        # Confirm hold and convert held_units -> booked_units under inventory row lock
-        confirmed_hold = await self.hold_service.confirm_hold(
-            hold_id=hold_id,
-            booking_id=booking_id,
-            now_override=now,
-            session=self.session,
-        )
-
         # Lock inventory record to obtain price and currency
-        inv = await self.inv_repo.lock_by_id(confirmed_hold.inventory_id)
+        inv = await self.inv_repo.lock_by_id(existing_hold.inventory_id)
         unit_price = Decimal(str(inv.price))
-        total_fare = unit_price * Decimal(confirmed_hold.units)
+        total_fare = unit_price * Decimal(existing_hold.units)
         tax = (total_fare * Decimal("0.05")).quantize(Decimal("0.01"))
         bkg_idemp_key = idempotency_key or f"idemp_bkg_{uuid.uuid4().hex}"
 
         booking = Booking(
             booking_id=booking_id,
-            user_id=confirmed_hold.user_id or user_id,
+            user_id=existing_hold.user_id or user_id,
             trip_id=None,
             itinerary_id=None,
             booking_reference=booking_ref,
@@ -255,7 +247,7 @@ class BookingService:
             inventory_id=inv.inventory_id,
             title=f"Reserved {inv.entity_type} {inv.entity_id}",
             for_date=inv.for_date,
-            units=confirmed_hold.units,
+            units=existing_hold.units,
             unit_price=unit_price,
             line_total=total_fare,
             currency=inv.currency,
@@ -280,8 +272,17 @@ class BookingService:
             updated_at=now,
         )
 
+        # Create booking and payment first so foreign key fk_holds_booking_id is satisfied
         await self.booking_repo.create_booking(booking, [item])
         await self.payment_repo.create_payment(payment)
+
+        # Confirm hold and convert held_units -> booked_units under inventory row lock
+        confirmed_hold = await self.hold_service.confirm_hold(
+            hold_id=hold_id,
+            booking_id=booking_id,
+            now_override=now,
+            session=self.session,
+        )
 
         # Commit single unified transaction
         await self.session.commit()
