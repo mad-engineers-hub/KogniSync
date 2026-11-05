@@ -124,3 +124,13 @@ export interface TravelRequest {
   passengersCount: number;
   weights: OptimizationWeights;
 }
+
+export interface JourneySearchResponse {
+  journeys: Journey[];
+  recommendedJourneyId?: string;
+  totalCandidates: number;
+  eligibleCandidates: number;
+  paretoFrontierCount: number;
+  source: string;
+  providerStatus: Record<string, string>;
+}

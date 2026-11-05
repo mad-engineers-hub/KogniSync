@@ -1,20 +1,30 @@
 import { apiClient, USE_MOCK_FALLBACK } from './client';
-import { Journey, TravelRequest } from '../types/journey';
+import { Journey, JourneySearchResponse, TravelRequest } from '../types/journey';
 import { MOCK_JOURNEYS, generateMockJourneys, validateJourneyAgainstRequest } from './mockData';
 import { composeMultiModalJourneys } from './orchestrationEngine';
 
 // Cache to store dynamically generated journeys so details and booking flows succeed seamlessly
 export const journeySessionCache = new Map<string, Journey>();
 
+export async function searchJourneysBackend(request: TravelRequest): Promise<JourneySearchResponse> {
+  return await apiClient<JourneySearchResponse>('/api/v1/journeys/search', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
 export async function searchJourneys(request: TravelRequest): Promise<Journey[]> {
   try {
     if (!USE_MOCK_FALLBACK) {
-      const liveResults = await apiClient<Journey[]>('/api/v1/journeys/search', {
+      const liveResults = await apiClient<Journey[] | JourneySearchResponse>('/api/v1/journeys/search', {
         method: 'POST',
         body: JSON.stringify(request),
       });
-      if (liveResults && liveResults.length > 0) {
-        liveResults.forEach((j) => {
+      const resultsArray: Journey[] = Array.isArray(liveResults)
+        ? liveResults
+        : liveResults?.journeys || [];
+      if (resultsArray && resultsArray.length > 0) {
+        resultsArray.forEach((j) => {
           journeySessionCache.set(j.id, j);
           try {
             if (typeof window !== 'undefined' && window.sessionStorage) {
@@ -22,7 +32,7 @@ export async function searchJourneys(request: TravelRequest): Promise<Journey[]>
             }
           } catch {}
         });
-        return liveResults;
+        return resultsArray;
       }
     }
   } catch (err) {

@@ -10,6 +10,7 @@ from app.api.routes.maps import router as maps_router
 from app.api.routes.optimizer import router as optimizer_router
 from app.api.routes.booking import router as booking_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.journeys import router as journeys_router
 
 
 @asynccontextmanager
@@ -52,3 +53,4 @@ app.include_router(maps_router)
 app.include_router(optimizer_router)
 app.include_router(booking_router)
 app.include_router(auth_router)
+app.include_router(journeys_router)
