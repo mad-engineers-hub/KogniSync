@@ -58,7 +58,7 @@ def check_schema_health(db_url: str | None = None) -> dict:
     target_url = db_url or settings.DATABASE_URL
     sync_url = target_url
     if "+asyncpg" in sync_url:
-        sync_url = sync_url.replace("+asyncpg", "")
+        sync_url = sync_url.replace("+asyncpg", "+psycopg2")
     elif "+aiosqlite" in sync_url:
         sync_url = sync_url.replace("+aiosqlite", "")
 
