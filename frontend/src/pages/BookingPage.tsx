@@ -9,7 +9,7 @@ import { BookingSummary } from '../components/booking/BookingSummary';
 import { HoldTimer } from '../components/booking/HoldTimer';
 import { PassengerForm } from '../components/booking/PassengerForm';
 import { PaymentProcessor } from '../components/booking/PaymentProcessor';
-import { ArrowLeft, AlertCircle, Loader2, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Loader2, CheckCircle2, ShieldCheck, AlertTriangle } from 'lucide-react';
 
 export const BookingPage: React.FC = () => {
   const { journeyId } = useParams<{ journeyId: string }>();
@@ -205,6 +205,28 @@ export const BookingPage: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {/* Simulation Sandbox Guard Banner */}
+      {(!journey.provenance?.isFullyConfirmed || journey.segments.some((s) => s.availability.isRealInventory === false)) && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0 mt-0.5">
+              <AlertTriangle className="w-5 h-5 text-amber-700" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-bold font-display">
+                Simulated Sandbox Reservation Environment
+              </span>
+              <span className="text-xs text-slate-700 leading-relaxed">
+                Carrier seats are unverified simulation data. The hold below (<code>{hold?.holdId}</code>) is a safe sandbox reservation in the local PostgreSQL database, designed for multi-vendor saga testing. It cannot be used for real-world travel.
+              </span>
+            </div>
+          </div>
+          <span className="text-[11px] font-mono font-bold px-2.5 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300 shrink-0">
+            Sandbox Simulation Demo
+          </span>
+        </div>
+      )}
 
       {/* Live Hold Countdown Timer */}
       <HoldTimer

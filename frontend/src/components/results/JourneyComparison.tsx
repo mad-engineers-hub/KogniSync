@@ -2,6 +2,7 @@ import React from 'react';
 import { Journey } from '../../types/journey';
 import { formatCurrency, formatDuration } from '../../lib/utils';
 import { OptimizationBadge } from '../common/OptimizationBadge';
+import { ProvenanceBadge } from '../common/ProvenanceBadge';
 import { ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -45,8 +46,12 @@ export const JourneyComparison: React.FC<JourneyComparisonProps> = ({ journeys }
                 onClick={() => navigate(`/plan/${j.id}`)}
               >
                 <td className="py-3 px-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <OptimizationBadge category={j.recommendationCategory} size="sm" />
+                    <ProvenanceBadge
+                      sourceType={j.provenance?.overallSourceType || 'deterministic_estimate'}
+                      size="xs"
+                    />
                     <span className="font-semibold text-slate-800">{j.title}</span>
                   </div>
                 </td>
@@ -63,7 +68,12 @@ export const JourneyComparison: React.FC<JourneyComparisonProps> = ({ journeys }
                 </td>
 
                 <td className="py-3 px-3 font-mono font-bold text-slate-900">
-                  {formatCurrency(j.totalPrice, j.currency)}
+                  <div className="flex flex-col">
+                    <span>{formatCurrency(j.totalPrice, j.currency)}</span>
+                    <span className="text-[10px] font-normal text-slate-500">
+                      {j.provenance?.overallSourceType === 'provider_live' ? 'Live Quote' : 'Corridor Est.'}
+                    </span>
+                  </div>
                 </td>
 
                 <td className="py-3 px-3 font-mono font-medium text-slate-700">

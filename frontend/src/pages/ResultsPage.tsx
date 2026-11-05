@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { searchJourneys } from '../api/journey';
+import { searchJourneys, getLastSearchSource } from '../api/journey';
 import { TravelRequest } from '../types/journey';
 import { JourneyResults } from '../components/results/JourneyResults';
 import { ArrowLeft, SlidersHorizontal } from 'lucide-react';
@@ -98,6 +98,24 @@ export const ResultsPage: React.FC = () => {
               {budgetMax && (
                 <span className="text-xs px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 font-mono font-semibold">
                   Budget: ₹{budgetMax.toLocaleString()}
+                </span>
+              )}
+              {getLastSearchSource() && (
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-medium border ${
+                    getLastSearchSource() === 'backend_orchestrator'
+                      ? 'bg-blue-50 text-blue-800 border-blue-200'
+                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                  }`}
+                  title={
+                    getLastSearchSource() === 'backend_orchestrator'
+                      ? 'Journeys orchestrated by backend service with authoritative multi-objective Pareto analysis.'
+                      : 'Offline client fallback simulation. Estimates are unverified.'
+                  }
+                >
+                  {getLastSearchSource() === 'backend_orchestrator'
+                    ? 'Backend Orchestrated'
+                    : 'Client Fallback Simulation'}
                 </span>
               )}
             </div>
