@@ -90,10 +90,28 @@ async def pg_engine():
     yield engine
     # Cleanup test data after tests in reverse foreign key order
     async with engine.begin() as conn:
-        await conn.execute(text("DELETE FROM payments WHERE booking_id LIKE 'pg_test_%' OR payment_id LIKE 'pg_test_%'"))
-        await conn.execute(text("DELETE FROM booking_items WHERE booking_id LIKE 'pg_test_%' OR booking_item_id LIKE 'pg_test_%' OR inventory_id LIKE 'pg_test_%'"))
-        await conn.execute(text("DELETE FROM holds WHERE user_id = 'usr_pg_test' OR inventory_id LIKE 'pg_test_%' OR hold_id LIKE 'pg_test_%'"))
-        await conn.execute(text("DELETE FROM bookings WHERE user_id = 'usr_pg_test' OR booking_id LIKE 'pg_test_%'"))
+        await conn.execute(text("""
+            DELETE FROM payments 
+            WHERE booking_id IN (SELECT booking_id FROM bookings WHERE user_id = 'usr_pg_test' OR booking_id LIKE 'pg_test_%')
+               OR payment_id LIKE 'pg_test_%'
+        """))
+        await conn.execute(text("""
+            DELETE FROM booking_items 
+            WHERE booking_id IN (SELECT booking_id FROM bookings WHERE user_id = 'usr_pg_test' OR booking_id LIKE 'pg_test_%')
+               OR booking_item_id LIKE 'pg_test_%'
+               OR inventory_id LIKE 'pg_test_%'
+        """))
+        await conn.execute(text("""
+            DELETE FROM holds 
+            WHERE user_id = 'usr_pg_test' 
+               OR inventory_id LIKE 'pg_test_%' 
+               OR hold_id LIKE 'pg_test_%'
+        """))
+        await conn.execute(text("""
+            DELETE FROM bookings 
+            WHERE user_id = 'usr_pg_test' 
+               OR booking_id LIKE 'pg_test_%'
+        """))
         await conn.execute(text("DELETE FROM inventory_calendar WHERE inventory_id LIKE 'pg_test_%'"))
         await conn.execute(text("DELETE FROM users WHERE user_id = 'usr_pg_test'"))
     await engine.dispose()

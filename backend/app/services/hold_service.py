@@ -309,8 +309,8 @@ class HoldService:
             from app.db.database import AsyncSessionLocal
             factory = AsyncSessionLocal
 
-        # Step 1: Query candidate hold IDs using row-level locking / skip_locked
-        candidate_ids = []
+        # Hold row locks across the batch so concurrent workers safely partition rows via SKIP LOCKED
+        expired_hold_ids = []
         async with factory() as session:
             hold_repo = HoldRepository(session)
             candidates = await hold_repo.find_expired_active_holds(
@@ -318,23 +318,32 @@ class HoldService:
             )
             candidate_ids = [h.hold_id for h in candidates]
 
-        if not candidate_ids:
-            return result
+            if not candidate_ids:
+                return result
 
-        logger.info(f"Hold expiration sweep found {len(candidate_ids)} candidate expired holds.")
+            logger.info(f"Hold expiration sweep found {len(candidate_ids)} candidate expired holds.")
 
-        # Step 2: Expire each hold in an isolated transaction
-        for hold_id in candidate_ids:
-            result.processed += 1
+            for hold_id in candidate_ids:
+                result.processed += 1
+                try:
+                    expired = await self.expire_hold(hold_id, force=False, now_override=cutoff, session=session)
+                    if expired:
+                        result.expired += 1
+                        expired_hold_ids.append(hold_id)
+                    else:
+                        result.skipped += 1
+                except Exception as e:
+                    result.failed += 1
+                    result.failures.append({"hold_id": hold_id, "error": str(e)})
+                    logger.error(f"Failed to expire hold '{hold_id}': {e}", exc_info=True)
+
+            await session.commit()
+
+        # Advisory Redis cleanup strictly post-commit
+        for h_id in expired_hold_ids:
             try:
-                expired = await self.expire_hold(hold_id, force=False, now_override=cutoff)
-                if expired:
-                    result.expired += 1
-                else:
-                    result.skipped += 1
+                await self.redis.remove_hold_ttl(h_id)
             except Exception as e:
-                result.failed += 1
-                result.failures.append({"hold_id": hold_id, "error": str(e)})
-                logger.error(f"Failed to expire hold '{hold_id}': {e}", exc_info=True)
+                logger.warning(f"Advisory Redis cleanup encountered error: {e}")
 
         return result
