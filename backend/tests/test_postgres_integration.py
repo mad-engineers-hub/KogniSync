@@ -95,6 +95,7 @@ async def pg_engine():
         await conn.execute(text("DELETE FROM bookings WHERE booking_id LIKE 'pg_test_%'"))
         await conn.execute(text("DELETE FROM holds WHERE hold_id LIKE 'pg_test_%'"))
         await conn.execute(text("DELETE FROM inventory_calendar WHERE inventory_id LIKE 'pg_test_%'"))
+        await conn.execute(text("DELETE FROM users WHERE user_id = 'usr_pg_test'"))
     await engine.dispose()
 
 
@@ -109,9 +110,30 @@ async def pg_seed_inventory(session_factory):
     now = datetime.now(timezone.utc)
     inv_id = f"pg_test_inv_{int(now.timestamp())}"
     async with session_factory() as session:
+        u_check = await session.execute(select(User).where(User.user_id == "usr_pg_test"))
+        if not u_check.scalar_one_or_none():
+            sample_u = (await session.execute(select(User).limit(1))).scalar_one_or_none()
+            if sample_u:
+                test_user = User(
+                    user_id="usr_pg_test",
+                    display_name="PG Test User",
+                    email="pg_test_integration@example.invalid",
+                    home_city_id=sample_u.home_city_id,
+                    home_currency=sample_u.home_currency,
+                    locale=sample_u.locale,
+                    budget_band="value",
+                    travel_style="comfort",
+                    traveller_type="solo",
+                    segment="standard",
+                    date_of_signup=date(2026, 1, 1),
+                    status="active",
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(test_user)
         inv = InventoryCalendar(
             inventory_id=inv_id,
-            entity_type="train_seat",
+            entity_type="room_type",
             entity_id="seat_101",
             for_date=date(2026, 12, 1),
             total_units=10,
@@ -319,7 +341,7 @@ async def test_pg_4_confirmation_racing_with_expiration(session_factory, pg_seed
         hold = Hold(
             hold_id="pg_test_hld_race_1",
             inventory_id=inv_id,
-            user_id="usr_race",
+            user_id="usr_pg_test",
             units=1,
             idempotency_key="idemp_pg_race_1",
             created_at=now - timedelta(seconds=1),
@@ -336,7 +358,7 @@ async def test_pg_4_confirmation_racing_with_expiration(session_factory, pg_seed
         try:
             async with session_factory() as s:
                 svc = BookingService(session=s, hold_service=hold_service)
-                bkg = await svc.confirm_booking(hold_id="pg_test_hld_race_1", user_id="usr_race")
+                bkg = await svc.confirm_booking(hold_id="pg_test_hld_race_1", user_id="usr_pg_test")
                 results.append(("confirm", True, bkg.booking_id))
         except Exception as e:
             results.append(("confirm", False, str(e)))
@@ -377,7 +399,7 @@ async def test_pg_5_booking_confirmation_rollback_atomicity(session_factory, pg_
         hold = Hold(
             hold_id="pg_test_hld_rollback_1",
             inventory_id=inv_id,
-            user_id="usr_rollback",
+            user_id="usr_pg_test",
             units=2,
             idempotency_key="idemp_pg_rb_1",
             created_at=now,
@@ -444,7 +466,7 @@ async def test_pg_6_cancellation_race_repeated_calls(session_factory, pg_seed_in
         item = BookingItem(
             booking_item_id="pg_test_item_cancel_race",
             booking_id="pg_test_bkg_cancel_race",
-            entity_type="train_seat",
+            entity_type="room_type",
             entity_id="seat_101",
             inventory_id=inv_id,
             title="Reserved seat",
@@ -494,7 +516,7 @@ async def test_pg_7_concurrent_inventory_allocation_invariant(session_factory, p
     async def attempt_hold(i):
         try:
             h = await hold_service.create_hold(
-                user_id=f"usr_alloc_{i}",
+                user_id="usr_pg_test",
                 inventory_id=inv_id,
                 units=2,
                 ttl_seconds=300,
