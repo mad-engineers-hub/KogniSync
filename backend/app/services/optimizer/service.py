@@ -33,7 +33,17 @@ class JourneyOptimizerService:
                     continue
             if request.preferred_arrival_before and cand.arrival_time:
                 try:
-                    if cand.arrival_time > request.preferred_arrival_before:
+                    cand_arr = str(cand.arrival_time)
+                    pref_arr = str(request.preferred_arrival_before)
+                    if "T" in cand_arr and "T" not in pref_arr and ":" in pref_arr:
+                        cand_time = cand_arr.split("T")[1][:5]
+                        if cand_time > pref_arr[:5]:
+                            continue
+                    elif "T" in pref_arr and "T" not in cand_arr and ":" in cand_arr:
+                        pref_time = pref_arr.split("T")[1][:5]
+                        if cand_arr[:5] > pref_time:
+                            continue
+                    elif cand_arr > pref_arr:
                         continue
                 except Exception:
                     pass
