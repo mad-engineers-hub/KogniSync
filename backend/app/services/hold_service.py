@@ -295,6 +295,7 @@ class HoldService:
         self,
         batch_size: int = 100,
         cutoff_time: Optional[datetime] = None,
+        inventory_id: Optional[str] = None,
     ) -> BatchExpireResult:
         """
         Batch expiration sweep for expired active holds.
@@ -314,7 +315,7 @@ class HoldService:
         async with factory() as session:
             hold_repo = HoldRepository(session)
             candidates = await hold_repo.find_expired_active_holds(
-                cutoff_time=cutoff, limit=batch_size, skip_locked=True
+                cutoff_time=cutoff, limit=batch_size, skip_locked=True, inventory_id=inventory_id
             )
             candidate_ids = [h.hold_id for h in candidates]
 

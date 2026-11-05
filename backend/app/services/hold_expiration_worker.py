@@ -37,9 +37,11 @@ class HoldExpirationWorker:
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
-    async def run_once(self, cutoff_time=None) -> BatchExpireResult:
+    async def run_once(self, cutoff_time=None, inventory_id: Optional[str] = None) -> BatchExpireResult:
         """Execute a single batch expiration sweep with optional cutoff."""
-        return await self.hold_service.expire_stale_holds(batch_size=self.batch_size, cutoff_time=cutoff_time)
+        return await self.hold_service.expire_stale_holds(
+            batch_size=self.batch_size, cutoff_time=cutoff_time, inventory_id=inventory_id
+        )
 
     async def run_sweep_once(self) -> BatchExpireResult:
         """Execute a single batch expiration sweep."""

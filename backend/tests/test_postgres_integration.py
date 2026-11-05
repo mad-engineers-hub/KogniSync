@@ -335,7 +335,10 @@ async def test_pg_3_two_concurrent_expiration_workers(session_factory, pg_seed_i
     worker_a = HoldExpirationWorker(hold_service=hold_service, batch_size=3)
     worker_b = HoldExpirationWorker(hold_service=hold_service, batch_size=3)
 
-    res_a, res_b = await asyncio.gather(worker_a.run_once(), worker_b.run_once())
+    res_a, res_b = await asyncio.gather(
+        worker_a.run_once(inventory_id=inv_id),
+        worker_b.run_once(inventory_id=inv_id),
+    )
 
     total_expired = res_a.expired + res_b.expired
     assert total_expired == 6

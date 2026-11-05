@@ -29,19 +29,21 @@ class HoldRepository(BaseRepository[Hold]):
         return res.scalar_one_or_none()
 
     async def find_expired_active_holds(
-        self, cutoff_time: datetime, limit: int = 100, skip_locked: bool = True
+        self,
+        cutoff_time: datetime,
+        limit: int = 100,
+        skip_locked: bool = True,
+        inventory_id: Optional[str] = None,
     ) -> Sequence[Hold]:
         """
         Finds active holds whose expires_at is <= cutoff_time.
         Uses row-level locking (FOR UPDATE SKIP LOCKED on PostgreSQL)
         so concurrent worker instances safely partition batches.
         """
-        stmt = (
-            select(Hold)
-            .where(Hold.status == "active", Hold.expires_at <= cutoff_time)
-            .order_by(Hold.expires_at.asc())
-            .limit(limit)
-        )
+        stmt = select(Hold).where(Hold.status == "active", Hold.expires_at <= cutoff_time)
+        if inventory_id is not None:
+            stmt = stmt.where(Hold.inventory_id == inventory_id)
+        stmt = stmt.order_by(Hold.expires_at.asc(), Hold.hold_id.asc()).limit(limit)
         if skip_locked:
             stmt = stmt.with_for_update(skip_locked=True)
         else:
