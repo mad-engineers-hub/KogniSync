@@ -26,11 +26,20 @@ async def get_journey_orchestrator_health():
 @router.get("/providers")
 async def get_transport_providers():
     """Returns registered transport provider adapters, capabilities, and availability status."""
+    providers_info = []
+    has_live = False
+    for p in journey_orchestrator.transport_providers:
+        cap = p.get_capabilities().model_dump(by_alias=True)
+        is_live = p.is_available()
+        cap["liveVerificationStatus"] = "PASS" if is_live else "BLOCKED — credentials unavailable"
+        if is_live:
+            has_live = True
+        providers_info.append(cap)
+
     return {
-        "providers": [
-            p.get_capabilities().model_dump(by_alias=True)
-            for p in journey_orchestrator.transport_providers
-        ]
+        "providers": providers_info,
+        "defaultProvider": "google_routes",
+        "liveVerificationStatus": "PASS" if has_live else "BLOCKED — credentials unavailable",
     }
 
 

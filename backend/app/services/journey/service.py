@@ -279,6 +279,8 @@ class JourneyOrchestrationService:
                     provider_status[p_id] = "timeout_fallback_deterministic"
                 elif tpe.code == ProviderErrorCode.UNSUPPORTED_MODE:
                     provider_status[p_id] = "unsupported_mode_fallback_deterministic"
+                elif tpe.code == ProviderErrorCode.INVALID_REQUEST:
+                    provider_status[p_id] = "invalid_request_fallback_deterministic"
                 else:
                     provider_status[p_id] = "unavailable_fallback_deterministic"
             except Exception as e:
@@ -673,6 +675,11 @@ class JourneyOrchestrationService:
                 arch["first_mile"]["mode"],
                 attribute_overrides=prov_overrides1,
             )
+            carbon1 = (
+                round(arch["first_mile"]["carbon_kg"] * (dist1 / arch["first_mile"]["distance_km"]), 1)
+                if arch["first_mile"]["distance_km"] > 0
+                else arch["first_mile"]["carbon_kg"]
+            )
             segment1 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-01",
                 sequence=1,
@@ -688,7 +695,7 @@ class JourneyOrchestrationService:
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=45, is_real_inventory=False),
                 distance_km=dist1,
-                carbon_kg=arch["first_mile"]["carbon_kg"],
+                carbon_kg=carbon1,
                 comfort_score=arch["first_mile"]["comfort_score"],
                 transfer_buffer_minutes=arch["first_mile"]["transfer_buffer_min"],
                 notes=f"Direct pickup at {origin_hubs.user_node.name}. Sync transfer buffer: {arch['first_mile']['transfer_buffer_min']}m.",
@@ -700,6 +707,11 @@ class JourneyOrchestrationService:
                 arch["main_transport"]["provider"],
                 arch["main_transport"]["mode"],
                 attribute_overrides=prov_overrides2,
+            )
+            carbon2 = (
+                round(arch["main_transport"]["carbon_kg"] * (dist2 / arch["main_transport"]["distance_km"]), 1)
+                if arch["main_transport"]["distance_km"] > 0
+                else arch["main_transport"]["carbon_kg"]
             )
             segment2 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-02",
@@ -717,7 +729,7 @@ class JourneyOrchestrationService:
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=18, is_real_inventory=False),
                 distance_km=dist2,
-                carbon_kg=arch["main_transport"]["carbon_kg"],
+                carbon_kg=carbon2,
                 comfort_score=arch["main_transport"]["comfort_score"],
                 seat_class=arch["main_transport"]["seat_class"],
                 transfer_buffer_minutes=arch["main_transport"]["transfer_buffer_min"],
@@ -730,6 +742,11 @@ class JourneyOrchestrationService:
                 arch["last_mile"]["provider"],
                 arch["last_mile"]["mode"],
                 attribute_overrides=prov_overrides3,
+            )
+            carbon3 = (
+                round(arch["last_mile"]["carbon_kg"] * (dist3 / arch["last_mile"]["distance_km"]), 1)
+                if arch["last_mile"]["distance_km"] > 0
+                else arch["last_mile"]["carbon_kg"]
             )
             segment3 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-03",
@@ -746,7 +763,7 @@ class JourneyOrchestrationService:
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=99, is_real_inventory=False),
                 distance_km=dist3,
-                carbon_kg=arch["last_mile"]["carbon_kg"],
+                carbon_kg=carbon3,
                 comfort_score=arch["last_mile"]["comfort_score"],
                 notes=f"Final transfer to {dest_hubs.user_node.name}. Driver will meet at {arr_hub.name} arrival exit.",
                 provenance=prov3,
@@ -763,6 +780,31 @@ class JourneyOrchestrationService:
             modes: list[TransportMode] = list(dict.fromkeys(s.mode for s in segments))
 
             journey_prov = build_journey_provenance(segments)
+
+            has_live_dur = any(
+                s.provenance and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
+                for s in segments
+            )
+            if has_live_dur:
+                credibility_notice = (
+                    "Transit durations reflect live provider traffic feeds (Google Routes API v2). "
+                    "Fares are deterministic corridor estimates and seat availability is simulated demo inventory "
+                    "requiring live provider confirmation prior to booking."
+                )
+                trade_off_notes = [
+                    "Live traffic-aware duration: transit ETAs verified via Google Routes API v2",
+                    "Corridor-modeled estimates: fare and seat capacity remain unverified demo inventory until live booking lock",
+                ]
+                is_dur_est = False
+            else:
+                credibility_notice = (
+                    "Fares, travel durations, and schedules are deterministic estimates. "
+                    "Availability is unverified synthetic data and requires live provider confirmation prior to booking."
+                )
+                trade_off_notes = [
+                    "Corridor-modeled estimates: fare and transit duration are unverified until live booking lock"
+                ]
+                is_dur_est = True
 
             journey = JourneySchema(
                 id=f"jny-{route_slug}-{cat}",
@@ -790,14 +832,13 @@ class JourneyOrchestrationService:
                         f"3 synchronized legs: {segment1.provider} → {segment2.provider} → {segment3.provider}",
                         f"Arrival guaranteed by {seg3_arr.strftime('%I:%M %p')} before deadline",
                         f"Total transfer wait: {waiting_dur} min with live synchronization",
-                        "Corridor-modeled estimates: fare and transit duration are unverified until live booking lock",
-                    ],
+                    ] + trade_off_notes,
                     score=90.0,
                     cost_vs_fastest_saving=max(0.0, float(flight_price + 1100 - total_price)),
                     duration_diff_minutes=total_duration_minutes - (flight_duration_min + 65),
-                    data_credibility_notice="Fares, travel durations, and schedules are deterministic estimates. Availability is unverified synthetic data and requires live provider confirmation prior to booking.",
+                    data_credibility_notice=credibility_notice,
                     is_fare_estimated=True,
-                    is_duration_estimated=True,
+                    is_duration_estimated=is_dur_est,
                     is_availability_verified=False,
                 ),
                 booking_feasibility=BookingFeasibilitySchema(
@@ -846,14 +887,35 @@ class JourneyOrchestrationService:
         for opt_out in opt_res.journeys:
             if opt_out.id in journey_by_id:
                 j = journey_by_id[opt_out.id]
+                has_live_dur = any(
+                    s.provenance and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
+                    for s in j.segments
+                )
+                notes_to_add = (
+                    [
+                        "Live traffic-aware duration: transit ETAs verified via Google Routes API v2",
+                        "Corridor-modeled estimates: fare and seat capacity remain unverified demo inventory until live booking lock",
+                    ]
+                    if has_live_dur
+                    else [
+                        "Corridor-modeled estimates: fare and transit duration are unverified until live booking lock"
+                    ]
+                )
                 # Attach optimizer evaluation and explanation
                 j.is_pareto_optimal = opt_out.is_pareto_optimal
                 j.optimization = opt_out
                 j.ai_explanation.score = round(opt_out.score * 100.0, 1)
-                j.ai_explanation.trade_offs = opt_out.explanation.tradeoffs + [
-                    "Corridor-modeled estimates: fare and transit duration are unverified until live booking lock"
-                ]
+                j.ai_explanation.trade_offs = opt_out.explanation.tradeoffs + notes_to_add
                 j.ai_explanation.rank_reason = "; ".join(opt_out.explanation.reasons) or j.ai_explanation.rank_reason
+                j.ai_explanation.is_duration_estimated = not has_live_dur
+                j.ai_explanation.is_fare_estimated = True
+                j.ai_explanation.is_availability_verified = False
+                if has_live_dur:
+                    j.ai_explanation.data_credibility_notice = (
+                        "Transit durations reflect live provider traffic feeds (Google Routes API v2). "
+                        "Fares are deterministic corridor estimates and seat availability is simulated demo inventory "
+                        "requiring live provider confirmation prior to booking."
+                    )
                 final_journeys.append(j)
 
         return JourneySearchResponse(
