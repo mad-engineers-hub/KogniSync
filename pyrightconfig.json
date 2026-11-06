@@ -4,7 +4,9 @@
     "scripts"
   ],
   "extraPaths": [
-    "backend"
+    "backend",
+    "scripts",
+    "."
   ],
   "venvPath": ".",
   "venv": ".venv"
