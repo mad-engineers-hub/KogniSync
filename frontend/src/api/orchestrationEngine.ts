@@ -864,6 +864,9 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       attributes: {
         fare: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Corridor distance-modeled estimate' },
         duration: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Corridor speed model' },
+        distance: { sourceType: 'deterministic_estimate', providerName: 'KogniSync Geo-Engine', isEstimate: true, notes: 'Corridor geographic distance model' },
+        departure: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Estimated schedule anchored to deadline' },
+        arrival: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Estimated arrival' },
         departureTime: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Estimated schedule anchored to deadline' },
         arrivalTime: { sourceType: 'deterministic_estimate', providerName: provider, isEstimate: true, notes: 'Estimated arrival' },
         carbon: { sourceType: 'deterministic_estimate', providerName: 'KogniSync Multi-Modal Emission Factors', isEstimate: true },
