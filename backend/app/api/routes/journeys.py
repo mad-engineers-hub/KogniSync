@@ -19,6 +19,18 @@ async def get_journey_orchestrator_health():
         "service": "Backend Multimodal Journey Orchestration Engine",
         "supported_modes": ["flight", "train", "bus", "cab", "rapido", "metro", "walk", "auto"],
         "archetypes_available": 5,
+        "providers_registered": len(journey_orchestrator.transport_providers),
+    }
+
+
+@router.get("/providers")
+async def get_transport_providers():
+    """Returns registered transport provider adapters, capabilities, and availability status."""
+    return {
+        "providers": [
+            p.get_capabilities().model_dump(by_alias=True)
+            for p in journey_orchestrator.transport_providers
+        ]
     }
 
 
