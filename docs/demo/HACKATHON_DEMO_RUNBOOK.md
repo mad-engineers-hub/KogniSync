@@ -74,6 +74,9 @@ cd E:\KogniSync\KogniSync
 # Verify Python Virtual Environment
 .venv\Scripts\Activate.ps1
 
+# Optional: Safe demo state reset (cleans ephemeral holds & verifies canonical SHA-256)
+.venv\Scripts\python scripts/reset_demo_state.py
+
 # Backend environment is pre-configured in .env
 # (Zero external paid credentials required for deterministic demo)
 ```

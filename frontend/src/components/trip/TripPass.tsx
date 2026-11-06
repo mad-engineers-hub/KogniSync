@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Trip } from '../../types/trip';
-import { Download, Share2, Ticket, ArrowRight } from 'lucide-react';
+import { Download, Share2, Ticket, ArrowRight, Check } from 'lucide-react';
 
 interface TripPassProps {
   trip: Trip;
@@ -10,12 +10,18 @@ interface TripPassProps {
 
 export const TripPass: React.FC<TripPassProps> = ({ trip, onDownloadPdf, onShare }) => {
   const { pnr } = trip;
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const showStatus = (msg: string) => {
+    setStatusMessage(msg);
+    setTimeout(() => setStatusMessage(null), 3000);
+  };
 
   const handleDownload = () => {
     if (onDownloadPdf) {
       onDownloadPdf();
     } else {
-      alert(`Generating unified PDF Travel Pass for PNR ${pnr}...`);
+      showStatus(`Generating unified PDF Travel Pass for PNR ${pnr}...`);
     }
   };
 
@@ -30,7 +36,7 @@ export const TripPass: React.FC<TripPassProps> = ({ trip, onDownloadPdf, onShare
       }).catch(() => {});
     } else {
       navigator.clipboard.writeText(window.location.href);
-      alert('Trip URL copied to clipboard!');
+      showStatus('Trip URL copied to clipboard!');
     }
   };
 
@@ -93,6 +99,13 @@ export const TripPass: React.FC<TripPassProps> = ({ trip, onDownloadPdf, onShare
           <span>Share Trip</span>
         </button>
       </div>
+
+      {statusMessage && (
+        <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2 animate-in fade-in duration-200">
+          <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <span>{statusMessage}</span>
+        </div>
+      )}
     </div>
   );
 };

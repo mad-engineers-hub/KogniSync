@@ -1,8 +1,22 @@
 import { Journey, TravelRequest } from '../types/journey';
 import { Trip } from '../types/trip';
 import { composeMultiModalJourneys } from './orchestrationEngine';
+import { generateSvgQrDataUri } from './trips';
 
 export const DEMO_PRESETS: { title: string; subtitle: string; query: string; request: Partial<TravelRequest> }[] = [
+  {
+    title: 'Chennai → Udupi (Golden Hackathon Corridor)',
+    subtitle: 'Speed preference, ₹5000 budget, arrive before 8 PM',
+    query: 'I need to reach Udupi from Chennai tomorrow before 8 PM. My budget is ₹5000 and I prefer speed.',
+    request: {
+      origin: 'Chennai',
+      destination: 'Udupi',
+      budgetMax: 5000,
+      departureDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+      preferredArrivalBefore: '20:00',
+      weights: { cost: 0.1, duration: 0.85, comfort: 0.05, carbon: 0.0 },
+    },
+  },
   {
     title: 'Bangalore → Chennai (Budget ₹3000)',
     subtitle: 'Cost-optimized before 2 PM tomorrow',
@@ -136,7 +150,7 @@ export const MOCK_CONFIRMED_TRIP: Trip = {
   tripId: 'trp-demo-blr-maa-01',
   bookingId: 'bk-demo-blr-maa-01',
   pnr: 'KOGNI-BLRMAA-8842',
-  qrCodeUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=KOGNISYNC-TRIP-BLRMAA-8842',
+  qrCodeUrl: generateSvgQrDataUri('KOGNI-BLRMAA-8842'),
   createdAt: '2026-10-30T08:30:00Z',
   journey: MOCK_JOURNEYS[0],
   passengers: [
