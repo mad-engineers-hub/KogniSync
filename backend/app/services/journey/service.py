@@ -239,17 +239,28 @@ class JourneyOrchestrationService:
 
     def _init_default_providers(self) -> list[TransportProvider]:
         """Initializes default production transport provider adapters from settings."""
+        providers: list[TransportProvider] = []
         try:
             from app.core.config import settings
-            return [
+            # 1. Google Routes Cloud API
+            providers.append(
                 GoogleRoutesTransportAdapter(
                     api_key=settings.GOOGLE_MAPS_API_KEY,
                     enabled=settings.GOOGLE_ROUTES_ENABLED,
                 )
-            ]
+            )
+            # 2. Valhalla OpenStreetMap Self-Hosted Local Engine
+            from app.services.journey.valhalla_adapter import ValhallaTransportAdapter
+            providers.append(
+                ValhallaTransportAdapter(
+                    base_url=settings.VALHALLA_BASE_URL,
+                    timeout_seconds=settings.VALHALLA_TIMEOUT_SECONDS,
+                    enabled=settings.VALHALLA_ENABLED,
+                )
+            )
         except Exception as e:
             logger.warning(f"Could not initialize default transport providers: {e}")
-            return []
+        return providers
 
     async def _query_legacy_provider(
         self,
@@ -444,6 +455,9 @@ class JourneyOrchestrationService:
             "optimizer": "authoritative_pareto",
             "maps": "coordinate_geometry",
         }
+        for p in self.transport_providers:
+            if not p.is_available():
+                provider_status[p.provider_id] = "unconfigured_fallback_deterministic"
 
         # 5 Multimodal Archetype definitions
         archetypes = [
@@ -852,14 +866,22 @@ class JourneyOrchestrationService:
                 s.provenance and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
                 for s in segments
             )
+            live_dur_names = ", ".join(dict.fromkeys(
+                s.provenance.attributes["duration"].provider_name
+                for s in segments
+                if s.provenance
+                and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
+                and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).provider_name
+            )) or "Google Routes API v2"
+
             if has_live_dur:
                 credibility_notice = (
-                    "Transit durations reflect live provider traffic feeds (Google Routes API v2). "
+                    f"Transit durations reflect live provider routing feeds ({live_dur_names}). "
                     "Fares are deterministic corridor estimates and seat availability is simulated demo inventory "
                     "requiring live provider confirmation prior to booking."
                 )
                 trade_off_notes = [
-                    "Live traffic-aware duration: transit ETAs verified via Google Routes API v2",
+                    f"Live traffic-aware duration: transit ETAs verified via {live_dur_names}",
                     "Corridor-modeled estimates: fare and seat capacity remain unverified demo inventory until live booking lock",
                 ]
                 is_dur_est = False

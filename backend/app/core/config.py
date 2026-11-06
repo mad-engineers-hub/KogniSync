@@ -34,9 +34,14 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "models/gemini-3.5-flash-lite"
 
-    # Google Maps / Routes API Configuration (Pluggable)
+    # Google Maps / Routes API Configuration (Pluggable Cloud Provider)
     GOOGLE_ROUTES_ENABLED: bool = False
     GOOGLE_MAPS_API_KEY: str | None = None
+
+    # Valhalla OpenStreetMap Routing Configuration (Optional, Self-Hosted Engine)
+    VALHALLA_ENABLED: bool = False
+    VALHALLA_BASE_URL: str = "http://localhost:8002"
+    VALHALLA_TIMEOUT_SECONDS: float = 3.0
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),
