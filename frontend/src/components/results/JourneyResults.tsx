@@ -28,9 +28,14 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
     return j.recommendationCategory === activeTab;
   });
 
-  // Sort journeys
+  // Sort journeys (deterministic tie-breaking aligned with backend optimizer)
   const sortedJourneys = [...filteredJourneys].sort((a, b) => {
-    if (sortBy === 'score') return b.aiExplanation.score - a.aiExplanation.score;
+    if (sortBy === 'score') {
+      const diff = b.aiExplanation.score - a.aiExplanation.score;
+      if (Math.abs(diff) > 0.001) return diff;
+      if (a.totalPrice !== b.totalPrice) return a.totalPrice - b.totalPrice;
+      return a.totalDurationMinutes - b.totalDurationMinutes;
+    }
     if (sortBy === 'price') return a.totalPrice - b.totalPrice;
     if (sortBy === 'duration') return a.totalDurationMinutes - b.totalDurationMinutes;
     if (sortBy === 'carbon') return a.carbonKg - b.carbonKg;

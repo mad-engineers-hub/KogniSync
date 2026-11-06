@@ -14,7 +14,11 @@ export const ResultsPage: React.FC = () => {
   const origin = searchParams.get('origin') || 'Bangalore';
   const destination = searchParams.get('destination') || 'Chennai';
   const query = searchParams.get('q') || '';
-  const date = searchParams.get('date') || 'Tomorrow';
+  const rawDate = searchParams.get('date') || '';
+  const resolvedDate = (rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate.trim()))
+    ? rawDate.trim()
+    : new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  const dateDisplay = rawDate && !rawDate.includes('-') ? rawDate : resolvedDate;
   const arrivalBefore = searchParams.get('arrivalBefore') || '14:00';
   const formattedArrival = formatTime12h(arrivalBefore) || arrivalBefore;
   const budgetMax = searchParams.get('budgetMax')
@@ -41,7 +45,7 @@ export const ResultsPage: React.FC = () => {
     naturalLanguageQuery: query,
     origin,
     destination,
-    departureDate: date,
+    departureDate: resolvedDate,
     preferredArrivalBefore: arrivalBefore,
     budgetMax,
     passengersCount: passengers,
@@ -56,13 +60,15 @@ export const ResultsPage: React.FC = () => {
   const {
     data: journeys = [],
     isLoading,
+    isError,
+    refetch,
   } = useQuery({
     queryKey: [
       'journeys',
       origin,
       destination,
       query,
-      date,
+      resolvedDate,
       arrivalBefore,
       budgetMax,
       costWeight,
@@ -93,7 +99,7 @@ export const ResultsPage: React.FC = () => {
                 {origin} → {destination}
               </h1>
               <span className="text-xs px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700 font-mono font-medium border border-slate-200">
-                {date} · Arrive before {formattedArrival}
+                {dateDisplay} · Arrive before {formattedArrival}
               </span>
               {budgetMax && (
                 <span className="text-xs px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 font-mono font-semibold">
@@ -102,11 +108,10 @@ export const ResultsPage: React.FC = () => {
               )}
               {getLastSearchSource() && (
                 <span
-                  className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-medium border ${
-                    getLastSearchSource() === 'backend_orchestrator'
-                      ? 'bg-blue-50 text-blue-800 border-blue-200'
-                      : 'bg-amber-50 text-amber-800 border-amber-200'
-                  }`}
+                  className={`text-[10px] px-2 py-0.5 rounded-md font-mono font-medium border ${getLastSearchSource() === 'backend_orchestrator'
+                    ? 'bg-blue-50 text-blue-800 border-blue-200'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}
                   title={
                     getLastSearchSource() === 'backend_orchestrator'
                       ? 'Journeys orchestrated by backend service with authoritative multi-objective Pareto analysis.'
@@ -137,12 +142,38 @@ export const ResultsPage: React.FC = () => {
         </Link>
       </div>
 
-      {/* Main Results Container */}
-      <JourneyResults
-        journeys={journeys}
-        isLoading={isLoading}
-        onModifySearch={() => navigate(`/?${searchParams.toString()}`)}
-      />
+      {/* Error state or Main Results Container */}
+      {isError ? (
+        <div className="w-full py-16 px-4 rounded-2xl border border-rose-200 bg-white text-center flex flex-col items-center gap-3 shadow-xs">
+          <div className="p-3 rounded-full bg-rose-50 text-rose-600">
+            <SlidersHorizontal className="w-8 h-8" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">Unable to retrieve journey alternatives</h3>
+          <p className="text-xs text-slate-500 max-w-md">
+            An unexpected error occurred while communicating with the journey service. Please check your connectivity or try again.
+          </p>
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={() => refetch()}
+              className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors shadow-xs"
+            >
+              Retry Search
+            </button>
+            <button
+              onClick={() => navigate(`/?${searchParams.toString()}`)}
+              className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 transition-colors border border-slate-200"
+            >
+              Modify Travel Request
+            </button>
+          </div>
+        </div>
+      ) : (
+        <JourneyResults
+          journeys={journeys}
+          isLoading={isLoading}
+          onModifySearch={() => navigate(`/?${searchParams.toString()}`)}
+        />
+      )}
     </div>
   );
 };

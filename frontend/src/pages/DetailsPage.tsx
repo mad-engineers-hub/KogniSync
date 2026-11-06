@@ -94,7 +94,7 @@ export const DetailsPage: React.FC = () => {
               {formatCurrency(journey.totalPrice, journey.currency)}
             </span>
             <span className="text-[11px] text-slate-500 font-mono">
-              {journey.provenance?.overallSourceType === 'provider_live' ? 'Live Provider Quote' : 'Corridor Estimated Total'}
+              {journey.aiExplanation.isFareEstimated === false ? 'Live Provider Quote' : 'Corridor Estimated Total'}
             </span>
           </div>
 
