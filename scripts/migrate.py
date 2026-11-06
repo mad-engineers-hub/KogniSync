@@ -17,11 +17,16 @@ import os
 import sys
 from pathlib import Path
 
-# Ensure backend directory is in sys.path
+# Ensure backend and scripts directories are in sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = REPO_ROOT / "backend"
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 from alembic.config import Config
 from alembic import command
@@ -84,6 +89,8 @@ def check_schema_health(db_url: str | None = None) -> dict:
                 import importlib.util
                 baseline_path = BACKEND_DIR / "alembic" / "versions" / "0001_canonical_baseline.py"
                 spec = importlib.util.spec_from_file_location("baseline_module", baseline_path)
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"Failed to load module spec or loader from {baseline_path}")
                 baseline_module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(baseline_module)
                 baseline_module.verify_canonical_schema_structural_compatibility(engine)

@@ -112,6 +112,8 @@ def test_2_successful_baseline_verification(pg_isolated_schema):
     import importlib.util
     baseline_path = BACKEND_DIR / "alembic" / "versions" / "0001_canonical_baseline.py"
     spec = importlib.util.spec_from_file_location("baseline_module", baseline_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Failed to load module spec or loader from {baseline_path}")
     baseline_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(baseline_module)
 
