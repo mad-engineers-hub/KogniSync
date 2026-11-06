@@ -75,6 +75,12 @@ def build_default_segment_provenance(
             is_estimate=True,
             notes="Estimated from corridor distance, typical operating speeds, and connection buffers.",
         ),
+        "distance": AttributeProvenanceSchema(
+            source_type="deterministic_estimate",
+            provider_name="KogniSync Geo-Engine",
+            is_estimate=True,
+            notes="Calculated from geographic coordinates and corridor network topology.",
+        ),
         "departure_time": AttributeProvenanceSchema(
             source_type="deterministic_estimate",
             provider_name="KogniSync Timetable Synthesizer",
@@ -101,9 +107,21 @@ def build_default_segment_provenance(
         ),
     }
 
+    # Ensure aliases "departure" and "arrival" are also mapped for unified provenance access
+    default_attrs["departure"] = default_attrs["departure_time"]
+    default_attrs["arrival"] = default_attrs["arrival_time"]
+
     # Apply any attribute-level overrides (e.g. from live external provider)
     for attr_key, attr_prov in overrides.items():
         default_attrs[attr_key] = attr_prov
+        if attr_key == "departure":
+            default_attrs["departure_time"] = attr_prov
+        elif attr_key == "departure_time":
+            default_attrs["departure"] = attr_prov
+        elif attr_key == "arrival":
+            default_attrs["arrival_time"] = attr_prov
+        elif attr_key == "arrival_time":
+            default_attrs["arrival"] = attr_prov
 
     has_live = any(attr.source_type == "provider_live" for attr in default_attrs.values())
     all_live = all(attr.source_type == "provider_live" for attr in default_attrs.values())
@@ -148,9 +166,26 @@ def build_journey_provenance(segments: list[JourneySegmentSchema]) -> JourneyPro
         overall = "deterministic_estimate"
         summary = "Composed of deterministic estimates and simulated availability; real-world booking requires provider verification."
 
+    # Strict invariant: A journey must never be represented as fully confirmed
+    # when critical attributes remain estimated, simulated, or unknown.
+    has_estimated_attributes = any(
+        s.provenance and any(a.is_estimate or a.source_type != "provider_live" for a in s.provenance.attributes.values())
+        for s in segments
+    )
+    all_segments_live = (
+        bool(segments)
+        and all(
+            s.provenance is not None
+            and s.provenance.source_type == "provider_live"
+            and not s.provenance.is_estimate
+            for s in segments
+        )
+    )
+    is_fully_confirmed = all_segments_live and not has_estimated_attributes and not has_simulated and not has_unknown
+
     return JourneyProvenanceSchema(
         overall_source_type=overall,
-        is_fully_confirmed=False,  # Never claims confirmed availability based on generated estimates
+        is_fully_confirmed=is_fully_confirmed,
         has_live_attributes=has_live,
         has_simulated_attributes=has_simulated,
         summary=summary,
