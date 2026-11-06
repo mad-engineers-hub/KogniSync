@@ -265,6 +265,13 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
   const providerSource = enrichedRoute?.source || 'deterministic_geo';
   const isGoogleSource = providerSource.includes('google');
+  const isValhallaSource = providerSource.includes('valhalla');
+
+  const providerBadgeLabel = isGoogleSource
+    ? 'Google Routes API'
+    : isValhallaSource
+    ? 'Valhalla OSM Engine'
+    : 'KogniSync Geo-Engine';
 
   return (
     <div
@@ -278,7 +285,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           </div>
           <div className="flex flex-col">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-900 font-display">
-              Google Routes & Multi-Modal Journey Map
+              Multimodal Journey Spatial Map
             </span>
             <span className="text-[10px] text-slate-500 font-mono">
               {segments[0]?.origin?.city} → {segments[segments.length - 1]?.destination?.city} · Door-to-Door Corridor
@@ -315,13 +322,13 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
           <span
             className={`inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md border ${
-              isGoogleSource
+              isGoogleSource || isValhallaSource
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                 : 'bg-blue-50 text-blue-800 border-blue-200'
             }`}
           >
             <Sparkles className="w-2.5 h-2.5" />
-            {isGoogleSource ? 'Google Routes API' : 'KogniSync Geo-Engine'}
+            {providerBadgeLabel}
           </span>
         </div>
       </div>
@@ -600,6 +607,11 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
             )}
           </div>
         )}
+
+        {/* OpenStreetMap Attribution Label */}
+        <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-slate-900/80 backdrop-blur-xs text-[10px] text-slate-400 border border-slate-800 shadow-2xs pointer-events-none select-none z-20">
+          Map data © <span className="text-slate-300 font-medium">OpenStreetMap</span> contributors
+        </div>
       </div>
 
       {/* Segment Selector & Detailed Telemetry Bar */}
@@ -726,7 +738,9 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
             <span>
               {isGoogleSource
                 ? 'Routing computed via Google Routes API v2'
-                : 'Routing computed via KogniSync deterministic spatial engine'}
+                : isValhallaSource
+                ? 'Road routing computed via Valhalla OSM Engine · Map data © OpenStreetMap contributors'
+                : 'Routing computed via KogniSync spatial engine · Map data © OpenStreetMap contributors'}
             </span>
           </div>
         </div>
