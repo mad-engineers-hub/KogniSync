@@ -65,9 +65,33 @@ flowchart TD
 
 ---
 
-## 2. Clean-Start Procedure (Zero to Demo in 60 Seconds)
+## 2. Clean-Start Procedure (Zero to Demo in One Command)
 
-### Step 1: Clone & Environment Setup
+### The Primary Launcher: Single Command Startup
+Open a single PowerShell or CMD terminal at the repository root and execute:
+
+```powershell
+.\start.bat
+```
+
+For presentations on laptops without Docker installed, use the resilient offline fallback:
+```powershell
+.\start.bat -AllowOfflineFallback
+```
+
+This single command orchestrates:
+- Preflight verification (Python 3.10+, Node 18+, Git, Port availability).
+- Virtual environment bootstrap and dependency cache hashing.
+- Infrastructure readiness (PostgreSQL 16 on `5434`, Redis 7 on `6380`).
+- Safe Alembic migrations (`scripts/migrate.py upgrade`).
+- Dual service launch (FastAPI backend on `8000`, Vite frontend on `5173`).
+- Automatic browser launch to `http://127.0.0.1:5173`.
+
+---
+
+### Alternative: Manual Step-by-Step Procedure (For Debugging)
+
+#### Step 1: Environment Setup
 ```powershell
 cd E:\KogniSync\KogniSync
 
@@ -76,28 +100,25 @@ cd E:\KogniSync\KogniSync
 
 # Optional: Safe demo state reset (cleans ephemeral holds & verifies canonical SHA-256)
 .venv\Scripts\python scripts/reset_demo_state.py
-
-# Backend environment is pre-configured in .env
-# (Zero external paid credentials required for deterministic demo)
 ```
 
-### Step 2: Launch Local Storage (Optional / Container Gate)
+#### Step 2: Launch Local Storage (Optional / Container Gate)
 If Docker is available:
 ```powershell
 docker-compose up -d postgres redis
 ```
 *(If Docker is not running, KogniSync automatically activates its offline-resilient client fallback so evaluators are never blocked).*
 
-### Step 3: Start Backend API Service
+#### Step 3: Start Backend API Service
 ```powershell
 # In Terminal 1
 cd E:\KogniSync\KogniSync
 $env:PYTHONPATH='backend'
-.venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
+.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-*Health Check:* Open `http://localhost:5000/api/v1/health` or `http://localhost:5000/api/v1/journeys/providers`.
+*Health Check:* Open `http://127.0.0.1:8000/health`.
 
-### Step 4: Start Frontend Client
+#### Step 4: Start Frontend Client
 ```powershell
 # In Terminal 2
 cd E:\KogniSync\KogniSync\frontend
