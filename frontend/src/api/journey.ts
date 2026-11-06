@@ -210,18 +210,27 @@ export async function parseTravelIntent(
   text: string,
   currentContext?: TravelContext
 ): Promise<TravelIntent> {
+  const t = text ? text.trim() : '';
+  if (!t && !currentContext?.origin && !currentContext?.destination) {
+    throw new Error('Input text is required for travel intent extraction.');
+  }
+
   try {
     const res = await apiClient<{ intent: TravelIntent }>('/api/v1/ai/parse-travel-intent', {
       method: 'POST',
       body: JSON.stringify({
-        text,
+        text: t,
         current_context: currentContext,
       }),
     });
     if (res?.intent) {
       return res.intent;
     }
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.status >= 400 && err?.status < 500) {
+      // Preserve explicit validation and authentication errors
+      throw err;
+    }
     console.warn('Backend AI intent extraction failed/timed out, applying client fallback heuristic:', err);
   }
 
@@ -230,7 +239,10 @@ export async function parseTravelIntent(
 }
 
 export function extractClientIntent(text: string, currentContext?: TravelContext): TravelIntent {
-  const t = text.trim();
+  const t = text ? text.trim() : '';
+  if (!t && !currentContext?.origin && !currentContext?.destination) {
+    throw new Error('Input text is required for travel intent extraction.');
+  }
   const lower = t.toLowerCase();
 
   let origin: string | null = currentContext?.origin || null;
