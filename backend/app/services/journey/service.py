@@ -33,6 +33,14 @@ from app.services.journey.schemas import (
     SegmentProvenanceSchema,
     TransportMode,
 )
+from app.services.journey.provider import (
+    NormalizedTransportSegmentResponse,
+    ProviderErrorCode,
+    TransportProvider,
+    TransportProviderError,
+    TransportSegmentSearchRequest,
+)
+from app.services.journey.google_routes_adapter import GoogleRoutesTransportAdapter
 from app.services.journey.hubs import (
     build_iso_date,
     estimate_corridor_distance_km,
@@ -156,21 +164,40 @@ class JourneyOrchestrationService:
         self,
         optimizer: JourneyOptimizerService | None = None,
         provider_registry: dict[str, Callable] | None = None,
+        transport_providers: list[TransportProvider] | None = None,
     ):
         self.optimizer = optimizer or optimizer_service
-        self.provider_registry = provider_registry or {}
+        self.legacy_provider_registry = provider_registry or {}
+        if transport_providers is not None:
+            self.transport_providers = transport_providers
+        else:
+            self.transport_providers = self._init_default_providers()
 
-    async def _query_provider(
+    def _init_default_providers(self) -> list[TransportProvider]:
+        """Initializes default production transport provider adapters from settings."""
+        try:
+            from app.core.config import settings
+            return [
+                GoogleRoutesTransportAdapter(
+                    api_key=settings.GOOGLE_MAPS_API_KEY,
+                    enabled=settings.GOOGLE_ROUTES_ENABLED,
+                )
+            ]
+        except Exception as e:
+            logger.warning(f"Could not initialize default transport providers: {e}")
+            return []
+
+    async def _query_legacy_provider(
         self,
         provider_key: str,
         context: dict[str, Any],
         provider_status: dict[str, str],
     ) -> dict[str, AttributeProvenanceSchema] | None:
         """
-        Safely invokes registered external providers with strict timeout and error boundaries.
-        Never leaks internal exceptions or credentials.
+        Safely invokes registered legacy external provider callables with timeout and error boundaries.
+        Preserves backwards compatibility with M2.1 test mock registries.
         """
-        provider_fn = self.provider_registry.get(provider_key)
+        provider_fn = self.legacy_provider_registry.get(provider_key)
         if not provider_fn:
             return None
 
@@ -194,6 +221,116 @@ class JourneyOrchestrationService:
             logger.error(f"Transport provider '{provider_key}' encountered an error: {type(e).__name__}")
             provider_status[provider_key] = "error_fallback_deterministic"
             return None
+
+    # Keep _query_provider as alias to _query_legacy_provider for existing callers
+    _query_provider = _query_legacy_provider
+
+    async def _query_transport_providers(
+        self,
+        request: TransportSegmentSearchRequest,
+        provider_status: dict[str, str],
+    ) -> tuple[dict[str, AttributeProvenanceSchema], dict[str, Any]]:
+        """
+        Queries registered TransportProvider adapters matching the segment mode.
+        Returns attribute provenance overrides and normalized metric overrides (duration, distance).
+        Safely catches TransportProviderError, applies error classification, and falls back cleanly.
+        """
+        overrides: dict[str, AttributeProvenanceSchema] = {}
+        metric_overrides: dict[str, Any] = {}
+
+        for provider in self.transport_providers:
+            if request.mode not in provider.supported_modes:
+                continue
+
+            p_id = provider.provider_id
+            if not provider.is_available():
+                if p_id not in provider_status:
+                    provider_status[p_id] = "unconfigured_fallback_deterministic"
+                continue
+
+            try:
+                norm_res = await asyncio.wait_for(
+                    provider.search_segment(request),
+                    timeout=getattr(provider, "timeout_seconds", 3.0) + 0.5,
+                )
+                if norm_res and norm_res.attribute_provenance:
+                    provider_status[p_id] = "active_live"
+                    overrides.update(norm_res.attribute_provenance)
+                    if norm_res.duration_minutes is not None:
+                        metric_overrides["duration_minutes"] = norm_res.duration_minutes
+                    if norm_res.distance_km is not None:
+                        metric_overrides["distance_km"] = norm_res.distance_km
+                    # First matching live provider completes the segment query
+                    break
+            except asyncio.TimeoutError:
+                logger.warning(f"Transport provider '{p_id}' timed out during journey search")
+                provider_status[p_id] = "timeout_fallback_deterministic"
+            except TransportProviderError as tpe:
+                logger.warning(f"Transport provider '{p_id}' error [{tpe.code.value}]: {tpe.message}")
+                if tpe.code == ProviderErrorCode.AUTH_FAILURE:
+                    provider_status[p_id] = "auth_failed_fallback_deterministic"
+                elif tpe.code == ProviderErrorCode.RATE_LIMITED:
+                    provider_status[p_id] = "rate_limited_fallback_deterministic"
+                elif tpe.code == ProviderErrorCode.EMPTY_RESULT:
+                    provider_status[p_id] = "empty_fallback_deterministic"
+                elif tpe.code == ProviderErrorCode.MALFORMED_RESPONSE:
+                    provider_status[p_id] = "malformed_fallback_deterministic"
+                elif tpe.code == ProviderErrorCode.TIMEOUT:
+                    provider_status[p_id] = "timeout_fallback_deterministic"
+                elif tpe.code == ProviderErrorCode.UNSUPPORTED_MODE:
+                    provider_status[p_id] = "unsupported_mode_fallback_deterministic"
+                else:
+                    provider_status[p_id] = "unavailable_fallback_deterministic"
+            except Exception as e:
+                logger.error(f"Unexpected error in transport provider '{p_id}': {type(e).__name__}")
+                provider_status[p_id] = "error_fallback_deterministic"
+
+        return overrides, metric_overrides
+
+    async def _resolve_segment_data(
+        self,
+        origin_node: LocationSchema,
+        dest_node: LocationSchema,
+        mode: TransportMode,
+        provider_name: str,
+        default_duration: int,
+        default_distance: float,
+        provider_status: dict[str, str],
+        departure_time: str | None = None,
+        arrival_deadline: str | None = None,
+    ) -> tuple[int, float, dict[str, AttributeProvenanceSchema]]:
+        """
+        Resolves duration, distance, and provenance overrides for a single segment.
+        Tries legacy callable registry first, then registered TransportProvider adapters.
+        """
+        # 1. Check legacy registry
+        if provider_name in self.legacy_provider_registry:
+            legacy_res = await self._query_legacy_provider(
+                provider_name,
+                {"origin": origin_node.city, "destination": dest_node.city, "mode": mode},
+                provider_status,
+            )
+            return default_duration, default_distance, legacy_res or {}
+
+        # 2. Check registered TransportProvider adapters
+        req = TransportSegmentSearchRequest(
+            origin_title=origin_node.name,
+            origin_city=origin_node.city,
+            origin_lat=origin_node.coordinates.lat,
+            origin_lng=origin_node.coordinates.lng,
+            destination_title=dest_node.name,
+            destination_city=dest_node.city,
+            destination_lat=dest_node.coordinates.lat,
+            destination_lng=dest_node.coordinates.lng,
+            mode=mode,
+            departure_time=departure_time,
+            arrival_deadline=arrival_deadline,
+        )
+
+        overrides, metric_overrides = await self._query_transport_providers(req, provider_status)
+        duration = metric_overrides.get("duration_minutes", default_duration)
+        distance = metric_overrides.get("distance_km", default_distance)
+        return duration, distance, overrides
 
     async def search_journeys(self, request: JourneySearchRequest) -> JourneySearchResponse:
         """
@@ -487,27 +624,55 @@ class JourneyOrchestrationService:
 
             final_arr_date = build_iso_date(date_str, target_arr_hour, target_arr_min)
 
-            # Compute segment boundaries backward
+            # Query providers / resolve data for each segment
+            dur3, dist3, prov_overrides3 = await self._resolve_segment_data(
+                origin_node=arr_hub,
+                dest_node=dest_hubs.user_node,
+                mode=arch["last_mile"]["mode"],
+                provider_name=arch["last_mile"]["provider"],
+                default_duration=arch["last_mile"]["duration_min"],
+                default_distance=arch["last_mile"]["distance_km"],
+                provider_status=provider_status,
+            )
+
+            dur2, dist2, prov_overrides2 = await self._resolve_segment_data(
+                origin_node=dep_hub,
+                dest_node=arr_hub,
+                mode=arch["main_transport"]["mode"],
+                provider_name=arch["main_transport"]["provider"],
+                default_duration=arch["main_transport"]["duration_min"],
+                default_distance=arch["main_transport"]["distance_km"],
+                provider_status=provider_status,
+            )
+
+            dur1, dist1, prov_overrides1 = await self._resolve_segment_data(
+                origin_node=origin_hubs.user_node,
+                dest_node=dep_hub,
+                mode=arch["first_mile"]["mode"],
+                provider_name=arch["first_mile"]["provider"],
+                default_duration=arch["first_mile"]["duration_min"],
+                default_distance=arch["first_mile"]["distance_km"],
+                provider_status=provider_status,
+            )
+
+            # Compute segment boundaries backward with resolved durations
             seg3_arr = final_arr_date
-            seg3_dep = seg3_arr - timedelta(minutes=arch["last_mile"]["duration_min"])
+            seg3_dep = seg3_arr - timedelta(minutes=dur3)
 
             seg2_arr = seg3_dep - timedelta(minutes=arch["main_transport"]["transfer_buffer_min"])
-            seg2_dep = seg2_arr - timedelta(minutes=arch["main_transport"]["duration_min"])
+            seg2_dep = seg2_arr - timedelta(minutes=dur2)
 
             seg1_arr = seg2_dep - timedelta(minutes=arch["first_mile"]["transfer_buffer_min"])
-            seg1_dep = seg1_arr - timedelta(minutes=arch["first_mile"]["duration_min"])
+            seg1_dep = seg1_arr - timedelta(minutes=dur1)
 
             cat = arch["category"]
 
-            # Query any registered live provider for this archetype/leg
-            live_seg2_overrides = await self._query_provider(
-                arch["main_transport"]["provider"],
-                {"origin": dep_hub.city, "destination": arr_hub.city, "mode": arch["main_transport"]["mode"]},
-                provider_status,
-            )
-
             # Leg 1: First-Mile
-            prov1 = build_default_segment_provenance(arch["first_mile"]["provider"], arch["first_mile"]["mode"])
+            prov1 = build_default_segment_provenance(
+                arch["first_mile"]["provider"],
+                arch["first_mile"]["mode"],
+                attribute_overrides=prov_overrides1,
+            )
             segment1 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-01",
                 sequence=1,
@@ -518,11 +683,11 @@ class JourneyOrchestrationService:
                 destination=dep_hub,
                 departure_time=seg1_dep.isoformat(),
                 arrival_time=seg1_arr.isoformat(),
-                duration_minutes=arch["first_mile"]["duration_min"],
+                duration_minutes=dur1,
                 price=arch["first_mile"]["price"],
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=45, is_real_inventory=False),
-                distance_km=arch["first_mile"]["distance_km"],
+                distance_km=dist1,
                 carbon_kg=arch["first_mile"]["carbon_kg"],
                 comfort_score=arch["first_mile"]["comfort_score"],
                 transfer_buffer_minutes=arch["first_mile"]["transfer_buffer_min"],
@@ -534,7 +699,7 @@ class JourneyOrchestrationService:
             prov2 = build_default_segment_provenance(
                 arch["main_transport"]["provider"],
                 arch["main_transport"]["mode"],
-                attribute_overrides=live_seg2_overrides,
+                attribute_overrides=prov_overrides2,
             )
             segment2 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-02",
@@ -547,11 +712,11 @@ class JourneyOrchestrationService:
                 destination=arr_hub,
                 departure_time=seg2_dep.isoformat(),
                 arrival_time=seg2_arr.isoformat(),
-                duration_minutes=arch["main_transport"]["duration_min"],
+                duration_minutes=dur2,
                 price=arch["main_transport"]["price"],
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=18, is_real_inventory=False),
-                distance_km=arch["main_transport"]["distance_km"],
+                distance_km=dist2,
                 carbon_kg=arch["main_transport"]["carbon_kg"],
                 comfort_score=arch["main_transport"]["comfort_score"],
                 seat_class=arch["main_transport"]["seat_class"],
@@ -561,7 +726,11 @@ class JourneyOrchestrationService:
             )
 
             # Leg 3: Last-Mile Drop-Off
-            prov3 = build_default_segment_provenance(arch["last_mile"]["provider"], arch["last_mile"]["mode"])
+            prov3 = build_default_segment_provenance(
+                arch["last_mile"]["provider"],
+                arch["last_mile"]["mode"],
+                attribute_overrides=prov_overrides3,
+            )
             segment3 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-03",
                 sequence=3,
@@ -572,11 +741,11 @@ class JourneyOrchestrationService:
                 destination=dest_hubs.user_node,
                 departure_time=seg3_dep.isoformat(),
                 arrival_time=seg3_arr.isoformat(),
-                duration_minutes=arch["last_mile"]["duration_min"],
+                duration_minutes=dur3,
                 price=arch["last_mile"]["price"],
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=99, is_real_inventory=False),
-                distance_km=arch["last_mile"]["distance_km"],
+                distance_km=dist3,
                 carbon_kg=arch["last_mile"]["carbon_kg"],
                 comfort_score=arch["last_mile"]["comfort_score"],
                 notes=f"Final transfer to {dest_hubs.user_node.name}. Driver will meet at {arr_hub.name} arrival exit.",
