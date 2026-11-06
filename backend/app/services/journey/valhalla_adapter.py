@@ -75,7 +75,17 @@ class ValhallaTransportAdapter(TransportProvider):
         )
 
     def _map_costing(self, mode: TransportMode) -> str:
-        """Maps internal transport mode to Valhalla costing profile."""
+        """
+        Maps internal transport mode to Valhalla costing profile.
+
+        Semantics:
+        - walk -> pedestrian (pedestrian sidewalks, crossings, footpaths)
+        - rapido -> motorcycle (two-wheeler road corridors)
+        - cab, auto -> auto (standard automobile / urban road network)
+        - bus -> auto (road routing along vehicular corridors/feeders; models physical
+                 road distance and travel time, NOT public-transit schedules/lines/stops)
+        - all other modes (flight, train, metro) -> explicitly raise UNSUPPORTED_MODE
+        """
         mode_lower = mode.lower()
         if mode_lower == "walk":
             return "pedestrian"
@@ -83,6 +93,9 @@ class ValhallaTransportAdapter(TransportProvider):
             # Valhalla supports motorcycle costing for two-wheelers
             return "motorcycle"
         elif mode_lower in ("cab", "auto", "bus"):
+            # Note: 'bus' uses Valhalla 'auto' costing to compute physical road network distance
+            # and travel time along road corridors. This models vehicular road routing,
+            # NOT public-transit routing, fixed bus routes, or scheduled bus timetables.
             return "auto"
         else:
             raise TransportProviderError(

@@ -661,3 +661,33 @@ async def test_17_real_valhalla_health_probe():
     # If unstarted: status in ("unreachable", "degraded", "unconfigured"), is_available == False
     assert health["status"] in ("healthy", "unreachable", "degraded", "unconfigured")
 
+
+# ============================================================================
+# 18. MODE SEMANTICS AND COSTING MAPPING AUDIT
+# ============================================================================
+
+def test_18_mode_semantics_and_costing_mappings():
+    """Verify exact costing profiles: walk->pedestrian, rapido->motorcycle, cab/auto/bus->auto."""
+    adapter = ValhallaTransportAdapter(base_url="http://localhost:8002", enabled=True)
+
+    # 1. Walk maps to pedestrian
+    assert adapter._map_costing("walk") == "pedestrian"
+
+    # 2. Rapido maps to motorcycle
+    assert adapter._map_costing("rapido") == "motorcycle"
+
+    # 3. Cab and auto map to auto (vehicular road network)
+    assert adapter._map_costing("cab") == "auto"
+    assert adapter._map_costing("auto") == "auto"
+
+    # 4. Bus maps to auto (road network routing for bus corridors/feeders, not scheduled transit)
+    assert adapter._map_costing("bus") == "auto"
+
+    # 5. Non-road modes fail explicitly with UNSUPPORTED_MODE
+    for unsupported in ["flight", "train", "metro", "ferry", "hyperloop"]:
+        with pytest.raises(TransportProviderError) as exc_info:
+            adapter._map_costing(unsupported)  # type: ignore
+        assert exc_info.value.code == ProviderErrorCode.UNSUPPORTED_MODE
+        assert exc_info.value.provider_id == "valhalla"
+
+

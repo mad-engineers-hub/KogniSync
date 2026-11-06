@@ -157,10 +157,15 @@ The `ValhallaTransportAdapter` maps internal transport modes into Valhalla costi
 | :--- | :--- | :--- |
 | **`cab`** | `auto` | Automobile road network routing with standard speed limits. |
 | **`auto`** | `auto` | Auto-rickshaw urban road network routing. |
-| **`bus`** | `auto` | Bus feeder road network routing. |
+| **`bus`** | `auto` | Road network routing for bus corridors/feeders. Models physical road distance and vehicular travel times; does **not** model public-transit routing, fixed bus lines, or scheduled timetables. |
 | **`rapido`** | `motorcycle` | Two-wheeler motorcycle routing via OSM road corridors. |
 | **`walk`** | `pedestrian` | Pedestrian footpaths, sidewalks, and crosswalks. |
 | **`flight`**, **`train`**, **`metro`** | *Rejected* | Explicitly raises `ProviderErrorCode.UNSUPPORTED_MODE`; handled by scheduled corridor transit models. |
+
+### 6.1 Bus-as-Auto Road Routing Semantics
+In Valhalla OSM integration, the `bus` mode maps to `auto` costing. This explicitly represents:
+- **Physical Road Routing**: Traverses the vehicular road network to determine driving distance and vehicular travel time along bus corridors and feeder links.
+- **Not Public Transit Routing**: This does **not** query or simulate scheduled transit lines, fixed bus stop sequences, route numbers, or bus timetables (which require GTFS transit engines). Timetable-dependent scheduled corridor estimates are synthesized by KogniSync's corridor scheduling logic.
 
 ---
 
