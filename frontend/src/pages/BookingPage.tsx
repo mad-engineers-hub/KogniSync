@@ -46,6 +46,8 @@ export const BookingPage: React.FC = () => {
 
   // Payment Processing State
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // Automatically acquire hold on mount
   useEffect(() => {
@@ -82,9 +84,10 @@ export const BookingPage: React.FC = () => {
 
   const handleProceedToPayment = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     for (const p of passengers) {
       if (!p.fullName.trim()) {
-        alert('Please provide full name for each traveler.');
+        setFormError('Please provide full name for each traveler.');
         return;
       }
     }
@@ -95,6 +98,7 @@ export const BookingPage: React.FC = () => {
     if (!journey) return;
 
     setIsProcessingPayment(true);
+    setPaymentError(null);
     try {
       // Step 1: Create Booking
       const booking = await confirmBooking({
@@ -118,7 +122,7 @@ export const BookingPage: React.FC = () => {
       // Step 4: Navigate to confirmation
       navigate(`/trips/${trip.tripId}`);
     } catch {
-      alert('Payment processing failed. Your held seats remain preserved until TTL expiry.');
+      setPaymentError('Payment processing failed. Your held seats remain preserved until TTL expiry.');
     } finally {
       setIsProcessingPayment(false);
     }
@@ -185,21 +189,19 @@ export const BookingPage: React.FC = () => {
           </span>
           <span className="text-slate-300">→</span>
           <span
-            className={`px-2.5 py-1 rounded-lg font-semibold ${
-              step === 'details'
-                ? 'bg-blue-50 text-blue-800 border border-blue-200'
-                : 'text-slate-500'
-            }`}
+            className={`px-2.5 py-1 rounded-lg font-semibold ${step === 'details'
+              ? 'bg-blue-50 text-blue-800 border border-blue-200'
+              : 'text-slate-500'
+              }`}
           >
             2. Traveler Details
           </span>
           <span className="text-slate-300">→</span>
           <span
-            className={`px-2.5 py-1 rounded-lg font-semibold ${
-              step === 'payment'
-                ? 'bg-blue-50 text-blue-800 border border-blue-200'
-                : 'text-slate-400'
-            }`}
+            className={`px-2.5 py-1 rounded-lg font-semibold ${step === 'payment'
+              ? 'bg-blue-50 text-blue-800 border border-blue-200'
+              : 'text-slate-400'
+              }`}
           >
             3. Payment
           </span>
@@ -240,6 +242,12 @@ export const BookingPage: React.FC = () => {
         <div className="lg:col-span-7 flex flex-col gap-6">
           {step === 'details' ? (
             <div className="flex flex-col gap-5">
+              {formError && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
               <PassengerForm
                 passengers={passengers}
                 onChange={setPassengers}
@@ -288,6 +296,13 @@ export const BookingPage: React.FC = () => {
                 onProcessPayment={handleProcessPayment}
                 isProcessing={isProcessingPayment}
               />
+
+              {paymentError && (
+                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{paymentError}</span>
+                </div>
+              )}
             </div>
           )}
         </div>

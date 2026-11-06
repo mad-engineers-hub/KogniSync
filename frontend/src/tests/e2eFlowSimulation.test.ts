@@ -1,7 +1,8 @@
 import assert from 'node:assert';
 import { normalizeTravelIntent } from '../utils/travelUtils';
 import { searchJourneys, getJourneyById, extractClientIntent } from '../api/journey';
-import { createHold } from '../api/booking';
+import { createHold, confirmBooking, processPayment } from '../api/booking';
+import { buildTripFromBooking } from '../api/trips';
 import { TravelRequestState } from '../context/TravelRequestContext';
 
 console.log('=================================================================');
@@ -92,7 +93,30 @@ async function simulatePlannerToBooking(prompt: string) {
   assert(hold.expiresAt, 'Hold must have expiry');
   console.log(`5. BookingPage: Acquired hold ${hold.holdId} (Status: ${hold.status}, Expires: ${hold.expiresAt})`);
 
-  return { intent, results, topJourney };
+  // 8. Confirm Booking & Simulated Payment -> Unified TripPass
+  const booking = await confirmBooking({
+    journeyId: topJourney.id,
+    holdId: hold.holdId,
+    passengers: [{ id: 'pax-demo-1', fullName: 'Judge Evaluator', email: 'judge@hackathon.org', phone: '+91 98765 43210' }],
+    contactEmail: 'judge@hackathon.org',
+    contactPhone: '+91 98765 43210',
+  });
+  assert(booking.bookingId, 'Booking confirmation must generate bookingId');
+
+  const payment = await processPayment({
+    bookingId: booking.bookingId,
+    method: 'upi',
+    amount: booking.totalPrice * 1.05,
+  });
+  assert.strictEqual(payment.status, 'success', 'Simulated payment must succeed');
+
+  const trip = buildTripFromBooking(booking, payment);
+  assert(trip.tripId, 'Confirmed trip must have tripId');
+  assert(trip.pnr.startsWith('KOGNI-'), 'PNR must match KOGNI- format');
+  assert(trip.qrCodeUrl.startsWith('data:image/svg+xml'), 'QR code must be a self-contained offline SVG data URI');
+  console.log(`6. TripConfirmation: Generated master TripPass (PNR: ${trip.pnr}, Tickets: ${trip.tickets.length}, Offline SVG QR: valid)`);
+
+  return { intent, results, topJourney, trip };
 }
 
 async function runAll() {
