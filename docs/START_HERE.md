@@ -82,6 +82,35 @@ Once KogniSync has finished starting, the following endpoints are available:
 
 ---
 
+## 🗄️ PostgreSQL Canonical Schema Initialization
+
+KogniSync enforces strict database schema integrity and lifecycle separation:
+
+### 1. Fresh Installation Lifecycle
+When `.\start.bat` is executed on a machine with a newly created PostgreSQL container:
+1. **Empty State Detection**: The launcher inspects `public` schema tables. If `0` tables exist, it detects a fresh database.
+2. **Safe Schema Application**: It applies the immutable canonical schema (`BookingInventory/data/schema.sql`) in a single transaction, creating all 20 canonical tables without modifying or dropping any schemas.
+3. **Reference Data Population**: It loads canonical reference seed data (`BookingInventory/data/csv/`) in foreign-key dependency order via high-performance `COPY`.
+4. **Baseline Migration**: It executes Alembic migration `0001_canonical_baseline`, structurally verifying all tables, primary keys, and foreign keys before recording the baseline in `alembic_version`.
+
+### 2. Protection of Existing Databases
+- If an existing database already has the 20 canonical tables, the initializer detects `DatabaseState.INITIALIZED` and **preserves the database untouched**. Existing bookings, holds, user records, and custom data are never overwritten, dropped, or re-inserted.
+- If a database contains a partial or corrupted schema (e.g. only 5 of 20 tables exist), the initializer **fails closed** immediately to prevent data corruption.
+
+### 3. Recovery Steps for Failed Initialization
+If an unexpected connection drop or external error interrupts initialization:
+- All DDL and seed loads are executed within an atomic database transaction. Any error triggers an immediate `ROLLBACK`, leaving the database clean and empty for a safe re-run.
+- To inspect database state manually:
+  ```powershell
+  .venv\Scripts\python scripts/init_canonical_db.py --check-only
+  ```
+- To verify migration baseline compatibility:
+  ```powershell
+  .venv\Scripts\python scripts/migrate.py check
+  ```
+
+---
+
 ## 🛑 Stopping KogniSync
 
 To stop the running application:

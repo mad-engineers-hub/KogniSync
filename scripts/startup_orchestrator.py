@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -210,6 +210,15 @@ class StartupOrchestrator:
                 time.sleep(1)
 
         return "Unavailable (in-memory degraded)"
+
+    def ensure_database_initialized(self, db_url: Optional[str] = None) -> Dict[str, Any]:
+        """Ensure canonical schema is initialized if database is empty."""
+        try:
+            from scripts.init_canonical_db import ensure_canonical_schema_initialized
+        except ImportError:
+            from init_canonical_db import ensure_canonical_schema_initialized
+
+        return ensure_canonical_schema_initialized(db_url=db_url)
 
     def run_migrations(self, postgres_status: str) -> bool:
         """Run database migrations if PostgreSQL is connected."""

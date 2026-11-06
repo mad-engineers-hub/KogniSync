@@ -105,8 +105,25 @@ def check_schema_health(db_url: str | None = None) -> dict:
         engine.dispose()
 
 
-def cmd_upgrade(cfg: Config, revision: str = "head") -> None:
-    """Safely apply pending migrations."""
+def cmd_upgrade(cfg: Config, revision: str = "head", auto_init: bool = True) -> None:
+    """Safely apply pending migrations, automatically initializing canonical schema if empty."""
+    target_url = cfg.get_main_option("sqlalchemy.url")
+    if auto_init and target_url and not target_url.startswith("sqlite"):
+        try:
+            try:
+                from scripts.init_canonical_db import ensure_canonical_schema_initialized
+            except ImportError:
+                from init_canonical_db import ensure_canonical_schema_initialized
+
+            init_res = ensure_canonical_schema_initialized(db_url=target_url)
+            if init_res.get("status") == "initialized":
+                print(f"Canonical schema initialized: {init_res['message']}")
+            elif init_res.get("status") == "preserved":
+                print("Existing canonical schema detected. Preserving database data.")
+        except Exception as e:
+            print(f"Error checking or initializing canonical database: {e}", file=sys.stderr)
+            raise
+
     print(f"Applying safe migrations up to '{revision}'...")
     command.upgrade(cfg, revision)
     print("Migrations applied successfully. No organizer tables dropped or modified.")
