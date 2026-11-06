@@ -6,6 +6,7 @@ and explicit data provenance & credibility tracking (Milestone M2.1).
 Supports camelCase and snake_case transparently for frontend API alignment.
 """
 from typing import Any, Literal
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices, model_validator
 from app.services.optimizer.schemas import OptimizationWeightsInput, OptimizedJourneyOutput
 
@@ -176,11 +177,15 @@ class JourneySearchRequest(BaseModel):
             raise ValueError("Budget maximum cannot be negative.")
         if self.passengers_count < 1:
             raise ValueError("Passengers count must be at least 1.")
-        # Ensure date string has YYYY-MM-DD pattern
-        date_str = self.departure_date.strip()
-        parts = date_str.split("-")
-        if len(parts) != 3 or not all(p.isdigit() for p in parts):
-            raise ValueError("Departure date must be in YYYY-MM-DD format.")
+        # Normalize recognized colloquial dates ('tomorrow', 'today'); reject invalid formats
+        date_str = self.departure_date.strip().lower()
+        if date_str in ("tomorrow", "today"):
+            days = 1 if date_str == "tomorrow" else 0
+            self.departure_date = (datetime.now(timezone.utc) + timedelta(days=days)).strftime("%Y-%m-%d")
+        else:
+            parts = self.departure_date.strip().split("-")
+            if len(parts) != 3 or not all(p.isdigit() for p in parts):
+                raise ValueError("Departure date must be in YYYY-MM-DD format.")
         return self
 
 

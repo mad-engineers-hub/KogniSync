@@ -157,6 +157,35 @@ def build_journey_provenance(segments: list[JourneySegmentSchema]) -> JourneyPro
     )
 
 
+def calculate_calibrated_segment_carbon(
+    mode: TransportMode,
+    resolved_distance_km: float,
+    baseline_distance_km: float,
+    baseline_carbon_kg: float,
+) -> float:
+    """
+    Computes mode-aware, calibrated carbon emissions for a journey segment (Milestone M2.5).
+    - Pedestrian legs ('walk') emit 0.0 kg CO2.
+    - Road vehicles ('cab', 'rapido', 'bus', 'auto'):
+      Emissions scale proportionally with actual road distance driven:
+      carbon = baseline_carbon * (resolved_distance / baseline_distance)
+    - Dedicated transit corridors ('flight', 'train', 'metro'):
+      Road network variations must NOT distort aviation takeoff/cruise fuel burn
+      or electrified railway / metro grid models. Preserves calibrated corridor emissions.
+    """
+    if mode == "walk":
+        return 0.0
+
+    if mode in ("flight", "train", "metro"):
+        return round(baseline_carbon_kg, 1)
+
+    # Road transport modes
+    if baseline_distance_km > 0 and resolved_distance_km > 0:
+        return round(baseline_carbon_kg * (resolved_distance_km / baseline_distance_km), 1)
+
+    return round(baseline_carbon_kg, 1)
+
+
 class JourneyOrchestrationService:
     """Authoritative multimodal journey orchestration and data credibility service."""
 
@@ -675,10 +704,11 @@ class JourneyOrchestrationService:
                 arch["first_mile"]["mode"],
                 attribute_overrides=prov_overrides1,
             )
-            carbon1 = (
-                round(arch["first_mile"]["carbon_kg"] * (dist1 / arch["first_mile"]["distance_km"]), 1)
-                if arch["first_mile"]["distance_km"] > 0
-                else arch["first_mile"]["carbon_kg"]
+            carbon1 = calculate_calibrated_segment_carbon(
+                mode=arch["first_mile"]["mode"],
+                resolved_distance_km=dist1,
+                baseline_distance_km=arch["first_mile"]["distance_km"],
+                baseline_carbon_kg=arch["first_mile"]["carbon_kg"],
             )
             segment1 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-01",
@@ -708,10 +738,11 @@ class JourneyOrchestrationService:
                 arch["main_transport"]["mode"],
                 attribute_overrides=prov_overrides2,
             )
-            carbon2 = (
-                round(arch["main_transport"]["carbon_kg"] * (dist2 / arch["main_transport"]["distance_km"]), 1)
-                if arch["main_transport"]["distance_km"] > 0
-                else arch["main_transport"]["carbon_kg"]
+            carbon2 = calculate_calibrated_segment_carbon(
+                mode=arch["main_transport"]["mode"],
+                resolved_distance_km=dist2,
+                baseline_distance_km=arch["main_transport"]["distance_km"],
+                baseline_carbon_kg=arch["main_transport"]["carbon_kg"],
             )
             segment2 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-02",
@@ -743,10 +774,11 @@ class JourneyOrchestrationService:
                 arch["last_mile"]["mode"],
                 attribute_overrides=prov_overrides3,
             )
-            carbon3 = (
-                round(arch["last_mile"]["carbon_kg"] * (dist3 / arch["last_mile"]["distance_km"]), 1)
-                if arch["last_mile"]["distance_km"] > 0
-                else arch["last_mile"]["carbon_kg"]
+            carbon3 = calculate_calibrated_segment_carbon(
+                mode=arch["last_mile"]["mode"],
+                resolved_distance_km=dist3,
+                baseline_distance_km=arch["last_mile"]["distance_km"],
+                baseline_carbon_kg=arch["last_mile"]["carbon_kg"],
             )
             segment3 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-03",

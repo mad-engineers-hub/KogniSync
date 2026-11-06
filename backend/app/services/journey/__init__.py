@@ -26,7 +26,11 @@ from app.services.journey.provider import (
     TransportSegmentSearchRequest,
 )
 from app.services.journey.google_routes_adapter import GoogleRoutesTransportAdapter
-from app.services.journey.service import JourneyOrchestrationService, journey_orchestrator
+from app.services.journey.service import (
+    JourneyOrchestrationService,
+    journey_orchestrator,
+    calculate_calibrated_segment_carbon,
+)
 
 __all__ = [
     "AttributeProvenanceSchema",
@@ -52,4 +56,5 @@ __all__ = [
     "GoogleRoutesTransportAdapter",
     "JourneyOrchestrationService",
     "journey_orchestrator",
+    "calculate_calibrated_segment_carbon",
 ]

@@ -36,13 +36,12 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
   return (
     <div
       onClick={onSelectForMap}
-      className={`rounded-2xl border transition-all duration-200 overflow-hidden cursor-pointer ${
-        isSelectedForMap
-          ? 'bg-white border-blue-600 shadow-md ring-2 ring-blue-500/20'
-          : isFeatured
+      className={`rounded-2xl border transition-all duration-200 overflow-hidden cursor-pointer ${isSelectedForMap
+        ? 'bg-white border-blue-600 shadow-md ring-2 ring-blue-500/20'
+        : isFeatured
           ? 'bg-white border-blue-500 shadow-md ring-1 ring-blue-500/20'
           : 'bg-white hover:bg-slate-50/50 border-slate-200 hover:border-slate-300 shadow-sm'
-      }`}
+        }`}
     >
       {/* 1. Top Banner: Recommendation category badge, title & AI match score */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100">
@@ -243,11 +242,11 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
                   {formatCurrency(journey.totalPrice, journey.currency)}
                 </span>
                 <span className="text-xs font-mono font-semibold text-slate-500">
-                  {journey.provenance?.overallSourceType === 'provider_live' ? '(Live Quote)' : '(Est.)'}
+                  {journey.aiExplanation.isFareEstimated === false ? '(Live Quote)' : '(Est.)'}
                 </span>
               </div>
               <span className="text-[11px] text-slate-500 font-medium">
-                {journey.provenance?.overallSourceType === 'provider_live' ? 'Provider-confirmed fare' : 'Corridor estimated fare'} · All {journey.segments.length} segments combined
+                {journey.aiExplanation.isFareEstimated === false ? 'Provider-confirmed fare' : 'Corridor estimated fare'} · All {journey.segments.length} segments combined
               </span>
             </div>
 
