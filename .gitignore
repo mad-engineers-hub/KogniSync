@@ -39,3 +39,8 @@ dist-test/
 frontend/dist/
 frontend/dist-test/
 
+# Logs
+logs/
+*.log
+
+
