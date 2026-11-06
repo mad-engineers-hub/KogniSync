@@ -84,10 +84,15 @@ assert(parsedIntent.origin?.includes('Chennai'), 'Origin must contain Chennai');
 assert(parsedIntent.destination?.includes('Udupi'), 'Destination must contain Udupi');
 console.log(`✓ parseTravelIntent extracted: ${parsedIntent.origin} -> ${parsedIntent.destination} (Budget: ₹${parsedIntent.budget}).`);
 
-// Verify empty input handling
-const emptyIntent = await parseTravelIntent('');
-assert(emptyIntent !== null, 'Empty prompt must safely return fallback intent rather than throw unhandled exception');
-console.log('✓ Empty prompt safely handled with fallback intent.');
+// Verify empty input explicit validation
+await assert.rejects(
+  async () => await parseTravelIntent('   '),
+  (err: Error) => {
+    assert(err.message.includes('Input text is required') || (err as any).status === 400);
+    return true;
+  }
+);
+console.log('✓ Empty/whitespace prompt explicitly rejected with validation error.');
 
 // ============================================================================
 // TEST 3: Contract Verification Summary
