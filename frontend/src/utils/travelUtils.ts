@@ -16,6 +16,8 @@ export interface TravelRequestState {
   selectedModes: Record<TransportMode, boolean>;
   naturalLanguageQuery: string;
   understoodMessage: string | null;
+  originCoordinates?: { lat: number; lng: number } | null;
+  destinationCoordinates?: { lat: number; lng: number } | null;
 }
 
 export function formatDisplayDate(dateStr: string): string {

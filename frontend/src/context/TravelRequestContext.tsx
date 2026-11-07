@@ -21,8 +21,10 @@ export {
 
 interface TravelRequestContextValue {
   state: TravelRequestState;
-  setOrigin: (origin: string) => void;
-  setDestination: (destination: string) => void;
+  setOrigin: (origin: string, coords?: { lat: number; lng: number } | null) => void;
+  setOriginCoordinates: (coords: { lat: number; lng: number } | null) => void;
+  setDestination: (destination: string, coords?: { lat: number; lng: number } | null) => void;
+  setDestinationCoordinates: (coords: { lat: number; lng: number } | null) => void;
   setDate: (dateStr: string) => void;
   setTimeDeadlineText: (text: string) => void;
   setPassengers: (passengers: number) => void;
@@ -74,6 +76,12 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
   const initialDurationWeight = searchParams.get('durationWeight') ? parseFloat(searchParams.get('durationWeight')!) : 0.2;
   const initialComfortWeight = searchParams.get('comfortWeight') ? parseFloat(searchParams.get('comfortWeight')!) : 0.15;
   const initialCarbonWeight = searchParams.get('carbonWeight') ? parseFloat(searchParams.get('carbonWeight')!) : 0.1;
+  const initialOriginLat = searchParams.get('originLat');
+  const initialOriginLng = searchParams.get('originLng');
+  const initialOriginCoords =
+    initialOriginLat && initialOriginLng
+      ? { lat: parseFloat(initialOriginLat), lng: parseFloat(initialOriginLng) }
+      : null;
 
   const [state, setState] = useState<TravelRequestState>(() => {
     let timeText = initialArrival ? `Arrive by ${formatTime12h(initialArrival)}` : 'Anytime';
@@ -115,6 +123,8 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
       selectedModes: { ...DEFAULT_MODES },
       naturalLanguageQuery: initialQuery,
       understoodMessage: summary,
+      originCoordinates: initialOriginCoords,
+      destinationCoordinates: null,
     };
   });
 
@@ -193,9 +203,10 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
     }
   }, [searchParams]);
 
-  const setOrigin = (origin: string) => {
+  const setOrigin = (origin: string, coords?: { lat: number; lng: number } | null) => {
     setState((prev) => {
-      const next = { ...prev, origin };
+      const originCoordinates = coords !== undefined ? coords : (origin === prev.origin ? prev.originCoordinates : null);
+      const next = { ...prev, origin, originCoordinates };
       return {
         ...next,
         understoodMessage: buildUnderstoodSummary({
@@ -211,9 +222,14 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
     });
   };
 
-  const setDestination = (destination: string) => {
+  const setOriginCoordinates = (coords: { lat: number; lng: number } | null) => {
+    setState((prev) => ({ ...prev, originCoordinates: coords }));
+  };
+
+  const setDestination = (destination: string, coords?: { lat: number; lng: number } | null) => {
     setState((prev) => {
-      const next = { ...prev, destination };
+      const destinationCoordinates = coords !== undefined ? coords : (destination === prev.destination ? prev.destinationCoordinates : null);
+      const next = { ...prev, destination, destinationCoordinates };
       return {
         ...next,
         understoodMessage: buildUnderstoodSummary({
@@ -227,6 +243,10 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
         }),
       };
     });
+  };
+
+  const setDestinationCoordinates = (coords: { lat: number; lng: number } | null) => {
+    setState((prev) => ({ ...prev, destinationCoordinates: coords }));
   };
 
   const setDate = (dateStr: string) => {
@@ -323,10 +343,14 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
     setState((prev) => {
       const newOrigin = prev.destination;
       const newDest = prev.origin;
+      const newOriginCoords = prev.destinationCoordinates;
+      const newDestCoords = prev.originCoordinates;
       return {
         ...prev,
         origin: newOrigin,
         destination: newDest,
+        originCoordinates: newOriginCoords,
+        destinationCoordinates: newDestCoords,
         understoodMessage: buildUnderstoodSummary({
           origin: newOrigin,
           destination: newDest,
@@ -368,6 +392,10 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
     if (state.departureTime) {
       params.set('departureAfter', state.departureTime);
     }
+    if (state.originCoordinates) {
+      params.set('originLat', state.originCoordinates.lat.toString());
+      params.set('originLng', state.originCoordinates.lng.toString());
+    }
 
     return `/plan?${params.toString()}`;
   };
@@ -406,7 +434,9 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
       value={{
         state,
         setOrigin,
+        setOriginCoordinates,
         setDestination,
+        setDestinationCoordinates,
         setDate,
         setTimeDeadlineText,
         setPassengers,
