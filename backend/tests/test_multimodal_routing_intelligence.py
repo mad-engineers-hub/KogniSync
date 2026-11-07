@@ -125,12 +125,12 @@ class MockValhallaRoadProvider(TransportProvider):
 
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            providerId=self.provider_id,
+            provider_id=self.provider_id,
             name=self.name,
-            supportedModes=sorted(list(self.supported_modes)),
-            isAvailable=self.is_available(),
-            isLiveAuthenticated=self.is_live_authenticated(),
-            timeoutSeconds=3.0,
+            supported_modes=sorted(list(self.supported_modes)),
+            is_available=self.is_available(),
+            is_live_authenticated=self.is_live_authenticated(),
+            timeout_seconds=3.0,
         )
 
     async def search_segment(
@@ -151,30 +151,30 @@ class MockValhallaRoadProvider(TransportProvider):
         now_iso = datetime.now(timezone.utc).isoformat()
         attr_prov = {
             "duration": AttributeProvenanceSchema(
-                sourceType="provider_live",
-                providerName=self.name,
-                isEstimate=False,
+                source_type="provider_live",
+                provider_name=self.name,
+                is_estimate=False,
                 notes=f"Live road routing via {self.name} on OSM road network.",
-                lastUpdatedAt=now_iso,
+                last_updated_at=now_iso,
             ),
             "distance": AttributeProvenanceSchema(
-                sourceType="provider_live",
-                providerName=self.name,
-                isEstimate=False,
+                source_type="provider_live",
+                provider_name=self.name,
+                is_estimate=False,
                 notes=f"Physical road distance verified via {self.name}.",
-                lastUpdatedAt=now_iso,
+                last_updated_at=now_iso,
             ),
         }
 
         return NormalizedTransportSegmentResponse(
-            providerId=self.provider_id,
-            providerName=self.name,
+            provider_id=self.provider_id,
+            provider_name=self.name,
             mode=request.mode,
-            durationMinutes=self.duration_minutes,
-            distanceKm=self.distance_km,
-            departureTime=request.departure_time or now_iso,
-            arrivalTime=request.arrival_deadline or now_iso,
-            attributeProvenance=attr_prov,
+            duration_minutes=self.duration_minutes,
+            distance_km=self.distance_km,
+            departure_time=request.departure_time or now_iso,
+            arrival_time=request.arrival_deadline or now_iso,
+            attribute_provenance=attr_prov,
         )
 
 

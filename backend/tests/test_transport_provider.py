@@ -192,6 +192,7 @@ async def test_4_google_routes_successful_normalized_response():
     assert dur_prov.source_type == "provider_live"
     assert dur_prov.is_estimate is False
     assert dur_prov.provider_name == "Google Routes API v2"
+    assert dur_prov.notes is not None
     assert "Live traffic-aware" in dur_prov.notes
 
     dist_prov = res.attribute_provenance["distance"]
