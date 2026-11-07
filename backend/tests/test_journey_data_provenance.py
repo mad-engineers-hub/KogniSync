@@ -61,7 +61,7 @@ def _sample_request(**kwargs) -> JourneySearchRequest:
 @pytest.mark.anyio
 async def test_1_deterministic_attributes_labeled_correctly():
     """Verify that default corridor attributes are strictly labeled as deterministic estimates."""
-    service = JourneyOrchestrationService()
+    service = JourneyOrchestrationService(transport_providers=[])
     req = _sample_request()
     res = await service.search_journeys(req)
 
@@ -166,6 +166,8 @@ async def test_3_mixed_provenance_leg_representation():
     flight_journey = next(j for j in res.journeys if any(s.mode == "flight" for s in j.segments))
     flight_seg = next(s for s in flight_journey.segments if s.mode == "flight")
 
+    assert flight_seg.provenance is not None
+
     # In the flight leg: duration is live, but fare is still deterministic estimate
     assert flight_seg.provenance.attributes["duration"].source_type == "provider_live"
     assert flight_seg.provenance.attributes["duration"].is_estimate is False
@@ -179,6 +181,7 @@ async def test_3_mixed_provenance_leg_representation():
     assert flight_seg.provenance.has_live_provider is True
 
     # And the journey overall is mixed
+    assert flight_journey.provenance is not None
     assert flight_journey.provenance.overall_source_type == "mixed"
     assert flight_journey.provenance.has_live_attributes is True
     assert flight_journey.provenance.has_simulated_attributes is True
@@ -208,6 +211,7 @@ async def test_4_unknown_provenance_not_falsely_labeled_live():
     flight_journey = next(j for j in res.journeys if any(s.mode == "flight" for s in j.segments))
     flight_seg = next(s for s in flight_journey.segments if s.mode == "flight")
 
+    assert flight_seg.provenance is not None
     fare_prov = flight_seg.provenance.attributes["fare"]
     assert fare_prov.source_type == "unknown"
     assert fare_prov.is_estimate is True
@@ -226,14 +230,18 @@ async def test_5_generated_schedules_not_represented_as_confirmed():
     res = await service.search_journeys(_sample_request())
 
     for journey in res.journeys:
+        assert journey.provenance is not None
         assert journey.provenance.is_fully_confirmed is False
 
         for seg in journey.segments:
+            assert seg.provenance is not None
             dep_prov = seg.provenance.attributes["departure_time"]
             arr_prov = seg.provenance.attributes["arrival_time"]
 
             assert dep_prov.is_estimate is True
             assert arr_prov.is_estimate is True
+            assert dep_prov.notes is not None
+            assert arr_prov.notes is not None
             assert "estimated" in dep_prov.notes.lower() or "estimate" in dep_prov.notes.lower()
             assert "estimated" in arr_prov.notes.lower() or "estimate" in arr_prov.notes.lower()
 
@@ -253,10 +261,12 @@ async def test_6_synthetic_availability_never_real_inventory():
 
         for seg in journey.segments:
             assert seg.availability.is_real_inventory is False
+            assert seg.provenance is not None
 
             avail_prov = seg.provenance.attributes["availability"]
             assert avail_prov.source_type == "simulated"
             assert avail_prov.is_estimate is True
+            assert avail_prov.notes is not None
             assert "simulated" in avail_prov.notes.lower()
 
 
@@ -420,7 +430,7 @@ def test_11_api_response_compatibility():
 @pytest.mark.anyio
 async def test_12_explanations_accurately_reflect_provenance():
     """Verify AI explanations explicitly communicate data credibility and unverified availability."""
-    service = JourneyOrchestrationService()
+    service = JourneyOrchestrationService(transport_providers=[])
     res = await service.search_journeys(_sample_request())
 
     for j in res.journeys:
