@@ -27,8 +27,10 @@ import {
 import { TransportMode } from '../../types/journey';
 import { parseTravelIntent, TravelContext } from '../../api/journey';
 import { useTravelRequest } from '../../context/TravelRequestContext';
+import { useNotification } from '../../context/NotificationContext';
 import { locationService } from '../../services/location/locationService';
 import { LocationError } from '../../types/location';
+import { GPS_NOTIFICATION_MESSAGES } from '../../services/location/gpsNotificationMessages';
 
 interface JourneyPlannerProps {
   onSearchExecuted?: () => void;
@@ -73,16 +75,17 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
   const [isUnderstanding, setIsUnderstanding] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Global Notification System (M3.4.1)
+  const { showSuccess, showError, showWarning, dismissCategory } = useNotification();
+
   // GPS Location Autofill State (M3.4)
   const [isLocatingOrigin, setIsLocatingOrigin] = useState(false);
-  const [gpsError, setGpsError] = useState<string | null>(null);
   const [gpsSuccess, setGpsSuccess] = useState(false);
   const locationRequestIdRef = useRef<number>(0);
 
   const handleUseCurrentLocation = async () => {
     const currentRequestId = ++locationRequestIdRef.current;
     setIsLocatingOrigin(true);
-    setGpsError(null);
     setGpsSuccess(false);
 
     try {
@@ -99,6 +102,16 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
       setGpsSuccess(true);
       setTimeout(() => setGpsSuccess(false), 3000);
 
+      // Replaces any obsolete GPS errors with global notification
+      if (result.accuracyMeters > 2500) {
+        showWarning(GPS_NOTIFICATION_MESSAGES.POOR_ACCURACY, { category: 'gps' });
+      } else {
+        showSuccess(GPS_NOTIFICATION_MESSAGES.SUCCESS, {
+          category: 'gps',
+          duration: 4500,
+        });
+      }
+
       if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
         console.log(`[GPS-DIAGNOSTIC] JourneyPlanner: From field set to "${result.formattedAddress}" with coordinates:`, result.coordinates);
       }
@@ -106,12 +119,18 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
       if (currentRequestId !== locationRequestIdRef.current) return;
 
       if (err instanceof LocationError) {
-        setGpsError(err.userFriendlyMessage);
+        if (err.code === 'POOR_ACCURACY') {
+          showWarning(err.userFriendlyMessage, { category: 'gps' });
+        } else {
+          showError(err.userFriendlyMessage, { category: 'gps' });
+        }
         if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
           console.warn(`[GPS-DIAGNOSTIC] LocationError caught: code=${err.code}, message="${err.message}", userMessage="${err.userFriendlyMessage}"`);
         }
       } else {
-        setGpsError('Unable to detect current location. Please enter it manually.');
+        showError('Your device could not provide a location. Check your location settings and retry.', {
+          category: 'gps',
+        });
       }
     } finally {
       if (currentRequestId === locationRequestIdRef.current) {
@@ -392,7 +411,7 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
                   onChange={(e) => {
                     locationRequestIdRef.current++;
                     setOrigin(e.target.value, null);
-                    if (gpsError) setGpsError(null);
+                    dismissCategory('gps');
                   }}
                   placeholder="Origin city"
                   className="w-full bg-transparent text-xs font-semibold text-[#071B49] focus:outline-none"
@@ -403,7 +422,7 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
                     onClick={() => {
                       locationRequestIdRef.current++;
                       setOrigin('', null);
-                      if (gpsError) setGpsError(null);
+                      dismissCategory('gps');
                     }}
                     className="text-slate-300 hover:text-slate-500 cursor-pointer p-0.5"
                     title="Clear origin"
@@ -441,22 +460,6 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
                   )}
                 </button>
               </div>
-              {gpsError && (
-                <div className="flex items-center justify-between gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md mt-1 animate-in fade-in">
-                  <div className="flex items-start gap-1.5 min-w-0">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600 mt-0.5" />
-                    <span className="leading-tight">{gpsError}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setGpsError(null)}
-                    className="text-amber-500 hover:text-amber-700 cursor-pointer p-0.5 shrink-0"
-                    aria-label="Dismiss error"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Swap Button Centered between From & To */}

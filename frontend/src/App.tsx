@@ -12,6 +12,8 @@ import { ConfirmationPage } from './pages/ConfirmationPage';
 import { XRExperiencePage } from './pages/XRExperiencePage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { TravelRequestProvider } from './context/TravelRequestContext';
+import { NotificationProvider } from './context/NotificationContext';
+import { GlobalNotificationContainer } from './components/common/GlobalNotificationContainer';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,24 +28,27 @@ export const App: React.FC = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <TravelRequestProvider>
-          <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-            <Navbar />
-            <main className="flex-1 flex flex-col">
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/explore" element={<ExplorePage />} />
-                <Route path="/plan" element={<ResultsPage />} />
-                <Route path="/plan/:journeyId" element={<DetailsPage />} />
-                <Route path="/booking/:journeyId" element={<BookingPage />} />
-                <Route path="/trips/:tripId" element={<ConfirmationPage />} />
-                <Route path="/xr/:sceneId" element={<XRExperiencePage />} />
-                <Route path="*" element={<NotFoundPage />} />
-              </Routes>
-            </main>
-            <Footer />
-          </div>
-        </TravelRequestProvider>
+        <NotificationProvider>
+          <GlobalNotificationContainer />
+          <TravelRequestProvider>
+            <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+              <Navbar />
+              <main className="flex-1 flex flex-col">
+                <Routes>
+                  <Route path="/" element={<HomePage />} />
+                  <Route path="/explore" element={<ExplorePage />} />
+                  <Route path="/plan" element={<ResultsPage />} />
+                  <Route path="/plan/:journeyId" element={<DetailsPage />} />
+                  <Route path="/booking/:journeyId" element={<BookingPage />} />
+                  <Route path="/trips/:tripId" element={<ConfirmationPage />} />
+                  <Route path="/xr/:sceneId" element={<XRExperiencePage />} />
+                  <Route path="*" element={<NotFoundPage />} />
+                </Routes>
+              </main>
+              <Footer />
+            </div>
+          </TravelRequestProvider>
+        </NotificationProvider>
       </BrowserRouter>
     </QueryClientProvider>
   );

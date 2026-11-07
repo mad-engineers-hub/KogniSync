@@ -126,18 +126,21 @@ Reverse-geocoding provides human-readable context (e.g., `"Indiranagar, Bangalor
 
 ---
 
-## 6. Error Handling & Non-Blocking Resilience Matrix
+## 6. Error Handling & Global Notification Resilience Matrix (M3.4 / M3.4.1)
 
-| Error Scenario | Error Code | Diagnostic Indicator | UI Behavior | Fallback Strategy |
+All GPS outcomes are presented via an application-level toast overlay (`NotificationProvider` / `GlobalNotificationContainer`). Inline form error banners have been removed to guarantee zero layout shift within the Planner.
+
+| GPS State | Error Code | Canonical Notification Message | Presentation | Dismissal Behavior |
 | :--- | :--- | :--- | :--- | :--- |
-| Insecure HTTP Context | `INSECURE_CONTEXT` | Non-localhost HTTP origin | Informs user browser requires HTTPS/localhost for geolocation | Manual text entry remains focused. |
-| User denies site permission | `PERMISSION_DENIED` | Browser prompt dismissed/blocked | Shows clear alert: *"Location permission was denied. Please allow location access in your browser or enter starting point manually."* | Manual entry remains 100% focused and editable. |
-| OS / System Location disabled | `OS_PERMISSION_DENIED` | `navigator.permissions` granted but API returns code 1 | Shows alert: *"Browser permission granted, but Windows/system location is disabled. Please enable Location in your device settings."* | Manual entry remains 100% focused and editable. |
-| GPS timeout (>12s) | `TIMEOUT` | High-accuracy GNSS failed to lock | Automatically falls back to network triangulation; if that also fails, alerts user | Manual entry remains 100% focused and editable. |
-| Hardware signal lost | `POSITION_UNAVAILABLE` | No cell/GNSS/Wi-Fi fix | Shows warning: *"GPS signal is currently unavailable."* | Standard manual city input. |
-| Low accuracy (>2,500m) | `POOR_ACCURACY` | Large geolocation uncertainty | Uses coordinates but tags `isEstimate: true` with approximate city region. | User can freely edit/refine the detected city. |
-| Backend API offline | `NETWORK_ERROR` | Network request failed | Degrades silently to client-side spatial hub matcher (19 regional hubs). | No exception thrown, resolves nearest hub. |
-| User edits autofilled text | N/A | Keystroke / clear in input field | Coordinates decouple (`originCoordinates = null`). `locationRequestIdRef` discards in-flight async GPS results. | Prevents stale GPS coordinates from routing mismatched cities or racing with manual typing. |
+| **Success** | N/A | `"Your current location has been detected and added as your starting point."` | Emerald toast, `role="status"` | Auto-dismisses in 4.5s; dismiss button. Replaces obsolete errors. |
+| **OS Location Disabled** | `OS_PERMISSION_DENIED` | `"Device location is turned off. Enable Location services in Windows Settings."` | Rose toast, `role="alert"` | Persistent until dismissed; replaced upon success. |
+| **Browser Blocked** | `PERMISSION_DENIED` | `"Location access is blocked. Allow location permission in your browser settings."` | Rose toast, `role="alert"` | Persistent until dismissed; replaced upon success. |
+| **Timeout** | `TIMEOUT` | `"Location detection timed out. Please try again."` | Rose toast, `role="alert"` | Persistent until dismissed; replaced upon success. |
+| **Position Unavailable** | `POSITION_UNAVAILABLE` | `"Your device could not provide a location. Check your location settings and retry."` | Rose toast, `role="alert"` | Persistent until dismissed; replaced upon success. |
+| **Insecure Context** | `INSECURE_CONTEXT` | `"Location detection requires a secure connection (HTTPS or localhost)."` | Rose toast, `role="alert"` | Persistent until dismissed; replaced upon success. |
+| **Reverse Geocode Failure**| `REVERSE_GEOCODING_FAILED` | `"Coordinates received, but the place name could not be resolved. You can enter your starting point manually."` | Rose toast, `role="alert"` | Persistent until dismissed; replaced upon success. |
+| **Poor Accuracy** | `POOR_ACCURACY` | `"Location detected, but accuracy is limited. Please verify your starting point."` | Amber toast, `role="status"` | Persistent until dismissed; manual refinement unblocked. |
+| **User Manual Edit** | N/A | Obsolete GPS notifications evicted via `dismissCategory('gps')`. | Zero layout shift | Coordinates decoupled; in-flight GPS resolution discarded. |
 
 ---
 
@@ -165,12 +168,12 @@ Reverse-geocoding provides human-readable context (e.g., `"Indiranagar, Bangalor
 - Test 1: Manual Entry Preservation & Editing: PASS
 - Test 2: Browser Geolocation Mocking (Permission Granted): PASS
 - Test 3: Reverse Geocoding & Coordinate Preservation: PASS
-- Test 4: Permission Denied Error Handling (Browser Site Level): PASS
+- Test 4: Browser Permission Denied Error Handling: PASS
 - Test 5: OS / System Location Disabled Error Handling (Windows Settings Block): PASS
 - Test 6: Insecure Context Error Handling (Non-HTTPS Origin): PASS
-- Test 7: Geolocation Timeout Error Handling: PASS
-- Test 8: Position Unavailable Error Handling: PASS
-- Test 9: Automatic Fallback from High Accuracy to Standard Network Triangulation: PASS
+- Test 7: Automatic Fallback from High Accuracy to Standard Network Triangulation: PASS
+- Test 8: Geolocation Timeout Error Handling: PASS
+- Test 9: Position Unavailable Error Handling: PASS
 - Test 10: Poor Accuracy Handling: PASS
 - Test 11: Reverse Geocoding Failure Resilience: PASS
 - Test 12: Privacy Protection (No continuous watchPosition): PASS
@@ -178,4 +181,15 @@ Reverse-geocoding provides human-readable context (e.g., `"Indiranagar, Bangalor
 - Test 14: Native Mobile Bridge Contract Verification: PASS
 - Test 15: End-to-End Travel Request Coordinate Preservation: PASS
 - Test 16: Race Condition Prevention: Manual Typing Takes Precedence Over Delayed GPS: PASS
+- Test 17: Standardized GPS Notification Messages Specification Conformance: PASS
+- Test 18: Success Toast Generation & Auto-Dismiss Duration (4.5s): PASS
+- Test 19: Distinct Error Notifications across all Failure Modes: PASS
+- Test 20: Notification Manual Dismissal: PASS
+- Test 21: Auto-Dismiss Timer Eviction Behavior: PASS
+- Test 22: Duplicate Notification Suppression for Identical Errors: PASS
+- Test 23: Category-Based Replacement (Success Replaces Obsolete Error): PASS
+- Test 24: Desktop Single-Line Layout & Styling Contract: PASS
+- Test 25: Mobile Responsive Wrapping Layout Contract: PASS
+- Test 26: Zero Planner Layout Shift Guarantee (Fixed Overlay): PASS
+- Test 27: ARIA Live-Region & Accessibility Semantics: PASS
 

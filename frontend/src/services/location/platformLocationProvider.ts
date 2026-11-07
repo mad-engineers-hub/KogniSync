@@ -15,6 +15,7 @@ import {
   LocationErrorCode,
   PlatformLocationProvider,
 } from '../../types/location';
+import { GPS_NOTIFICATION_MESSAGES } from './gpsNotificationMessages';
 
 export class BrowserLocationProvider implements PlatformLocationProvider {
   readonly id = 'browser_geolocation';
@@ -66,7 +67,7 @@ export class BrowserLocationProvider implements PlatformLocationProvider {
       throw new LocationError(
         'INSECURE_CONTEXT',
         'Geolocation requires a secure context (HTTPS or localhost).',
-        'Location detection requires a secure connection (HTTPS or localhost). Please enter your location manually.'
+        GPS_NOTIFICATION_MESSAGES.INSECURE_CONTEXT
       );
     }
 
@@ -143,26 +144,24 @@ export class BrowserLocationProvider implements PlatformLocationProvider {
           }
 
           let code: LocationErrorCode = 'POSITION_UNAVAILABLE';
-          let userMessage = 'Unable to determine your current location. Please enter it manually.';
+          let userMessage: string = GPS_NOTIFICATION_MESSAGES.POSITION_UNAVAILABLE;
 
           if (err.code === 1) {
             // Check if site permission is granted in browser
             const perm = await this.checkPermissionStatus();
             if (perm === 'granted') {
               code = 'OS_PERMISSION_DENIED';
-              userMessage =
-                'Browser permission is allowed, but device/Windows location is disabled. Please turn on Location in Windows settings, or enter your starting point manually.';
+              userMessage = GPS_NOTIFICATION_MESSAGES.OS_LOCATION_DISABLED;
             } else {
               code = 'PERMISSION_DENIED';
-              userMessage =
-                'Location access was denied in your browser. Please allow location permissions in your browser bar, or enter your starting point manually.';
+              userMessage = GPS_NOTIFICATION_MESSAGES.BROWSER_PERMISSION_DENIED;
             }
           } else if (err.code === 2) {
             code = 'POSITION_UNAVAILABLE';
-            userMessage = 'GPS signal is currently unavailable. Please enter your location manually.';
+            userMessage = GPS_NOTIFICATION_MESSAGES.POSITION_UNAVAILABLE;
           } else if (err.code === 3) {
             code = 'TIMEOUT';
-            userMessage = 'Location detection timed out. Please try again or type your starting city.';
+            userMessage = GPS_NOTIFICATION_MESSAGES.TIMEOUT;
           }
 
           reject(new LocationError(code, err.message, userMessage));

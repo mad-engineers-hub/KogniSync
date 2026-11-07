@@ -1,7 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { MapPin, ArrowRightLeft, LocateFixed, Loader2, Check, AlertCircle, X } from 'lucide-react';
+import { MapPin, ArrowRightLeft, LocateFixed, Loader2, Check, X } from 'lucide-react';
 import { Coordinates, LocationError } from '../../types/location';
 import { locationService } from '../../services/location/locationService';
+import { useNotification } from '../../context/NotificationContext';
+import { GPS_NOTIFICATION_MESSAGES } from '../../services/location/gpsNotificationMessages';
 
 export interface LocationInputProps {
   origin: string;
@@ -34,15 +36,14 @@ export const LocationInput: React.FC<LocationInputProps> = ({
   originCoordinates,
   onOriginCoordinatesChange,
 }) => {
+  const { showSuccess, showError, showWarning, dismissCategory } = useNotification();
   const [isLocating, setIsLocating] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
   const locationRequestIdRef = useRef<number>(0);
 
   const handleUseCurrentLocation = async () => {
     const currentRequestId = ++locationRequestIdRef.current;
     setIsLocating(true);
-    setLocationError(null);
     setIsSuccess(false);
 
     try {
@@ -52,12 +53,27 @@ export const LocationInput: React.FC<LocationInputProps> = ({
       onOriginCoordinatesChange?.(result.coordinates);
       setIsSuccess(true);
       setTimeout(() => setIsSuccess(false), 3000);
+
+      if (result.accuracyMeters > 2500) {
+        showWarning(GPS_NOTIFICATION_MESSAGES.POOR_ACCURACY, { category: 'gps' });
+      } else {
+        showSuccess(GPS_NOTIFICATION_MESSAGES.SUCCESS, {
+          category: 'gps',
+          duration: 4500,
+        });
+      }
     } catch (err) {
       if (currentRequestId !== locationRequestIdRef.current) return;
       if (err instanceof LocationError) {
-        setLocationError(err.userFriendlyMessage);
+        if (err.code === 'POOR_ACCURACY') {
+          showWarning(err.userFriendlyMessage, { category: 'gps' });
+        } else {
+          showError(err.userFriendlyMessage, { category: 'gps' });
+        }
       } else {
-        setLocationError('Unable to detect current location. Please enter it manually.');
+        showError('Your device could not provide a location. Check your location settings and retry.', {
+          category: 'gps',
+        });
       }
     } finally {
       if (currentRequestId === locationRequestIdRef.current) {
@@ -71,9 +87,7 @@ export const LocationInput: React.FC<LocationInputProps> = ({
     // If user edits text manually, clear previous coordinates to avoid coordinate/text mismatch
     onOriginChange(val, null);
     onOriginCoordinatesChange?.(null);
-    if (locationError) {
-      setLocationError(null);
-    }
+    dismissCategory('gps');
   };
 
   return (
@@ -187,24 +201,6 @@ export const LocationInput: React.FC<LocationInputProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Non-blocking Location Error Banner */}
-      {locationError && (
-        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] mt-1 animate-in fade-in">
-          <div className="flex items-start gap-1.5 min-w-0">
-            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-            <span className="leading-tight">{locationError}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setLocationError(null)}
-            className="text-amber-500 hover:text-amber-700 p-0.5 cursor-pointer shrink-0"
-            aria-label="Dismiss error"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
     </div>
   );
 };
