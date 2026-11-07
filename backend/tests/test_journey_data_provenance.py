@@ -61,7 +61,7 @@ def _sample_request(**kwargs) -> JourneySearchRequest:
 @pytest.mark.anyio
 async def test_1_deterministic_attributes_labeled_correctly():
     """Verify that default corridor attributes are strictly labeled as deterministic estimates."""
-    service = JourneyOrchestrationService()
+    service = JourneyOrchestrationService(transport_providers=[])
     req = _sample_request()
     res = await service.search_journeys(req)
 
@@ -420,7 +420,7 @@ def test_11_api_response_compatibility():
 @pytest.mark.anyio
 async def test_12_explanations_accurately_reflect_provenance():
     """Verify AI explanations explicitly communicate data credibility and unverified availability."""
-    service = JourneyOrchestrationService()
+    service = JourneyOrchestrationService(transport_providers=[])
     res = await service.search_journeys(_sample_request())
 
     for j in res.journeys:

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -33,12 +31,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # Optional Valhalla OpenStreetMap routing profile (M3.1)
+  # Optional Valhalla OpenStreetMap routing profile (M3.1 / M3.2)
   # Activated only via: docker compose --profile valhalla up -d
   # Safe for Windows 11 Docker Desktop with conservative memory limits (elevation/admins disabled)
   valhalla:
     profiles: ["valhalla"]
-    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
+    image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest@sha256:060da5b92e6024a67f65135c236d918b021d63e73d1808a0d55b7e7cbd17240c
     container_name: kognisync-valhalla
     restart: unless-stopped
     ports:

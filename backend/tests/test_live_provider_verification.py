@@ -45,7 +45,8 @@ def test_1_provider_credential_audit_and_blocked_status():
     assert resp.status_code == 200
     data = resp.json()
     assert "providers" in data
-    assert data["liveVerificationStatus"] == "BLOCKED — credentials unavailable"
+    google_cap = next(p for p in data["providers"] if p["providerId"] == "google_routes")
+    assert google_cap["liveVerificationStatus"] == "BLOCKED — credentials unavailable"
 
 
 # ============================================================================
