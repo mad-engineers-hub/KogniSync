@@ -8,6 +8,7 @@ const tests = [
   'src/tests/optimizer.test.ts',
   'src/tests/apiContracts.test.ts',
   'src/tests/trustAwareJourney.test.ts',
+  'src/tests/multimodalRoutingIntelligence.test.ts',
 ];
 
 for (const testPath of tests) {

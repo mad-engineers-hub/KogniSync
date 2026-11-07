@@ -140,6 +140,10 @@ class JourneySchema(BaseModel):
     total_duration_minutes: int = Field(alias="totalDurationMinutes")
     travel_duration_minutes: int | None = Field(default=None, alias="travelDurationMinutes")
     waiting_duration_minutes: int | None = Field(default=None, alias="waitingDurationMinutes")
+    in_vehicle_duration_minutes: int | None = Field(default=None, alias="inVehicleDurationMinutes")
+    walking_duration_minutes: int | None = Field(default=None, alias="walkingDurationMinutes")
+    is_connection_feasible: bool = Field(default=True, alias="isConnectionFeasible")
+    connection_feasibility_notes: list[str] = Field(default_factory=list, alias="connectionFeasibilityNotes")
     total_price: float = Field(alias="totalPrice")
     currency: str = "INR"
     total_transfers: int = Field(default=0, alias="totalTransfers")
