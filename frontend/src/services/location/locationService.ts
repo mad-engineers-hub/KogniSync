@@ -63,6 +63,10 @@ export class LocationService {
   }): Promise<LocationResult> {
     const provider = this.getProvider();
 
+    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.log(`[GPS-DIAGNOSTIC] locationService.getCurrentLocation invoked with provider: ${provider.name}`);
+    }
+
     if (!provider.isSupported()) {
       throw new LocationError(
         'UNSUPPORTED_PLATFORM',
@@ -71,14 +75,10 @@ export class LocationService {
       );
     }
 
-    options?.onProgress?.('Detecting your GPS location...');
+    options?.onProgress?.('Detecting your location...');
 
-    // Single-shot position acquisition
-    const position = await provider.getCurrentPosition({
-      enableHighAccuracy: true,
-      timeout: 10000,
-      maximumAge: 60000,
-    });
+    // Single-shot position acquisition (handles high accuracy + low accuracy network fallback)
+    const position = await provider.getCurrentPosition();
 
     options?.onProgress?.('Resolving location name...');
 
@@ -89,10 +89,15 @@ export class LocationService {
       position.timestamp
     );
 
+    if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+      console.log(
+        `[GPS-DIAGNOSTIC] Location successfully resolved: address="${result.formattedAddress}", city="${result.city}", accuracy=±${Math.round(result.accuracyMeters)}m, isEstimate=${result.isEstimate}`
+      );
+    }
+
     return result;
   }
 }
 
 // Global singleton instance
 export const locationService = new LocationService();
-

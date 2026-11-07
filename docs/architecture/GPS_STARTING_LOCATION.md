@@ -75,6 +75,8 @@ export interface GeolocationPositionData {
 
 export type LocationErrorCode =
   | 'PERMISSION_DENIED'
+  | 'OS_PERMISSION_DENIED'
+  | 'INSECURE_CONTEXT'
   | 'POSITION_UNAVAILABLE'
   | 'TIMEOUT'
   | 'UNSUPPORTED_PLATFORM'
@@ -126,14 +128,16 @@ Reverse-geocoding provides human-readable context (e.g., `"Indiranagar, Bangalor
 
 ## 6. Error Handling & Non-Blocking Resilience Matrix
 
-| Error Scenario | Error Code | UI Behavior | Fallback Strategy |
-| :--- | :--- | :--- | :--- |
-| User denies permission | `PERMISSION_DENIED` | Shows subtle amber alert: *"Location permission was denied. Please enter starting point manually."* | Manual entry remains 100% focused and editable. |
-| GPS timeout (>10s) | `TIMEOUT` | Shows warning: *"Location detection timed out. Please enter your starting city."* | Retains previous text or prompts city typing. |
-| Hardware signal lost | `POSITION_UNAVAILABLE` | Shows warning: *"GPS signal is currently unavailable."* | Standard manual city input. |
-| Low accuracy (>2,500m) | `POOR_ACCURACY` | Uses coordinates but tags `isEstimate: true` with approximate city region. | User can freely edit/refine the detected city. |
-| Backend API offline | `NETWORK_ERROR` | Degrades silently to client-side spatial hub matcher. | No exception thrown, resolves nearest hub. |
-| User edits autofilled text | N/A | Coordinates decouple (`originCoordinates = null`). | Prevents stale GPS coordinates from routing mismatched cities. |
+| Error Scenario | Error Code | Diagnostic Indicator | UI Behavior | Fallback Strategy |
+| :--- | :--- | :--- | :--- | :--- |
+| Insecure HTTP Context | `INSECURE_CONTEXT` | Non-localhost HTTP origin | Informs user browser requires HTTPS/localhost for geolocation | Manual text entry remains focused. |
+| User denies site permission | `PERMISSION_DENIED` | Browser prompt dismissed/blocked | Shows clear alert: *"Location permission was denied. Please allow location access in your browser or enter starting point manually."* | Manual entry remains 100% focused and editable. |
+| OS / System Location disabled | `OS_PERMISSION_DENIED` | `navigator.permissions` granted but API returns code 1 | Shows alert: *"Browser permission granted, but Windows/system location is disabled. Please enable Location in your device settings."* | Manual entry remains 100% focused and editable. |
+| GPS timeout (>12s) | `TIMEOUT` | High-accuracy GNSS failed to lock | Automatically falls back to network triangulation; if that also fails, alerts user | Manual entry remains 100% focused and editable. |
+| Hardware signal lost | `POSITION_UNAVAILABLE` | No cell/GNSS/Wi-Fi fix | Shows warning: *"GPS signal is currently unavailable."* | Standard manual city input. |
+| Low accuracy (>2,500m) | `POOR_ACCURACY` | Large geolocation uncertainty | Uses coordinates but tags `isEstimate: true` with approximate city region. | User can freely edit/refine the detected city. |
+| Backend API offline | `NETWORK_ERROR` | Network request failed | Degrades silently to client-side spatial hub matcher (19 regional hubs). | No exception thrown, resolves nearest hub. |
+| User edits autofilled text | N/A | Keystroke / clear in input field | Coordinates decouple (`originCoordinates = null`). `locationRequestIdRef` discards in-flight async GPS results. | Prevents stale GPS coordinates from routing mismatched cities or racing with manual typing. |
 
 ---
 
@@ -142,7 +146,8 @@ Reverse-geocoding provides human-readable context (e.g., `"Indiranagar, Bangalor
 1. **User-Triggered Execution**: Geolocation is requested **strictly upon user click** on the GPS locate button. No geolocation call occurs on component mount or page load.
 2. **Zero Continuous Tracking**: `navigator.geolocation.watchPosition` is strictly prohibited. The system executes a single-shot position acquisition and terminates.
 3. **No Storage of Coordinate History**: Raw latitude and longitude are not persisted in database audit trails or user tracking logs.
-4. **Credential Isolation**: External reverse-geocoding APIs and keys are managed server-side; no secrets or tokens are exposed in client frontend bundles.
+4. **Development Diagnostics Only**: `[GPS-DIAGNOSTIC]` log statements are guarded by `import.meta.env.DEV` to avoid emitting detailed coordinates or debug statements in production.
+5. **Credential Isolation**: External reverse-geocoding APIs and keys are managed server-side; no secrets or tokens are exposed in client frontend bundles.
 
 ---
 
@@ -160,13 +165,17 @@ Reverse-geocoding provides human-readable context (e.g., `"Indiranagar, Bangalor
 - Test 1: Manual Entry Preservation & Editing: PASS
 - Test 2: Browser Geolocation Mocking (Permission Granted): PASS
 - Test 3: Reverse Geocoding & Coordinate Preservation: PASS
-- Test 4: Permission Denied Error Handling: PASS
-- Test 5: Geolocation Timeout Error Handling: PASS
-- Test 6: Position Unavailable Error Handling: PASS
-- Test 7: Poor Accuracy Handling: PASS
-- Test 8: Reverse Geocoding Failure Resilience: PASS
-- Test 9: Privacy Protection (No continuous watchPosition): PASS
-- Test 10: Unsupported Platform Fallback: PASS
-- Test 11: Native Mobile Bridge Contract Verification: PASS
-- Test 12: End-to-End Travel Request Coordinate Preservation: PASS
+- Test 4: Permission Denied Error Handling (Browser Site Level): PASS
+- Test 5: OS / System Location Disabled Error Handling (Windows Settings Block): PASS
+- Test 6: Insecure Context Error Handling (Non-HTTPS Origin): PASS
+- Test 7: Geolocation Timeout Error Handling: PASS
+- Test 8: Position Unavailable Error Handling: PASS
+- Test 9: Automatic Fallback from High Accuracy to Standard Network Triangulation: PASS
+- Test 10: Poor Accuracy Handling: PASS
+- Test 11: Reverse Geocoding Failure Resilience: PASS
+- Test 12: Privacy Protection (No continuous watchPosition): PASS
+- Test 13: Unsupported Platform Fallback: PASS
+- Test 14: Native Mobile Bridge Contract Verification: PASS
+- Test 15: End-to-End Travel Request Coordinate Preservation: PASS
+- Test 16: Race Condition Prevention: Manual Typing Takes Precedence Over Delayed GPS: PASS
 

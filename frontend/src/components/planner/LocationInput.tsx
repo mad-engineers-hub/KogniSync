@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { MapPin, ArrowRightLeft, LocateFixed, Loader2, Check, AlertCircle, X } from 'lucide-react';
 import { Coordinates, LocationError } from '../../types/location';
 import { locationService } from '../../services/location/locationService';
@@ -37,30 +37,37 @@ export const LocationInput: React.FC<LocationInputProps> = ({
   const [isLocating, setIsLocating] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+  const locationRequestIdRef = useRef<number>(0);
 
   const handleUseCurrentLocation = async () => {
+    const currentRequestId = ++locationRequestIdRef.current;
     setIsLocating(true);
     setLocationError(null);
     setIsSuccess(false);
 
     try {
       const result = await locationService.getCurrentLocation();
+      if (currentRequestId !== locationRequestIdRef.current) return;
       onOriginChange(result.formattedAddress, result.coordinates);
       onOriginCoordinatesChange?.(result.coordinates);
       setIsSuccess(true);
       setTimeout(() => setIsSuccess(false), 3000);
     } catch (err) {
+      if (currentRequestId !== locationRequestIdRef.current) return;
       if (err instanceof LocationError) {
         setLocationError(err.userFriendlyMessage);
       } else {
         setLocationError('Unable to detect current location. Please enter it manually.');
       }
     } finally {
-      setIsLocating(false);
+      if (currentRequestId === locationRequestIdRef.current) {
+        setIsLocating(false);
+      }
     }
   };
 
   const handleOriginInputChange = (val: string) => {
+    locationRequestIdRef.current++;
     // If user edits text manually, clear previous coordinates to avoid coordinate/text mismatch
     onOriginChange(val, null);
     onOriginCoordinatesChange?.(null);
@@ -184,14 +191,14 @@ export const LocationInput: React.FC<LocationInputProps> = ({
       {/* Non-blocking Location Error Banner */}
       {locationError && (
         <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] mt-1 animate-in fade-in">
-          <div className="flex items-center gap-1.5">
-            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-            <span>{locationError}</span>
+          <div className="flex items-start gap-1.5 min-w-0">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+            <span className="leading-tight">{locationError}</span>
           </div>
           <button
             type="button"
             onClick={() => setLocationError(null)}
-            className="text-amber-500 hover:text-amber-700 p-0.5 cursor-pointer"
+            className="text-amber-500 hover:text-amber-700 p-0.5 cursor-pointer shrink-0"
             aria-label="Dismiss error"
           >
             <X className="w-3 h-3" />

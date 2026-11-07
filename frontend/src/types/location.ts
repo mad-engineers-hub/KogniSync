@@ -21,8 +21,10 @@ export interface GeolocationPositionData {
 
 export type LocationErrorCode =
   | 'PERMISSION_DENIED'
+  | 'OS_PERMISSION_DENIED'
   | 'POSITION_UNAVAILABLE'
   | 'TIMEOUT'
+  | 'INSECURE_CONTEXT'
   | 'UNSUPPORTED_PLATFORM'
   | 'POOR_ACCURACY'
   | 'REVERSE_GEOCODING_FAILED'
