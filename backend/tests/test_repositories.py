@@ -228,4 +228,5 @@ async def test_12_rollback_behavior_on_failure(async_session: AsyncSession):
 
     # Re-fetch item to verify database state was untouched
     refetched = await inv_repo.get_by_id(target_id)
+    assert refetched is not None
     assert refetched.held_units == original_held

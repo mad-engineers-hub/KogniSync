@@ -124,6 +124,7 @@ async def test_2_journey_never_fully_confirmed_with_estimates_or_simulations():
         # Every segment must have unconfirmed availability
         for seg in j.segments:
             assert seg.availability.is_real_inventory is False
+            assert seg.provenance is not None
             assert seg.provenance.attributes["availability"].source_type == "simulated"
             assert seg.provenance.attributes["fare"].is_estimate is True
 
@@ -312,6 +313,7 @@ async def test_6_real_provider_metrics_influence_optimizer():
 
     # First mile cab was updated by provider
     assert fastest.segments[0].duration_minutes == 15
+    assert fastest.segments[0].provenance is not None
     assert fastest.segments[0].provenance.attributes["duration"].source_type == "provider_live"
     assert fastest.segments[0].provenance.attributes["fare"].source_type == "deterministic_estimate"
     assert fastest.provenance.overall_source_type == "mixed"
