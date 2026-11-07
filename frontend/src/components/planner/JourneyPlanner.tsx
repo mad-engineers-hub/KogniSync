@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Sparkles,
@@ -21,10 +21,15 @@ import {
   Footprints,
   Check,
   Loader2,
+  LocateFixed,
 } from 'lucide-react';
 import { TransportMode } from '../../types/journey';
 import { parseTravelIntent, TravelContext } from '../../api/journey';
 import { useTravelRequest } from '../../context/TravelRequestContext';
+import { useNotification } from '../../context/NotificationContext';
+import { locationService } from '../../services/location/locationService';
+import { LocationError } from '../../types/location';
+import { GPS_NOTIFICATION_MESSAGES } from '../../services/location/gpsNotificationMessages';
 
 interface JourneyPlannerProps {
   onSearchExecuted?: () => void;
@@ -68,6 +73,70 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
   // AI Loading & Confirmation Feedback State
   const [isUnderstanding, setIsUnderstanding] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Global Notification System (M3.4.1)
+  const { showSuccess, showError, showWarning, dismissCategory } = useNotification();
+
+  // GPS Location Autofill State (M3.4)
+  const [isLocatingOrigin, setIsLocatingOrigin] = useState(false);
+  const [gpsSuccess, setGpsSuccess] = useState(false);
+  const locationRequestIdRef = useRef<number>(0);
+
+  const handleUseCurrentLocation = async () => {
+    const currentRequestId = ++locationRequestIdRef.current;
+    setIsLocatingOrigin(true);
+    setGpsSuccess(false);
+
+    try {
+      const result = await locationService.getCurrentLocation();
+      // Guard against race conditions: ignore if user manually edited while GPS was resolving
+      if (currentRequestId !== locationRequestIdRef.current) {
+        if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+          console.log('[GPS-DIAGNOSTIC] Stale location result discarded due to newer user edit.');
+        }
+        return;
+      }
+
+      setOrigin(result.formattedAddress, result.coordinates);
+      setGpsSuccess(true);
+      setTimeout(() => setGpsSuccess(false), 3000);
+
+      // Replaces any obsolete GPS errors with global notification
+      if (result.accuracyMeters > 2500) {
+        showWarning(GPS_NOTIFICATION_MESSAGES.POOR_ACCURACY, { category: 'gps' });
+      } else {
+        showSuccess(GPS_NOTIFICATION_MESSAGES.SUCCESS, {
+          category: 'gps',
+          duration: 4500,
+        });
+      }
+
+      if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+        console.log(`[GPS-DIAGNOSTIC] JourneyPlanner: From field set to "${result.formattedAddress}" with coordinates:`, result.coordinates);
+      }
+    } catch (err) {
+      if (currentRequestId !== locationRequestIdRef.current) return;
+
+      if (err instanceof LocationError) {
+        if (err.code === 'POOR_ACCURACY') {
+          showWarning(err.userFriendlyMessage, { category: 'gps' });
+        } else {
+          showError(err.userFriendlyMessage, { category: 'gps' });
+        }
+        if (typeof import.meta !== 'undefined' && import.meta.env?.DEV) {
+          console.warn(`[GPS-DIAGNOSTIC] LocationError caught: code=${err.code}, message="${err.message}", userMessage="${err.userFriendlyMessage}"`);
+        }
+      } else {
+        showError('Your device could not provide a location. Check your location settings and retry.', {
+          category: 'gps',
+        });
+      }
+    } finally {
+      if (currentRequestId === locationRequestIdRef.current) {
+        setIsLocatingOrigin(false);
+      }
+    }
+  };
 
   // Determine whether the expanded form should be visible
   const isExpanded = displayState === 'expanded' || activeTab === 'structured';
@@ -333,24 +402,62 @@ export const JourneyPlanner: React.FC<JourneyPlannerProps> = ({ onSearchExecuted
             {/* From Field */}
             <div className="flex-1 flex flex-col gap-1 min-w-0">
               <span className="text-[11px] font-medium text-[#52627A]">From</span>
-              <div className="flex items-center gap-2 border border-[#DCE5F2] rounded-xl px-3 py-2 bg-white shadow-2xs hover:border-[#1769FF]/50 transition-colors h-10">
+              <div className="flex items-center gap-1.5 border border-[#DCE5F2] rounded-xl px-3 py-2 bg-white shadow-2xs hover:border-[#1769FF]/50 transition-colors h-10">
                 <MapPin className="w-3.5 h-3.5 text-slate-700 shrink-0" />
                 <input
                   type="text"
                   value={state.origin}
-                  onChange={(e) => setOrigin(e.target.value)}
+                  onChange={(e) => {
+                    locationRequestIdRef.current++;
+                    setOrigin(e.target.value, null);
+                    dismissCategory('gps');
+                  }}
                   placeholder="Origin city"
                   className="w-full bg-transparent text-xs font-semibold text-[#071B49] focus:outline-none"
                 />
                 {state.origin && (
                   <button
                     type="button"
-                    onClick={() => setOrigin('')}
-                    className="text-slate-300 hover:text-slate-500 cursor-pointer"
+                    onClick={() => {
+                      locationRequestIdRef.current++;
+                      setOrigin('', null);
+                      dismissCategory('gps');
+                    }}
+                    className="text-slate-300 hover:text-slate-500 cursor-pointer p-0.5"
+                    title="Clear origin"
                   >
                     <X className="w-3 h-3" />
                   </button>
                 )}
+                {/* GPS Autofill Button */}
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  disabled={isLocatingOrigin}
+                  className={`p-1 rounded-md border transition-all cursor-pointer flex items-center justify-center shrink-0 ${
+                    isLocatingOrigin
+                      ? 'bg-blue-50 border-blue-200 text-blue-600'
+                      : gpsSuccess
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-600'
+                      : 'bg-slate-50 hover:bg-blue-50 border-slate-200 hover:border-blue-300 text-slate-400 hover:text-blue-600'
+                  }`}
+                  title={
+                    isLocatingOrigin
+                      ? 'Detecting your location...'
+                      : gpsSuccess
+                      ? `Location detected: ${state.origin}`
+                      : 'Use my current location'
+                  }
+                  aria-label="Use my current location"
+                >
+                  {isLocatingOrigin ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : gpsSuccess ? (
+                    <Check className="w-3 h-3" />
+                  ) : (
+                    <LocateFixed className="w-3 h-3" />
+                  )}
+                </button>
               </div>
             </div>
 

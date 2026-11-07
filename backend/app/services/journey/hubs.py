@@ -421,7 +421,25 @@ class ResolvedHubContext:
     metro_hub: LocationSchema
 
 
-def resolve_hub_context(location_str: str, is_origin: bool) -> ResolvedHubContext:
+def _hub_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_lat / 2.0) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(d_lon / 2.0) ** 2
+    )
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+    return r * c
+
+
+def resolve_hub_context(
+    location_str: str,
+    is_origin: bool,
+    custom_coordinates: CoordinatesSchema | None = None,
+) -> ResolvedHubContext:
     raw = (location_str or "").strip()
     lower = raw.lower()
 
@@ -444,6 +462,19 @@ def resolve_hub_context(location_str: str, is_origin: bool) -> ResolvedHubContex
                         parent_city_key = city
                         is_locality = False
                         break
+
+    if not parent_city_key and custom_coordinates:
+        # Spatial resolution: resolve to closest registered hub if text did not match directly
+        closest_city: str | None = None
+        min_dist = float("inf")
+        for key, p in CITY_HUB_REGISTRY.items():
+            dist = _hub_distance_km(custom_coordinates.lat, custom_coordinates.lng, p.lat, p.lng)
+            if dist < min_dist:
+                min_dist = dist
+                closest_city = key
+        if closest_city:
+            parent_city_key = closest_city
+            is_locality = True
 
     capitalized_raw = raw.capitalize() if raw else ("Bangalore" if is_origin else "Chennai")
 
@@ -475,15 +506,21 @@ def resolve_hub_context(location_str: str, is_origin: bool) -> ResolvedHubContex
         )
         is_locality = False
 
+    user_coords = (
+        custom_coordinates
+        if custom_coordinates
+        else CoordinatesSchema(
+            lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
+            lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
+        )
+    )
+
     user_node = LocationSchema(
         id=f"loc-usr-{'orig' if is_origin else 'dest'}-{slugify(raw or profile.city)}",
         name=f"{capitalized_raw}" if is_locality else f"{profile.city} City Hub",
         city=f"{capitalized_raw} ({profile.city})" if is_locality else profile.city,
         type="address" if is_locality else "landmark",
-        coordinates=CoordinatesSchema(
-            lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
-            lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
-        ),
+        coordinates=user_coords,
     )
 
     railway_hub = LocationSchema(

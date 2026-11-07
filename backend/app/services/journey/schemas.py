@@ -407,6 +407,16 @@ class JourneySearchRequest(BaseModel):
         validation_alias=AliasChoices("natural_language_query", "naturalLanguageQuery"),
         serialization_alias="naturalLanguageQuery",
     )
+    origin_coordinates: CoordinatesSchema | None = Field(
+        default=None,
+        validation_alias=AliasChoices("origin_coordinates", "originCoordinates"),
+        serialization_alias="originCoordinates",
+    )
+    destination_coordinates: CoordinatesSchema | None = Field(
+        default=None,
+        validation_alias=AliasChoices("destination_coordinates", "destinationCoordinates"),
+        serialization_alias="destinationCoordinates",
+    )
 
     @model_validator(mode="after")
     def validate_request_bounds(self):

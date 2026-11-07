@@ -514,9 +514,9 @@ class JourneyOrchestrationService:
         dest_str = request.destination.strip()
         date_str = request.departure_date.strip()
 
-        # 1. Resolve hubs for origin and destination
-        origin_hubs = resolve_hub_context(origin_str, is_origin=True)
-        dest_hubs = resolve_hub_context(dest_str, is_origin=False)
+        # 1. Resolve hubs for origin and destination (incorporating exact GPS coordinates when supplied)
+        origin_hubs = resolve_hub_context(origin_str, is_origin=True, custom_coordinates=request.origin_coordinates)
+        dest_hubs = resolve_hub_context(dest_str, is_origin=False, custom_coordinates=request.destination_coordinates)
 
         route_distance_km = estimate_corridor_distance_km(origin_hubs.parent_city, dest_hubs.parent_city)
         route_slug = f"{slugify(origin_str)}-to-{slugify(dest_str)}"

@@ -9,6 +9,7 @@ const tests = [
   'src/tests/apiContracts.test.ts',
   'src/tests/trustAwareJourney.test.ts',
   'src/tests/multimodalRoutingIntelligence.test.ts',
+  'src/tests/gpsStartingLocation.test.ts',
 ];
 
 for (const testPath of tests) {

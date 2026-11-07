@@ -165,6 +165,8 @@ export interface TravelRequest {
   budgetMax?: number;
   passengersCount: number;
   weights: OptimizationWeights;
+  originCoordinates?: { lat: number; lng: number };
+  destinationCoordinates?: { lat: number; lng: number };
 }
 
 export interface JourneySearchResponse {
