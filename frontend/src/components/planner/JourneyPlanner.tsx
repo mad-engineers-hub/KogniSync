@@ -22,7 +22,6 @@ import {
   Check,
   Loader2,
   LocateFixed,
-  AlertCircle,
 } from 'lucide-react';
 import { TransportMode } from '../../types/journey';
 import { parseTravelIntent, TravelContext } from '../../api/journey';
