@@ -146,6 +146,7 @@ async def test_2_valhalla_driving_route_normalization():
     assert res.attribute_provenance["duration"].source_type == "provider_live"
     assert res.attribute_provenance["duration"].is_estimate is False
     assert res.attribute_provenance["duration"].provider_name == "Valhalla OSM Routing Engine"
+    assert res.attribute_provenance["duration"].notes is not None
     assert "OpenStreetMap" in res.attribute_provenance["duration"].notes
 
     assert res.attribute_provenance["distance"].source_type == "provider_live"
@@ -481,6 +482,7 @@ async def test_12_provenance_correctness_with_valhalla():
     assert seg1.distance_km == 18.5
 
     # Segment provenance
+    assert seg1.provenance is not None
     assert seg1.provenance.has_live_provider is True
     assert seg1.provenance.attributes["duration"].source_type == "provider_live"
     assert seg1.provenance.attributes["duration"].provider_name == "Valhalla OSM Routing Engine"
@@ -489,6 +491,7 @@ async def test_12_provenance_correctness_with_valhalla():
     assert seg1.provenance.attributes["availability"].source_type == "simulated"
 
     # Journey overall provenance
+    assert fastest.provenance is not None
     assert fastest.provenance.overall_source_type == "mixed"
     assert fastest.provenance.is_fully_confirmed is False
     assert fastest.ai_explanation.is_availability_verified is False
@@ -638,6 +641,7 @@ async def test_16_google_adapter_regression_protection():
 
     fastest = next(j for j in res.journeys if j.recommendation_category == "fastest")
     assert fastest.segments[0].duration_minutes == 24
+    assert fastest.segments[0].provenance is not None
     assert fastest.segments[0].provenance.attributes["duration"].provider_name == "Google Routes API v2"
 
 

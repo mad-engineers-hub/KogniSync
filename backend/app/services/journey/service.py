@@ -9,7 +9,7 @@ and explicit attribute-level data provenance & credibility tracking (Milestone M
 import asyncio
 import inspect
 from datetime import timedelta
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict
 from app.core.logging import logger
 from app.services.optimizer.schemas import (
     JourneyCandidateInput,
@@ -41,6 +41,10 @@ from app.services.journey.provider import (
     TransportSegmentSearchRequest,
 )
 from app.services.journey.google_routes_adapter import GoogleRoutesTransportAdapter
+from app.services.journey.connection_validator import (
+    validate_journey_connections,
+    ConnectionEvaluationResult,
+)
 from app.services.journey.hubs import (
     build_iso_date,
     estimate_corridor_distance_km,
@@ -49,6 +53,57 @@ from app.services.journey.hubs import (
     resolve_hub_context,
     slugify,
 )
+
+
+class FirstMileDefinition(TypedDict):
+    mode: TransportMode
+    provider: str
+    vehicle_name: str
+    hub: LocationSchema
+    duration_min: int
+    price: float
+    distance_km: float
+    carbon_kg: float
+    comfort_score: float
+    transfer_buffer_min: int
+
+
+class MainTransportDefinition(TypedDict):
+    mode: TransportMode
+    provider: str
+    vehicle_name: str
+    vehicle_number: str
+    dep_hub: LocationSchema
+    arr_hub: LocationSchema
+    duration_min: int
+    price: float
+    distance_km: float
+    carbon_kg: float
+    comfort_score: float
+    seat_class: str
+    notes: str
+    transfer_buffer_min: int
+
+
+class LastMileDefinition(TypedDict):
+    mode: TransportMode
+    provider: str
+    vehicle_name: str
+    duration_min: int
+    price: float
+    distance_km: float
+    carbon_kg: float
+    comfort_score: float
+
+
+class ArchetypeDefinition(TypedDict):
+    category: RecommendationCategory
+    title: str
+    summary: str
+    rank_reason: str
+    first_mile: FirstMileDefinition
+    main_transport: MainTransportDefinition
+    last_mile: LastMileDefinition
 
 
 def build_default_segment_provenance(
@@ -364,6 +419,22 @@ class JourneyOrchestrationService:
 
         return overrides, metric_overrides
 
+    @staticmethod
+    def _validate_coordinates(lat: float | None, lng: float | None) -> bool:
+        """Validates whether coordinates are numeric, within world bounds, and not null/default."""
+        if lat is None or lng is None:
+            return False
+        try:
+            f_lat = float(lat)
+            f_lng = float(lng)
+        except (ValueError, TypeError):
+            return False
+        if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lng <= 180.0):
+            return False
+        if abs(f_lat) < 1e-4 and abs(f_lng) < 1e-4:
+            return False
+        return True
+
     async def _resolve_segment_data(
         self,
         origin_node: LocationSchema,
@@ -389,16 +460,37 @@ class JourneyOrchestrationService:
             )
             return default_duration, default_distance, legacy_res or {}
 
-        # 2. Check registered TransportProvider adapters
+        # 2. Coordinate validation boundary (M3.3)
+        orig_coords = getattr(origin_node, "coordinates", None)
+        dest_coords = getattr(dest_node, "coordinates", None)
+        orig_lat = getattr(orig_coords, "lat", None)
+        orig_lng = getattr(orig_coords, "lng", None)
+        dest_lat = getattr(dest_coords, "lat", None)
+        dest_lng = getattr(dest_coords, "lng", None)
+
+        if (
+            orig_lat is None
+            or orig_lng is None
+            or dest_lat is None
+            or dest_lng is None
+            or not self._validate_coordinates(orig_lat, orig_lng)
+            or not self._validate_coordinates(dest_lat, dest_lng)
+        ):
+            logger.debug(
+                f"Missing or invalid coordinates for segment {origin_node.name} -> {dest_node.name}; cleanly falling back to deterministic baseline."
+            )
+            return default_duration, default_distance, {}
+
+        # 3. Check registered TransportProvider adapters
         req = TransportSegmentSearchRequest(
             origin_title=origin_node.name,
             origin_city=origin_node.city,
-            origin_lat=origin_node.coordinates.lat,
-            origin_lng=origin_node.coordinates.lng,
+            origin_lat=float(orig_lat),
+            origin_lng=float(orig_lng),
             destination_title=dest_node.name,
             destination_city=dest_node.city,
-            destination_lat=dest_node.coordinates.lat,
-            destination_lng=dest_node.coordinates.lng,
+            destination_lat=float(dest_lat),
+            destination_lng=float(dest_lng),
             mode=mode,
             departure_time=departure_time,
             arrival_deadline=arrival_deadline,
@@ -460,7 +552,7 @@ class JourneyOrchestrationService:
                 provider_status[p.provider_id] = "unconfigured_fallback_deterministic"
 
         # 5 Multimodal Archetype definitions
-        archetypes = [
+        archetypes: list[ArchetypeDefinition] = [
             # 1. FASTEST
             {
                 "category": "fastest",
@@ -688,11 +780,98 @@ class JourneyOrchestrationService:
             },
         ]
 
+        # Collect unique segment queries across all archetypes to resolve concurrently and deduplicate
+        dedup_tasks: dict[
+            tuple[float, float, float, float, TransportMode, str],
+            tuple[LocationSchema, LocationSchema, TransportMode, str, int, float],
+        ] = {}
+        for arch in archetypes:
+            fm = arch["first_mile"]
+            mt = arch["main_transport"]
+            lm = arch["last_mile"]
+            dep_hub = fm["hub"]
+            arr_hub = mt["arr_hub"]
+
+            k1: tuple[float, float, float, float, TransportMode, str] = (
+                round(origin_hubs.user_node.coordinates.lat, 4),
+                round(origin_hubs.user_node.coordinates.lng, 4),
+                round(dep_hub.coordinates.lat, 4),
+                round(dep_hub.coordinates.lng, 4),
+                fm["mode"],
+                fm["provider"],
+            )
+            if k1 not in dedup_tasks:
+                dedup_tasks[k1] = (
+                    origin_hubs.user_node,
+                    dep_hub,
+                    fm["mode"],
+                    fm["provider"],
+                    fm["duration_min"],
+                    fm["distance_km"],
+                )
+
+            k2: tuple[float, float, float, float, TransportMode, str] = (
+                round(dep_hub.coordinates.lat, 4),
+                round(dep_hub.coordinates.lng, 4),
+                round(arr_hub.coordinates.lat, 4),
+                round(arr_hub.coordinates.lng, 4),
+                mt["mode"],
+                mt["provider"],
+            )
+            if k2 not in dedup_tasks:
+                dedup_tasks[k2] = (
+                    dep_hub,
+                    arr_hub,
+                    mt["mode"],
+                    mt["provider"],
+                    mt["duration_min"],
+                    mt["distance_km"],
+                )
+
+            k3: tuple[float, float, float, float, TransportMode, str] = (
+                round(arr_hub.coordinates.lat, 4),
+                round(arr_hub.coordinates.lng, 4),
+                round(dest_hubs.user_node.coordinates.lat, 4),
+                round(dest_hubs.user_node.coordinates.lng, 4),
+                lm["mode"],
+                lm["provider"],
+            )
+            if k3 not in dedup_tasks:
+                dedup_tasks[k3] = (
+                    arr_hub,
+                    dest_hubs.user_node,
+                    lm["mode"],
+                    lm["provider"],
+                    lm["duration_min"],
+                    lm["distance_km"],
+                )
+
+        unique_keys = list(dedup_tasks.keys())
+        resolved_results = await asyncio.gather(*[
+            self._resolve_segment_data(
+                origin_node=orig,
+                dest_node=dest,
+                mode=mode,
+                provider_name=prov_name,
+                default_duration=def_dur,
+                default_distance=def_dist,
+                provider_status=provider_status,
+            )
+            for orig, dest, mode, prov_name, def_dur, def_dist in dedup_tasks.values()
+        ])
+        resolved_map = dict(zip(unique_keys, resolved_results))
+
         raw_journeys: list[JourneySchema] = []
 
+        # Preferred arrival formatting for optimizer & feasibility check (HH:MM)
+        preferred_arr = f"{target_hour:02d}:{target_min:02d}" if request.preferred_arrival_before else None
+
         for arch_idx, arch in enumerate(archetypes):
-            dep_hub: LocationSchema = arch["first_mile"]["hub"]
-            arr_hub: LocationSchema = arch["main_transport"]["arr_hub"]
+            fm = arch["first_mile"]
+            mt = arch["main_transport"]
+            lm = arch["last_mile"]
+            dep_hub = fm["hub"]
+            arr_hub = mt["arr_hub"]
 
             # Anchor arrival safely before user's deadline (15 - 35 min buffer)
             arrival_buffer_min = 15 + (arch_idx * 5)
@@ -704,148 +883,147 @@ class JourneyOrchestrationService:
 
             final_arr_date = build_iso_date(date_str, target_arr_hour, target_arr_min)
 
-            # Query providers / resolve data for each segment
-            dur3, dist3, prov_overrides3 = await self._resolve_segment_data(
-                origin_node=arr_hub,
-                dest_node=dest_hubs.user_node,
-                mode=arch["last_mile"]["mode"],
-                provider_name=arch["last_mile"]["provider"],
-                default_duration=arch["last_mile"]["duration_min"],
-                default_distance=arch["last_mile"]["distance_km"],
-                provider_status=provider_status,
+            # Retrieve resolved metrics from concurrent map
+            k3 = (
+                round(arr_hub.coordinates.lat, 4),
+                round(arr_hub.coordinates.lng, 4),
+                round(dest_hubs.user_node.coordinates.lat, 4),
+                round(dest_hubs.user_node.coordinates.lng, 4),
+                lm["mode"],
+                lm["provider"],
+            )
+            k2 = (
+                round(dep_hub.coordinates.lat, 4),
+                round(dep_hub.coordinates.lng, 4),
+                round(arr_hub.coordinates.lat, 4),
+                round(arr_hub.coordinates.lng, 4),
+                mt["mode"],
+                mt["provider"],
+            )
+            k1 = (
+                round(origin_hubs.user_node.coordinates.lat, 4),
+                round(origin_hubs.user_node.coordinates.lng, 4),
+                round(dep_hub.coordinates.lat, 4),
+                round(dep_hub.coordinates.lng, 4),
+                fm["mode"],
+                fm["provider"],
             )
 
-            dur2, dist2, prov_overrides2 = await self._resolve_segment_data(
-                origin_node=dep_hub,
-                dest_node=arr_hub,
-                mode=arch["main_transport"]["mode"],
-                provider_name=arch["main_transport"]["provider"],
-                default_duration=arch["main_transport"]["duration_min"],
-                default_distance=arch["main_transport"]["distance_km"],
-                provider_status=provider_status,
-            )
-
-            dur1, dist1, prov_overrides1 = await self._resolve_segment_data(
-                origin_node=origin_hubs.user_node,
-                dest_node=dep_hub,
-                mode=arch["first_mile"]["mode"],
-                provider_name=arch["first_mile"]["provider"],
-                default_duration=arch["first_mile"]["duration_min"],
-                default_distance=arch["first_mile"]["distance_km"],
-                provider_status=provider_status,
-            )
+            dur3, dist3, prov_overrides3 = resolved_map[k3]
+            dur2, dist2, prov_overrides2 = resolved_map[k2]
+            dur1, dist1, prov_overrides1 = resolved_map[k1]
 
             # Compute segment boundaries backward with resolved durations
             seg3_arr = final_arr_date
             seg3_dep = seg3_arr - timedelta(minutes=dur3)
 
-            seg2_arr = seg3_dep - timedelta(minutes=arch["main_transport"]["transfer_buffer_min"])
+            seg2_arr = seg3_dep - timedelta(minutes=mt["transfer_buffer_min"])
             seg2_dep = seg2_arr - timedelta(minutes=dur2)
 
-            seg1_arr = seg2_dep - timedelta(minutes=arch["first_mile"]["transfer_buffer_min"])
+            seg1_arr = seg2_dep - timedelta(minutes=fm["transfer_buffer_min"])
             seg1_dep = seg1_arr - timedelta(minutes=dur1)
 
             cat = arch["category"]
 
             # Leg 1: First-Mile
             prov1 = build_default_segment_provenance(
-                arch["first_mile"]["provider"],
-                arch["first_mile"]["mode"],
+                fm["provider"],
+                fm["mode"],
                 attribute_overrides=prov_overrides1,
             )
             carbon1 = calculate_calibrated_segment_carbon(
-                mode=arch["first_mile"]["mode"],
+                mode=fm["mode"],
                 resolved_distance_km=dist1,
-                baseline_distance_km=arch["first_mile"]["distance_km"],
-                baseline_carbon_kg=arch["first_mile"]["carbon_kg"],
+                baseline_distance_km=fm["distance_km"],
+                baseline_carbon_kg=fm["carbon_kg"],
             )
             segment1 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-01",
                 sequence=1,
-                mode=arch["first_mile"]["mode"],
-                provider=arch["first_mile"]["provider"],
-                vehicle_name=arch["first_mile"]["vehicle_name"],
+                mode=fm["mode"],
+                provider=fm["provider"],
+                vehicle_name=fm["vehicle_name"],
                 origin=origin_hubs.user_node,
                 destination=dep_hub,
                 departure_time=seg1_dep.isoformat(),
                 arrival_time=seg1_arr.isoformat(),
                 duration_minutes=dur1,
-                price=arch["first_mile"]["price"],
+                price=fm["price"],
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=45, is_real_inventory=False),
                 distance_km=dist1,
                 carbon_kg=carbon1,
-                comfort_score=arch["first_mile"]["comfort_score"],
-                transfer_buffer_minutes=arch["first_mile"]["transfer_buffer_min"],
-                notes=f"Direct pickup at {origin_hubs.user_node.name}. Sync transfer buffer: {arch['first_mile']['transfer_buffer_min']}m.",
+                comfort_score=fm["comfort_score"],
+                transfer_buffer_minutes=fm["transfer_buffer_min"],
+                notes=f"Direct pickup at {origin_hubs.user_node.name}. Planning assumption: {fm['transfer_buffer_min']}m transfer buffer at {dep_hub.name}.",
                 provenance=prov1,
             )
 
             # Leg 2: Main Transit Corridor
             prov2 = build_default_segment_provenance(
-                arch["main_transport"]["provider"],
-                arch["main_transport"]["mode"],
+                mt["provider"],
+                mt["mode"],
                 attribute_overrides=prov_overrides2,
             )
             carbon2 = calculate_calibrated_segment_carbon(
-                mode=arch["main_transport"]["mode"],
+                mode=mt["mode"],
                 resolved_distance_km=dist2,
-                baseline_distance_km=arch["main_transport"]["distance_km"],
-                baseline_carbon_kg=arch["main_transport"]["carbon_kg"],
+                baseline_distance_km=mt["distance_km"],
+                baseline_carbon_kg=mt["carbon_kg"],
             )
             segment2 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-02",
                 sequence=2,
-                mode=arch["main_transport"]["mode"],
-                provider=arch["main_transport"]["provider"],
-                vehicle_name=arch["main_transport"]["vehicle_name"],
-                vehicle_number=arch["main_transport"]["vehicle_number"],
+                mode=mt["mode"],
+                provider=mt["provider"],
+                vehicle_name=mt["vehicle_name"],
+                vehicle_number=mt["vehicle_number"],
                 origin=dep_hub,
                 destination=arr_hub,
                 departure_time=seg2_dep.isoformat(),
                 arrival_time=seg2_arr.isoformat(),
                 duration_minutes=dur2,
-                price=arch["main_transport"]["price"],
+                price=mt["price"],
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=18, is_real_inventory=False),
                 distance_km=dist2,
                 carbon_kg=carbon2,
-                comfort_score=arch["main_transport"]["comfort_score"],
-                seat_class=arch["main_transport"]["seat_class"],
-                transfer_buffer_minutes=arch["main_transport"]["transfer_buffer_min"],
-                notes=arch["main_transport"]["notes"],
+                comfort_score=mt["comfort_score"],
+                seat_class=mt["seat_class"],
+                transfer_buffer_minutes=mt["transfer_buffer_min"],
+                notes=f"{mt['notes']} Planning assumption: {mt['transfer_buffer_min']}m transfer buffer at {arr_hub.name}.",
                 provenance=prov2,
             )
 
             # Leg 3: Last-Mile Drop-Off
             prov3 = build_default_segment_provenance(
-                arch["last_mile"]["provider"],
-                arch["last_mile"]["mode"],
+                lm["provider"],
+                lm["mode"],
                 attribute_overrides=prov_overrides3,
             )
             carbon3 = calculate_calibrated_segment_carbon(
-                mode=arch["last_mile"]["mode"],
+                mode=lm["mode"],
                 resolved_distance_km=dist3,
-                baseline_distance_km=arch["last_mile"]["distance_km"],
-                baseline_carbon_kg=arch["last_mile"]["carbon_kg"],
+                baseline_distance_km=lm["distance_km"],
+                baseline_carbon_kg=lm["carbon_kg"],
             )
             segment3 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-03",
                 sequence=3,
-                mode=arch["last_mile"]["mode"],
-                provider=arch["last_mile"]["provider"],
-                vehicle_name=arch["last_mile"]["vehicle_name"],
+                mode=lm["mode"],
+                provider=lm["provider"],
+                vehicle_name=lm["vehicle_name"],
                 origin=arr_hub,
                 destination=dest_hubs.user_node,
                 departure_time=seg3_dep.isoformat(),
                 arrival_time=seg3_arr.isoformat(),
                 duration_minutes=dur3,
-                price=arch["last_mile"]["price"],
+                price=lm["price"],
                 currency="INR",
                 availability=SegmentAvailabilitySchema(status="available", remaining_units=99, is_real_inventory=False),
                 distance_km=dist3,
                 carbon_kg=carbon3,
-                comfort_score=arch["last_mile"]["comfort_score"],
+                comfort_score=lm["comfort_score"],
                 notes=f"Final transfer to {dest_hubs.user_node.name}. Driver will meet at {arr_hub.name} arrival exit.",
                 provenance=prov3,
             )
@@ -853,12 +1031,15 @@ class JourneyOrchestrationService:
             segments = [segment1, segment2, segment3]
             total_price = sum(s.price for s in segments)
             travel_dur = sum(s.duration_minutes for s in segments)
-            waiting_dur = arch["first_mile"]["transfer_buffer_min"] + arch["main_transport"]["transfer_buffer_min"]
+            waiting_dur = fm["transfer_buffer_min"] + mt["transfer_buffer_min"]
             total_duration_minutes = round((seg3_arr - seg1_dep).total_seconds() / 60.0)
             total_transfers = len(segments) - 1
             total_carbon = round(sum(s.carbon_kg for s in segments), 1)
             avg_comfort = round(sum(s.comfort_score * s.duration_minutes for s in segments) / travel_dur, 1)
             modes: list[TransportMode] = list(dict.fromkeys(s.mode for s in segments))
+
+            in_vehicle_dur = sum(s.duration_minutes for s in segments if s.mode != "walk")
+            walking_dur = sum(s.duration_minutes for s in segments if s.mode == "walk")
 
             journey_prov = build_journey_provenance(segments)
 
@@ -866,13 +1047,14 @@ class JourneyOrchestrationService:
                 s.provenance and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
                 for s in segments
             )
-            live_dur_names = ", ".join(dict.fromkeys(
-                s.provenance.attributes["duration"].provider_name
-                for s in segments
-                if s.provenance
-                and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
-                and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).provider_name
-            )) or "Google Routes API v2"
+            live_dur_list: list[str] = []
+            for s in segments:
+                if s.provenance:
+                    dur_attr = s.provenance.attributes.get("duration")
+                    if dur_attr and dur_attr.source_type == "provider_live" and dur_attr.provider_name:
+                        if dur_attr.provider_name not in live_dur_list:
+                            live_dur_list.append(dur_attr.provider_name)
+            live_dur_names = ", ".join(live_dur_list) or "Live Routing Provider"
 
             if has_live_dur:
                 credibility_notice = (
@@ -881,7 +1063,7 @@ class JourneyOrchestrationService:
                     "requiring live provider confirmation prior to booking."
                 )
                 trade_off_notes = [
-                    f"Live traffic-aware duration: transit ETAs verified via {live_dur_names}",
+                    f"Live road routing: transit ETAs verified via {live_dur_names}",
                     "Corridor-modeled estimates: fare and seat capacity remain unverified demo inventory until live booking lock",
                 ]
                 is_dur_est = False
@@ -905,6 +1087,8 @@ class JourneyOrchestrationService:
                 total_duration_minutes=total_duration_minutes,
                 travel_duration_minutes=travel_dur,
                 waiting_duration_minutes=waiting_dur,
+                in_vehicle_duration_minutes=in_vehicle_dur,
+                walking_duration_minutes=walking_dur,
                 total_price=total_price,
                 currency="INR",
                 total_transfers=total_transfers,
@@ -920,7 +1104,7 @@ class JourneyOrchestrationService:
                     trade_offs=[
                         f"3 synchronized legs: {segment1.provider} → {segment2.provider} → {segment3.provider}",
                         f"Arrival guaranteed by {seg3_arr.strftime('%I:%M %p')} before deadline",
-                        f"Total transfer wait: {waiting_dur} min with live synchronization",
+                        f"Total transfer wait: {waiting_dur} min (Planning assumption)",
                     ] + trade_off_notes,
                     score=90.0,
                     cost_vs_fastest_saving=max(0.0, float(flight_price + 1100 - total_price)),
@@ -937,9 +1121,24 @@ class JourneyOrchestrationService:
                 ),
                 provenance=journey_prov,
             )
+
+            # Evaluate connection quality and sequence feasibility (M3.3)
+            conn_eval = validate_journey_connections(
+                journey,
+                preferred_arrival_before=preferred_arr,
+                budget_max=request.budget_max,
+            )
+            journey.is_connection_feasible = conn_eval.is_feasible
+            journey.connection_feasibility_notes = (
+                conn_eval.reasons if not conn_eval.is_feasible else conn_eval.warnings
+            )
+
             raw_journeys.append(journey)
 
         # 2. Integrate with Backend JourneyOptimizerService
+        # Only feasible candidates are considered for Pareto optimization.
+        # Impossible connections (buffer violations, reversed sequence, deadline violations, budget violations)
+        # are strictly excluded from recommendation.
         candidate_inputs = [
             JourneyCandidateInput(
                 id=j.id,
@@ -949,16 +1148,14 @@ class JourneyOrchestrationService:
                 total_transfers=j.total_transfers,
                 carbon_kg=j.carbon_kg,
                 comfort_score=j.comfort_score,
-                modes=j.modes,
+                modes=[str(m) for m in j.modes],
                 recommendation_category=j.recommendation_category,
                 departure_time=j.departure_time,
                 arrival_time=j.arrival_time,
             )
             for j in raw_journeys
+            if j.is_connection_feasible
         ]
-
-        # Preferred arrival formatting for optimizer check (HH:MM)
-        preferred_arr = f"{target_hour:02d}:{target_min:02d}" if request.preferred_arrival_before else None
 
         opt_req = OptimizationRequest(
             weights=request.weights or OptimizationWeightsInput(),
@@ -980,9 +1177,18 @@ class JourneyOrchestrationService:
                     s.provenance and s.provenance.attributes.get("duration", AttributeProvenanceSchema()).source_type == "provider_live"
                     for s in j.segments
                 )
+                live_dur_list: list[str] = []
+                for s in j.segments:
+                    if s.provenance:
+                        dur_attr = s.provenance.attributes.get("duration")
+                        if dur_attr and dur_attr.source_type == "provider_live" and dur_attr.provider_name:
+                            if dur_attr.provider_name not in live_dur_list:
+                                live_dur_list.append(dur_attr.provider_name)
+                live_dur_names = ", ".join(live_dur_list) or "Live Routing Provider"
+
                 notes_to_add = (
                     [
-                        "Live traffic-aware duration: transit ETAs verified via Google Routes API v2",
+                        f"Live road routing: transit ETAs verified via {live_dur_names}",
                         "Corridor-modeled estimates: fare and seat capacity remain unverified demo inventory until live booking lock",
                     ]
                     if has_live_dur
@@ -1001,7 +1207,7 @@ class JourneyOrchestrationService:
                 j.ai_explanation.is_availability_verified = False
                 if has_live_dur:
                     j.ai_explanation.data_credibility_notice = (
-                        "Transit durations reflect live provider traffic feeds (Google Routes API v2). "
+                        f"Transit durations reflect live provider routing feeds ({live_dur_names}). "
                         "Fares are deterministic corridor estimates and seat availability is simulated demo inventory "
                         "requiring live provider confirmation prior to booking."
                     )

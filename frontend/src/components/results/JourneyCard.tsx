@@ -98,7 +98,9 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
             <span className="text-slate-400 font-normal">to</span>
             <span>{formatTime(journey.arrivalTime)}</span>
             <span className="text-slate-300">|</span>
-            <span className="text-blue-700">{formatDuration(journey.totalDurationMinutes)}</span>
+            <span className="text-blue-700" title={journey.waitingDurationMinutes ? `${journey.travelDurationMinutes || 0}m travel + ${journey.waitingDurationMinutes}m buffer` : undefined}>
+              {formatDuration(journey.totalDurationMinutes)}
+            </span>
           </div>
         </div>
 
@@ -174,8 +176,9 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
                         <Clock className="w-3 h-3 text-amber-600 shrink-0" />
                         <span className="truncate">
                           <strong className="font-bold">
-                            {seg.transferBufferMinutes || 15} min transfer
+                            {seg.transferBufferMinutes || 15} min buffer
                           </strong>
+                          <span className="text-[10px] text-amber-700/80 font-normal ml-1">(Planning assumption)</span>
                           <span className="text-amber-500 mx-1.5">·</span>
                           Change at <span className="font-semibold text-slate-800">{seg.destination.name}</span>
                         </span>

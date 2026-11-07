@@ -947,6 +947,8 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
     // Aggregations
     const totalPrice = segments.reduce((sum, s) => sum + s.price, 0);
     const travelDurationMinutes = segments.reduce((sum, s) => sum + s.durationMinutes, 0);
+    const inVehicleDurationMinutes = segments.filter((s) => s.mode !== 'walk').reduce((sum, s) => sum + s.durationMinutes, 0);
+    const walkingDurationMinutes = segments.filter((s) => s.mode === 'walk').reduce((sum, s) => sum + s.durationMinutes, 0);
     const waitingDurationMinutes = arch.firstMile.transferBufferMin + arch.mainTransport.transferBufferMin;
     const totalDurationMinutes = Math.round((seg3Arr.getTime() - seg1Dep.getTime()) / 60000);
     const totalTransfers = segments.length - 1; // 2 transfers
@@ -976,6 +978,13 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       totalDurationMinutes,
       travelDurationMinutes,
       waitingDurationMinutes,
+      inVehicleDurationMinutes,
+      walkingDurationMinutes,
+      isConnectionFeasible: true,
+      connectionFeasibilityNotes: [
+        `Transfer 1 (${depHub.name}): ${arch.firstMile.transferBufferMin} min buffer (Planning assumption: minimum boarding/check-in buffer met).`,
+        `Transfer 2 (${arrHub.name}): ${arch.mainTransport.transferBufferMin} min buffer (Planning assumption: minimum deboarding/egress buffer met).`,
+      ],
       totalPrice,
       currency: 'INR',
       totalTransfers,

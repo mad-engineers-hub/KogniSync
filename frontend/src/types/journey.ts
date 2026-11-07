@@ -112,6 +112,10 @@ export interface Journey {
   totalDurationMinutes: number;
   travelDurationMinutes?: number;
   waitingDurationMinutes?: number;
+  inVehicleDurationMinutes?: number;
+  walkingDurationMinutes?: number;
+  isConnectionFeasible?: boolean;
+  connectionFeasibilityNotes?: string[];
   totalPrice: number;
   currency: string;
   totalTransfers: number;

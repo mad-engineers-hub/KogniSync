@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from app.services.journey.schemas import (
     AttributeProvenanceSchema,
     TransportMode,
@@ -52,17 +52,17 @@ class TransportSegmentSearchRequest(BaseModel):
     """Normalized request passed to an external transport provider adapter."""
     model_config = ConfigDict(populate_by_name=True)
 
-    origin_title: str = Field(alias="originTitle")
-    origin_city: str = Field(alias="originCity")
-    origin_lat: float = Field(alias="originLat")
-    origin_lng: float = Field(alias="originLng")
-    destination_title: str = Field(alias="destinationTitle")
-    destination_city: str = Field(alias="destinationCity")
-    destination_lat: float = Field(alias="destinationLat")
-    destination_lng: float = Field(alias="destinationLng")
+    origin_title: str = Field(validation_alias=AliasChoices("origin_title", "originTitle"), serialization_alias="originTitle")
+    origin_city: str = Field(validation_alias=AliasChoices("origin_city", "originCity"), serialization_alias="originCity")
+    origin_lat: float = Field(validation_alias=AliasChoices("origin_lat", "originLat"), serialization_alias="originLat")
+    origin_lng: float = Field(validation_alias=AliasChoices("origin_lng", "originLng"), serialization_alias="originLng")
+    destination_title: str = Field(validation_alias=AliasChoices("destination_title", "destinationTitle"), serialization_alias="destinationTitle")
+    destination_city: str = Field(validation_alias=AliasChoices("destination_city", "destinationCity"), serialization_alias="destinationCity")
+    destination_lat: float = Field(validation_alias=AliasChoices("destination_lat", "destinationLat"), serialization_alias="destinationLat")
+    destination_lng: float = Field(validation_alias=AliasChoices("destination_lng", "destinationLng"), serialization_alias="destinationLng")
     mode: TransportMode
-    departure_time: str | None = Field(default=None, alias="departureTime")
-    arrival_deadline: str | None = Field(default=None, alias="arrivalDeadline")
+    departure_time: str | None = Field(default=None, validation_alias=AliasChoices("departure_time", "departureTime"), serialization_alias="departureTime")
+    arrival_deadline: str | None = Field(default=None, validation_alias=AliasChoices("arrival_deadline", "arrivalDeadline"), serialization_alias="arrivalDeadline")
 
 
 class NormalizedTransportSegmentResponse(BaseModel):
@@ -73,25 +73,28 @@ class NormalizedTransportSegmentResponse(BaseModel):
     """
     model_config = ConfigDict(populate_by_name=True)
 
-    provider_id: str = Field(alias="providerId")
-    provider_name: str = Field(alias="providerName")
+    provider_id: str = Field(validation_alias=AliasChoices("provider_id", "providerId"), serialization_alias="providerId")
+    provider_name: str = Field(validation_alias=AliasChoices("provider_name", "providerName"), serialization_alias="providerName")
     retrieved_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
-        alias="retrievedAt",
+        validation_alias=AliasChoices("retrieved_at", "retrievedAt"),
+        serialization_alias="retrievedAt",
     )
     mode: TransportMode
-    duration_minutes: int | None = Field(default=None, alias="durationMinutes")
-    distance_km: float | None = Field(default=None, alias="distanceKm")
-    departure_time: str | None = Field(default=None, alias="departureTime")
-    arrival_time: str | None = Field(default=None, alias="arrivalTime")
+    duration_minutes: int | None = Field(default=None, validation_alias=AliasChoices("duration_minutes", "durationMinutes"), serialization_alias="durationMinutes")
+    distance_km: float | None = Field(default=None, validation_alias=AliasChoices("distance_km", "distanceKm"), serialization_alias="distanceKm")
+    departure_time: str | None = Field(default=None, validation_alias=AliasChoices("departure_time", "departureTime"), serialization_alias="departureTime")
+    arrival_time: str | None = Field(default=None, validation_alias=AliasChoices("arrival_time", "arrivalTime"), serialization_alias="arrivalTime")
     fare: float | None = None
     currency: str = "INR"
-    carrier_name: str | None = Field(default=None, alias="carrierName")
-    vehicle_name: str | None = Field(default=None, alias="vehicleName")
-    vehicle_number: str | None = Field(default=None, alias="vehicleNumber")
+    carrier_name: str | None = Field(default=None, validation_alias=AliasChoices("carrier_name", "carrierName"), serialization_alias="carrierName")
+    vehicle_name: str | None = Field(default=None, validation_alias=AliasChoices("vehicle_name", "vehicleName"), serialization_alias="vehicleName")
+    vehicle_number: str | None = Field(default=None, validation_alias=AliasChoices("vehicle_number", "vehicleNumber"), serialization_alias="vehicleNumber")
     warnings: list[str] = Field(default_factory=list)
     attribute_provenance: dict[str, AttributeProvenanceSchema] = Field(
-        default_factory=dict, alias="attributeProvenance"
+        default_factory=dict,
+        validation_alias=AliasChoices("attribute_provenance", "attributeProvenance"),
+        serialization_alias="attributeProvenance",
     )
 
 
@@ -99,12 +102,12 @@ class ProviderCapabilities(BaseModel):
     """Capability and status reporting for a transport provider."""
     model_config = ConfigDict(populate_by_name=True)
 
-    provider_id: str = Field(alias="providerId")
+    provider_id: str = Field(validation_alias=AliasChoices("provider_id", "providerId"), serialization_alias="providerId")
     name: str
-    supported_modes: list[str] = Field(alias="supportedModes")
-    is_available: bool = Field(alias="isAvailable")
-    is_live_authenticated: bool = Field(alias="isLiveAuthenticated")
-    timeout_seconds: float = Field(alias="timeoutSeconds")
+    supported_modes: list[str] = Field(validation_alias=AliasChoices("supported_modes", "supportedModes"), serialization_alias="supportedModes")
+    is_available: bool = Field(validation_alias=AliasChoices("is_available", "isAvailable"), serialization_alias="isAvailable")
+    is_live_authenticated: bool = Field(validation_alias=AliasChoices("is_live_authenticated", "isLiveAuthenticated"), serialization_alias="isLiveAuthenticated")
+    timeout_seconds: float = Field(validation_alias=AliasChoices("timeout_seconds", "timeoutSeconds"), serialization_alias="timeoutSeconds")
 
 
 class TransportProvider(ABC):

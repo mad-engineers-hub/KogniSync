@@ -43,7 +43,8 @@ export const JourneyTimeline: React.FC<JourneyTimelineProps> = ({ journey }) => 
                     <div className="flex items-center gap-2 min-w-0">
                       <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                       <span className="truncate">
-                        <strong className="font-bold text-amber-900">{transferBuffer} min transfer</strong>
+                        <strong className="font-bold text-amber-900">{transferBuffer} min buffer</strong>
+                        <span className="text-[10px] text-amber-700/80 font-normal ml-1">(Planning assumption)</span>
                         <span className="text-amber-400 mx-2">·</span>
                         Change at <strong className="font-bold text-slate-900">{segment.destination.name}</strong>
                       </span>

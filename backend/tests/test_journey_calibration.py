@@ -101,44 +101,44 @@ def test_carbon_edge_cases_zero_or_negative_distance():
 
 def test_journey_search_request_normalizes_colloquial_tomorrow():
     """Colloquial 'Tomorrow' departure date is normalized to valid YYYY-MM-DD."""
-    req = JourneySearchRequest(
-        origin="Bangalore",
-        destination="Chennai",
-        departureDate="Tomorrow",
-    )
+    req = JourneySearchRequest.model_validate({
+        "origin": "Bangalore",
+        "destination": "Chennai",
+        "departureDate": "Tomorrow",
+    })
     expected = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
     assert req.departure_date == expected
 
 
 def test_journey_search_request_normalizes_colloquial_today():
     """Colloquial 'Today' departure date is normalized to today's YYYY-MM-DD."""
-    req = JourneySearchRequest(
-        origin="Bangalore",
-        destination="Chennai",
-        departureDate="today",
-    )
+    req = JourneySearchRequest.model_validate({
+        "origin": "Bangalore",
+        "destination": "Chennai",
+        "departureDate": "today",
+    })
     expected = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     assert req.departure_date == expected
 
 
 def test_journey_search_request_preserves_valid_iso_date():
     """Standard YYYY-MM-DD format is strictly preserved."""
-    req = JourneySearchRequest(
-        origin="Bangalore",
-        destination="Chennai",
-        departureDate="2026-11-15",
-    )
+    req = JourneySearchRequest.model_validate({
+        "origin": "Bangalore",
+        "destination": "Chennai",
+        "departureDate": "2026-11-15",
+    })
     assert req.departure_date == "2026-11-15"
 
 
 def test_journey_search_request_rejects_malformed_date():
     """Unrecognized malformed date strings raise ValueError (HTTP 422)."""
     with pytest.raises(ValueError, match="Departure date must be in YYYY-MM-DD format"):
-        JourneySearchRequest(
-            origin="Bangalore",
-            destination="Chennai",
-            departureDate="invalid-format-date",
-        )
+        JourneySearchRequest.model_validate({
+            "origin": "Bangalore",
+            "destination": "Chennai",
+            "departureDate": "invalid-format-date",
+        })
 
 
 # =====================================================================
@@ -156,9 +156,9 @@ async def test_e2e_request_constraints_survive_every_layer():
     req = JourneySearchRequest(
         origin="Chennai",
         destination="Udupi",
-        departureDate="2026-11-07",
-        preferredArrivalBefore="20:00",
-        budgetMax=5000.0,
+        departure_date="2026-11-07",
+        preferred_arrival_before="20:00",
+        budget_max=5000.0,
         weights=OptimizationWeightsInput(cost=0.1, duration=0.85, comfort=0.05, carbon=0.0),
     )
 
@@ -191,8 +191,8 @@ async def test_hard_budget_enforcement_never_relaxed():
     req_tight = JourneySearchRequest(
         origin="Chennai",
         destination="Udupi",
-        departureDate="2026-11-07",
-        budgetMax=1500.0,
+        departure_date="2026-11-07",
+        budget_max=1500.0,
     )
     res_tight = await service.search_journeys(req_tight)
     assert len(res_tight.journeys) == 1
@@ -203,8 +203,8 @@ async def test_hard_budget_enforcement_never_relaxed():
     req_impossible = JourneySearchRequest(
         origin="Chennai",
         destination="Udupi",
-        departureDate="2026-11-07",
-        budgetMax=300.0,
+        departure_date="2026-11-07",
+        budget_max=300.0,
     )
     res_impossible = await service.search_journeys(req_impossible)
     assert len(res_impossible.journeys) == 0
@@ -222,9 +222,9 @@ async def test_pareto_ranking_and_explanation_refer_to_same_metrics():
     req = JourneySearchRequest(
         origin="Bangalore",
         destination="Chennai",
-        departureDate="2026-11-07",
-        preferredArrivalBefore="14:00",
-        budgetMax=4000.0,
+        departure_date="2026-11-07",
+        preferred_arrival_before="14:00",
+        budget_max=4000.0,
     )
 
     res = await service.search_journeys(req)
@@ -236,6 +236,7 @@ async def test_pareto_ranking_and_explanation_refer_to_same_metrics():
         expected_score = round(j.optimization.score * 100.0, 1)
         assert j.ai_explanation.score == expected_score
         # Cost saving calculation is consistent
+        assert j.ai_explanation.cost_vs_fastest_saving is not None
         assert j.ai_explanation.cost_vs_fastest_saving >= 0.0
         # Trade-offs are present and informative
         assert len(j.ai_explanation.trade_offs) >= 2
@@ -272,12 +273,11 @@ class MockCalibratedLiveProvider(TransportProvider):
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
             provider_id=self.provider_id,
-            provider_name=self.name,
+            name=self.name,
             supported_modes=list(self.supported_modes),
-            provides_real_time_tracking=True,
-            provides_seat_availability=False,
-            is_mock=True,
-            status="available",
+            is_available=self.is_available(),
+            is_live_authenticated=self.is_live_authenticated(),
+            timeout_seconds=3.0,
         )
 
     async def search_segment(self, request: TransportSegmentSearchRequest) -> NormalizedTransportSegmentResponse:
@@ -320,7 +320,7 @@ async def test_mixed_provenance_journey_isolates_live_attributes():
     req = JourneySearchRequest(
         origin="Chennai",
         destination="Udupi",
-        departureDate="2026-11-07",
+        departure_date="2026-11-07",
     )
 
     res = await service.search_journeys(req)
@@ -357,7 +357,7 @@ async def test_auth_and_invalid_request_errors_not_disguised_as_live():
     res_auth = await service_auth.search_journeys(JourneySearchRequest(
         origin="Bangalore",
         destination="Chennai",
-        departureDate="2026-11-07",
+        departure_date="2026-11-07",
     ))
     assert res_auth.provider_status.get("calibrated_mock_cab") == "auth_failed_fallback_deterministic"
 
@@ -367,7 +367,7 @@ async def test_auth_and_invalid_request_errors_not_disguised_as_live():
     res_inv = await service_inv.search_journeys(JourneySearchRequest(
         origin="Bangalore",
         destination="Chennai",
-        departureDate="2026-11-07",
+        departure_date="2026-11-07",
     ))
     assert res_inv.provider_status.get("calibrated_mock_cab") == "invalid_request_fallback_deterministic"
 
@@ -379,7 +379,7 @@ async def test_no_credential_leakage_in_calibrated_service():
     res = await service.search_journeys(JourneySearchRequest(
         origin="Bangalore",
         destination="Chennai",
-        departureDate="2026-11-07",
+        departure_date="2026-11-07",
     ))
     dump_str = res.model_dump_json().lower()
     assert "api_key" not in dump_str
