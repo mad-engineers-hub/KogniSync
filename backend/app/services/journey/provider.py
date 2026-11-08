@@ -90,6 +90,9 @@ class NormalizedTransportSegmentResponse(BaseModel):
     carrier_name: str | None = Field(default=None, validation_alias=AliasChoices("carrier_name", "carrierName"), serialization_alias="carrierName")
     vehicle_name: str | None = Field(default=None, validation_alias=AliasChoices("vehicle_name", "vehicleName"), serialization_alias="vehicleName")
     vehicle_number: str | None = Field(default=None, validation_alias=AliasChoices("vehicle_number", "vehicleNumber"), serialization_alias="vehicleNumber")
+    encoded_polyline: str | None = Field(default=None, validation_alias=AliasChoices("encoded_polyline", "encodedPolyline"), serialization_alias="encodedPolyline")
+    geojson_geometry: dict[str, Any] | None = Field(default=None, validation_alias=AliasChoices("geojson_geometry", "geojsonGeometry"), serialization_alias="geojsonGeometry")
+    is_live_geometry: bool = Field(default=False, validation_alias=AliasChoices("is_live_geometry", "isLiveGeometry"), serialization_alias="isLiveGeometry")
     warnings: list[str] = Field(default_factory=list)
     attribute_provenance: dict[str, AttributeProvenanceSchema] = Field(
         default_factory=dict,

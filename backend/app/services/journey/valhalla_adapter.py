@@ -22,6 +22,10 @@ from app.services.journey.schemas import (
     AttributeProvenanceSchema,
     TransportMode,
 )
+from app.services.maps.polyline import (
+    decode_polyline,
+    coordinates_to_geojson_linestring,
+)
 
 logger = logging.getLogger("kognisync.transport.valhalla")
 
@@ -281,6 +285,20 @@ class ValhallaTransportAdapter(TransportProvider):
 
         retrieved_at = datetime.now(timezone.utc).isoformat()
 
+        # Extract real route geometry from leg shape (Valhalla polyline6)
+        encoded_shape = legs[0].get("shape") if isinstance(legs[0], dict) else None
+        geojson_geom: dict[str, Any] | None = None
+        is_live_geom = False
+
+        if encoded_shape and isinstance(encoded_shape, str):
+            try:
+                coords = decode_polyline(encoded_shape, precision=6)
+                if coords and len(coords) >= 2:
+                    geojson_geom = coordinates_to_geojson_linestring(coords)
+                    is_live_geom = True
+            except Exception as e:
+                logger.warning(f"Could not decode Valhalla leg shape: {e}")
+
         # Construct granular attribute provenance
         attr_provenance: dict[str, AttributeProvenanceSchema] = {
             "duration": AttributeProvenanceSchema(
@@ -299,6 +317,15 @@ class ValhallaTransportAdapter(TransportProvider):
             ),
         }
 
+        if is_live_geom:
+            attr_provenance["geometry"] = AttributeProvenanceSchema(
+                source_type="provider_live",
+                provider_name=self.name,
+                is_estimate=False,
+                notes="Live OpenStreetMap road geometry via Valhalla OSM Engine",
+                last_updated_at=retrieved_at,
+            )
+
         warnings = []
         status_msg = trip.get("status_message")
         if status_msg and status_msg != "Found route between points":
@@ -311,6 +338,9 @@ class ValhallaTransportAdapter(TransportProvider):
             mode=request.mode,
             duration_minutes=duration_minutes,
             distance_km=distance_km,
+            encoded_polyline=encoded_shape,
+            geojson_geometry=geojson_geom,
+            is_live_geometry=is_live_geom,
             attribute_provenance=attr_provenance,
             warnings=warnings,
         )

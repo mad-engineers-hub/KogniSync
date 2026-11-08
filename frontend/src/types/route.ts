@@ -16,6 +16,19 @@ export interface SegmentRouteGeometry {
   distance_meters: number;
   duration_seconds: number;
   encoded_polyline?: string;
+  geojson_geometry?: {
+    type: string;
+    coordinates: [number, number][];
+  };
+  is_live_geometry?: boolean;
+  provenance_notes?: string;
+  maneuvers?: Array<{
+    instruction: string;
+    distance_meters?: number;
+    time_seconds?: number;
+    type?: number;
+    modifier?: string;
+  }>;
   source: string;
   warnings?: string[];
 }
@@ -25,6 +38,7 @@ export interface EnrichedJourneyRoute {
   total_distance_meters: number;
   total_duration_seconds: number;
   segments: SegmentRouteGeometry[];
+  has_live_geometry?: boolean;
   source: string;
   provider_status: string;
 }

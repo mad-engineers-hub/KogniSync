@@ -3,6 +3,7 @@ from app.core.config import settings
 from app.services.maps.provider import MapsProvider
 from app.services.maps.fallback import FallbackMapsProvider
 from app.services.maps.google_routes import GoogleRoutesProvider
+from app.services.maps.valhalla import ValhallaMapsProvider
 from app.services.maps.schemas import (
     EnrichedJourneyRoute,
     MapsHealthResponse,
@@ -23,7 +24,14 @@ class MapsService:
             self.provider = self._resolve_default_provider()
 
     def _resolve_default_provider(self) -> MapsProvider:
-        if settings.GOOGLE_ROUTES_ENABLED and settings.GOOGLE_MAPS_API_KEY:
+        if getattr(settings, "VALHALLA_ENABLED", False):
+            logger.info("MapsService initialized with ValhallaMapsProvider (OpenStreetMap Engine)")
+            return ValhallaMapsProvider(
+                base_url=settings.VALHALLA_BASE_URL,
+                enabled=True,
+                timeout_seconds=settings.VALHALLA_TIMEOUT_SECONDS,
+            )
+        elif settings.GOOGLE_ROUTES_ENABLED and settings.GOOGLE_MAPS_API_KEY:
             logger.info("MapsService initialized with GoogleRoutesProvider")
             return GoogleRoutesProvider(api_key=settings.GOOGLE_MAPS_API_KEY)
         else:
@@ -36,11 +44,14 @@ class MapsService:
         is_key_set = bool(
             settings.GOOGLE_MAPS_API_KEY and settings.GOOGLE_MAPS_API_KEY.strip()
         )
+        valhalla_enabled = getattr(settings, "VALHALLA_ENABLED", False)
         return MapsHealthResponse(
-            enabled=settings.GOOGLE_ROUTES_ENABLED,
+            enabled=valhalla_enabled or settings.GOOGLE_ROUTES_ENABLED,
             active_provider=self.provider.name,
             api_key_configured=is_key_set,
-            service="Google Routes & Multimodal Geo Engine",
+            service="Valhalla OSM & Multimodal Geo Engine"
+            if valhalla_enabled
+            else "Google Routes & Multimodal Geo Engine",
         )
 
     async def enrich_journey_route(
@@ -59,10 +70,14 @@ class MapsService:
             total_duration += geom.duration_seconds
             sources_used.add(geom.source)
 
-        if len(sources_used) == 1:
-            composite_source = next(iter(sources_used))
+        has_live = any(s.is_live_geometry for s in enriched_segments)
+
+        if "valhalla_live" in sources_used:
+            composite_source = "valhalla_osm" if len(sources_used) == 1 else "hybrid_valhalla_osm"
         elif "google_routes" in sources_used:
             composite_source = "hybrid_google_routes"
+        elif len(sources_used) == 1:
+            composite_source = next(iter(sources_used))
         else:
             composite_source = "deterministic_fallback"
 
@@ -73,6 +88,7 @@ class MapsService:
             segments=enriched_segments,
             source=composite_source,
             provider_status="ok",
+            has_live_geometry=has_live,
         )
 
 

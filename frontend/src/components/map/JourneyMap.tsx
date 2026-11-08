@@ -1,9 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { Journey, JourneySegment } from '../../types/journey';
 import { EnrichedJourneyRoute } from '../../types/route';
-import { enrichJourneyRoute } from '../../api/routes';
+import { enrichJourneyRoute, buildClientFallbackRoute } from '../../api/routes';
 import { ModeIcon } from '../common/ModeIcon';
 import { getModeMeta, formatDuration } from '../../lib/utils';
 import { matchXRSceneForHub } from '../../utils/xrMatching';
@@ -14,39 +16,64 @@ import {
   Sparkles,
   Layers,
   Info,
-  ExternalLink,
   Clock,
   Gauge,
   Eye,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Route as RouteIcon,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 
 export interface JourneyMapProps {
   segments: JourneySegment[];
   journey?: Journey;
+  alternativeJourneys?: Journey[];
+  selectedJourneyId?: string;
+  onSelectJourney?: (journeyId: string) => void;
   selectedSegmentId?: string;
   onSegmentClick?: (segmentId: string) => void;
   className?: string;
   interactive?: boolean;
 }
 
-interface ProjectedPoint {
-  x: number;
-  y: number;
+interface ProjectedWaypoint {
   lat: number;
   lng: number;
   title: string;
   city: string;
   type: string;
   isHub: boolean;
-  hubType?: 'origin' | 'departure_hub' | 'transfer_hub' | 'arrival_hub' | 'destination';
+  hubType: 'origin' | 'departure_hub' | 'transfer_hub' | 'arrival_hub' | 'destination';
   xrSceneId?: string | null;
   transferBufferMinutes?: number;
   segmentIndex?: number;
 }
 
+// Mode color palette
+const MODE_COLORS: Record<string, { stroke: string; glow: string; weight: number; dashArray?: string }> = {
+  walk: { stroke: '#059669', glow: '#34d399', weight: 4, dashArray: '4, 8' },
+  cab: { stroke: '#2563eb', glow: '#60a5fa', weight: 5 },
+  auto: { stroke: '#2563eb', glow: '#60a5fa', weight: 5 },
+  rapido: { stroke: '#7c3aed', glow: '#a78bfa', weight: 5 },
+  bus: { stroke: '#d97706', glow: '#fbbf24', weight: 5 },
+  train: { stroke: '#9333ea', glow: '#c084fc', weight: 6 },
+  flight: { stroke: '#4f46e5', glow: '#818cf8', weight: 4, dashArray: '8, 8' },
+  metro: { stroke: '#0d9488', glow: '#2dd4bf', weight: 5 },
+};
+
+function getModeStyle(mode: string) {
+  return MODE_COLORS[mode] || { stroke: '#2563eb', glow: '#60a5fa', weight: 5 };
+}
+
 export const JourneyMap: React.FC<JourneyMapProps> = ({
   segments,
   journey,
+  alternativeJourneys = [],
+  selectedJourneyId,
+  onSelectJourney,
   selectedSegmentId,
   onSegmentClick,
   className = '',
@@ -55,7 +82,11 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   const navigate = useNavigate();
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(0);
   const [viewMode, setViewMode] = useState<'geographic' | 'schematic'>('geographic');
-  const [hoveredNode, setHoveredNode] = useState<ProjectedPoint | null>(null);
+  const [leafletError, setLeafletError] = useState<boolean>(false);
+
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const layersGroupRef = useRef<L.FeatureGroup | null>(null);
 
   // Synthesize or use real Journey object for backend route enrichment
   const targetJourney: Journey = useMemo(() => {
@@ -63,6 +94,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     const totalDist = segments.reduce((sum, s) => sum + (s.distanceKm || 0), 0);
     const totalDur = segments.reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
     const totalP = segments.reduce((sum, s) => sum + (s.price || 0), 0);
+    const defaultTime = '2026-11-04T08:00:00Z';
 
     return {
       id: `jny-map-${segments[0]?.origin?.id || 'orig'}-${segments[segments.length - 1]?.destination?.id || 'dest'}`,
@@ -81,8 +113,8 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         type: 'address',
         coordinates: { lat: 13.08, lng: 80.27 },
       },
-      departureTime: segments[0]?.departureTime || new Date().toISOString(),
-      arrivalTime: segments[segments.length - 1]?.arrivalTime || new Date().toISOString(),
+      departureTime: segments[0]?.departureTime || defaultTime,
+      arrivalTime: segments[segments.length - 1]?.arrivalTime || defaultTime,
       totalDurationMinutes: totalDur,
       totalPrice: totalP,
       currency: 'INR',
@@ -106,116 +138,52 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     };
   }, [journey, segments]);
 
-  // Query enriched route geometry from backend Google Routes / Geo engine
+  // Query enriched route geometry from backend Valhalla / Geo engine
   const { data: enrichedRoute } = useQuery<EnrichedJourneyRoute>({
     queryKey: ['route-enrichment', targetJourney.id, segments.map((s) => s.segmentId).join(':')],
     queryFn: () => enrichJourneyRoute(targetJourney),
     staleTime: 60000,
+    retry: 1,
   });
 
-  // Keep activeSegmentIndex in sync if external selectedSegmentId changes
-  React.useEffect(() => {
+  // Effective route geometry (server enriched with client fallback)
+  const effectiveRoute = useMemo<EnrichedJourneyRoute>(() => {
+    if (enrichedRoute) return enrichedRoute;
+    return buildClientFallbackRoute(targetJourney);
+  }, [enrichedRoute, targetJourney]);
+
+  // Effective active segment index derived from props or local state
+  const effectiveActiveSegmentIndex = useMemo(() => {
     if (selectedSegmentId) {
       const idx = segments.findIndex((s) => s.segmentId === selectedSegmentId);
-      if (idx !== -1) setActiveSegmentIndex(idx);
+      if (idx !== -1) return idx;
     }
-  }, [selectedSegmentId, segments]);
+    return activeSegmentIndex;
+  }, [selectedSegmentId, segments, activeSegmentIndex]);
 
-  // SVG Projection parameters (SVG viewport: 800 x 420)
-  const svgWidth = 800;
-  const svgHeight = 420;
-  const padding = 65;
+  // Waypoints for both Leaflet markers and schematic representation
+  const waypoints: ProjectedWaypoint[] = useMemo(() => {
+    const pts: ProjectedWaypoint[] = [];
+    if (!segments.length) return pts;
 
-  // Extract all coordinates to compute bounding box
-  const allCoordinates = useMemo(() => {
-    const coords: { lat: number; lng: number }[] = [];
-    if (enrichedRoute?.segments?.length) {
-      for (const seg of enrichedRoute.segments) {
-        for (const c of seg.coordinates) {
-          coords.push({ lat: c.latitude, lng: c.longitude });
-        }
-      }
-    } else {
-      for (const seg of segments) {
-        coords.push(seg.origin.coordinates);
-        coords.push(seg.destination.coordinates);
-      }
-    }
-    return coords;
-  }, [enrichedRoute, segments]);
+    // Origin
+    pts.push({
+      lat: segments[0].origin.coordinates.lat,
+      lng: segments[0].origin.coordinates.lng,
+      title: segments[0].origin.name,
+      city: segments[0].origin.city,
+      type: segments[0].origin.type,
+      isHub: false,
+      hubType: 'origin',
+      segmentIndex: 0,
+      xrSceneId: matchXRSceneForHub(segments[0].origin.name) || matchXRSceneForHub(segments[0].origin.city),
+    });
 
-  // Compute latitude/longitude bounds with margin
-  const bounds = useMemo(() => {
-    if (!allCoordinates.length) {
-      return { minLat: 12.0, maxLat: 14.0, minLng: 74.0, maxLng: 81.0 };
-    }
-    let minLat = 90,
-      maxLat = -90,
-      minLng = 180,
-      maxLng = -180;
-    for (const c of allCoordinates) {
-      if (c.lat < minLat) minLat = c.lat;
-      if (c.lat > maxLat) maxLat = c.lat;
-      if (c.lng < minLng) minLng = c.lng;
-      if (c.lng > maxLng) maxLng = c.lng;
-    }
-
-    // Apply minimum delta to prevent zero-division
-    const dLat = Math.max(0.15, maxLat - minLat);
-    const dLng = Math.max(0.15, maxLng - minLng);
-
-    return {
-      minLat: minLat - dLat * 0.15,
-      maxLat: maxLat + dLat * 0.15,
-      minLng: minLng - dLng * 0.15,
-      maxLng: maxLng + dLng * 0.15,
-    };
-  }, [allCoordinates]);
-
-  // Project (lat, lng) -> SVG (x, y)
-  const project = (lat: number, lng: number): { x: number; y: number } => {
-    const latSpan = bounds.maxLat - bounds.minLat;
-    const lngSpan = bounds.maxLng - bounds.minLng;
-
-    const xRatio = (lng - bounds.minLng) / (lngSpan || 1);
-    const yRatio = (lat - bounds.minLat) / (latSpan || 1);
-
-    const x = padding + xRatio * (svgWidth - 2 * padding);
-    // Invert Y because SVG (0,0) is top-left while latitude increases upwards (North)
-    const y = svgHeight - (padding + yRatio * (svgHeight - 2 * padding));
-    return { x: Math.round(x), y: Math.round(y) };
-  };
-
-  // Build projected waypoint nodes for hubs and endpoints
-  const projectedWaypoints: ProjectedPoint[] = useMemo(() => {
-    const points: ProjectedPoint[] = [];
-
+    // Segment destinations
     segments.forEach((seg, idx) => {
-      // First waypoint (Journey Origin)
-      if (idx === 0) {
-        const { x, y } = project(seg.origin.coordinates.lat, seg.origin.coordinates.lng);
-        points.push({
-          x,
-          y,
-          lat: seg.origin.coordinates.lat,
-          lng: seg.origin.coordinates.lng,
-          title: seg.origin.name,
-          city: seg.origin.city,
-          type: seg.origin.type,
-          isHub: false,
-          hubType: 'origin',
-          segmentIndex: 0,
-        });
-      }
-
-      // Segment Destination / Transfer Hub
       const isFinal = idx === segments.length - 1;
-      const { x, y } = project(seg.destination.coordinates.lat, seg.destination.coordinates.lng);
       const xrSceneId = matchXRSceneForHub(seg.destination.name) || matchXRSceneForHub(seg.destination.city);
-
-      points.push({
-        x,
-        y,
+      pts.push({
         lat: seg.destination.coordinates.lat,
         lng: seg.destination.coordinates.lng,
         title: seg.destination.name,
@@ -229,63 +197,365 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       });
     });
 
-    return points;
-  }, [segments, bounds]);
+    return pts;
+  }, [segments]);
 
-  // Helper: Get mode stroke color
-  const getModeColor = (mode: string) => {
-    switch (mode) {
-      case 'flight':
-        return '#4f46e5'; // Indigo
-      case 'train':
-        return '#059669'; // Emerald
-      case 'bus':
-        return '#d97706'; // Amber
-      case 'rapido':
-      case 'auto':
-        return '#7c3aed'; // Violet
-      case 'cab':
-      default:
-        return '#2563eb'; // Blue
+  // -------------------------------------------------------------------------
+  // LEAFLET MAP INITIALIZATION & LIFECYCLE
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (viewMode !== 'geographic' || !mapContainerRef.current) return;
+
+    try {
+      if (!mapInstanceRef.current) {
+        // Initialize Leaflet map
+        const map = L.map(mapContainerRef.current, {
+          zoomControl: false,
+          attributionControl: false,
+          minZoom: 3,
+          maxZoom: 19,
+        });
+
+        // CartoDB Positron Basemap Tile Layer
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+          subdomains: 'abcd',
+          maxZoom: 19,
+        }).addTo(map);
+
+        const featureGroup = L.featureGroup().addTo(map);
+        layersGroupRef.current = featureGroup;
+        mapInstanceRef.current = map;
+      }
+
+      // Invalidate size to ensure proper tile loading
+      setTimeout(() => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.invalidateSize();
+        }
+      }, 150);
+    } catch (err) {
+      console.error('Leaflet initialization failed; falling back to SVG:', err);
+      setLeafletError(true);
+      setViewMode('schematic');
+    }
+
+    return () => {
+      // Map instance is preserved across tabs unless unmounted
+    };
+  }, [viewMode]);
+
+  // Clean cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        layersGroupRef.current = null;
+      }
+    };
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // LEAFLET LAYERS UPDATE (POLYLINES & MARKERS)
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const featureGroup = layersGroupRef.current;
+    if (!map || !featureGroup || viewMode !== 'geographic') return;
+
+    featureGroup.clearLayers();
+
+    const allLatLangs: L.LatLngExpression[] = [];
+
+    // 1. Draw Alternative Journeys (Muted lines)
+    if (alternativeJourneys && alternativeJourneys.length > 0) {
+      alternativeJourneys.forEach((alt) => {
+        if (alt.id === targetJourney.id) return;
+        const altPoints: [number, number][] = [];
+        alt.segments.forEach((s) => {
+          altPoints.push([s.origin.coordinates.lat, s.origin.coordinates.lng]);
+          altPoints.push([s.destination.coordinates.lat, s.destination.coordinates.lng]);
+        });
+
+        if (altPoints.length >= 2) {
+          const altLine = L.polyline(altPoints, {
+            color: '#94a3b8',
+            weight: 3,
+            dashArray: '6, 6',
+            opacity: 0.55,
+          }).addTo(featureGroup);
+
+          altLine.bindTooltip(
+            `<strong>${alt.title}</strong><br/>₹${alt.totalPrice} · ${formatDuration(alt.totalDurationMinutes)}<br/><span style="font-size:10px;color:#2563eb;">Click to switch route</span>`,
+            { sticky: true }
+          );
+
+          altLine.on('click', () => {
+            if (onSelectJourney) onSelectJourney(alt.id);
+          });
+        }
+      });
+    }
+
+    // 2. Draw Active Journey Segments (Real Valhalla / Geo Geometry)
+    segments.forEach((seg, idx) => {
+      const enrichedSeg = effectiveRoute.segments?.[idx];
+      const style = getModeStyle(seg.mode);
+      const isActive = effectiveActiveSegmentIndex === idx;
+
+      let latlngs: [number, number][] = [];
+
+      // Prefer GeoJSON geometry LineString coordinates [lng, lat]
+      if (enrichedSeg?.geojson_geometry?.coordinates?.length) {
+        latlngs = enrichedSeg.geojson_geometry.coordinates.map((c) => [c[1], c[0]]);
+      } else if (seg.geojsonGeometry?.coordinates?.length) {
+        latlngs = seg.geojsonGeometry.coordinates.map((c) => [c[1], c[0]]);
+      } else if (enrichedSeg?.coordinates?.length) {
+        latlngs = enrichedSeg.coordinates.map((c) => [c.latitude, c.longitude]);
+      } else {
+        latlngs = [
+          [seg.origin.coordinates.lat, seg.origin.coordinates.lng],
+          [seg.destination.coordinates.lat, seg.destination.coordinates.lng],
+        ];
+      }
+
+      latlngs.forEach((pt) => allLatLangs.push(pt));
+
+      // Active casing / halo glow
+      if (isActive) {
+        L.polyline(latlngs, {
+          color: style.glow,
+          weight: style.weight + 8,
+          opacity: 0.45,
+          lineCap: 'round',
+          lineJoin: 'round',
+        }).addTo(featureGroup);
+      }
+
+      // Main route polyline
+      const line = L.polyline(latlngs, {
+        color: style.stroke,
+        weight: isActive ? style.weight + 2 : style.weight,
+        dashArray: style.dashArray,
+        opacity: isActive ? 1.0 : 0.85,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(featureGroup);
+
+      const isLive = enrichedSeg?.is_live_geometry ?? seg.isLiveGeometry ?? false;
+      const dist = Math.round((enrichedSeg?.distance_meters ?? (seg.distanceKm * 1000)) / 1000);
+      const dur = Math.round((enrichedSeg?.duration_seconds ?? (seg.durationMinutes * 60)) / 60);
+
+      const popupContent = `
+        <div style="font-family: sans-serif; min-width: 180px; padding: 2px;">
+          <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">
+            ${seg.provider} <span style="font-size: 11px; text-transform: uppercase; color: #64748b;">(${seg.mode})</span>
+          </div>
+          <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
+            ${seg.origin.city} → ${seg.destination.city}
+          </div>
+          <div style="font-size: 11px; font-family: monospace; color: #0f172a; display: flex; gap: 8px; margin-bottom: 6px;">
+            <span><strong>${dist}</strong> km</span>
+            <span>·</span>
+            <span><strong>${dur}</strong> min</span>
+          </div>
+          <div style="display: inline-block; font-size: 10px; font-family: monospace; padding: 2px 6px; border-radius: 4px; ${
+            isLive
+              ? 'background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;'
+              : 'background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;'
+          }">
+            ${isLive ? '✓ Verified Valhalla OSM Route' : 'Corridor Transit Estimate'}
+          </div>
+        </div>
+      `;
+
+      line.bindPopup(popupContent);
+      line.on('click', () => {
+        setActiveSegmentIndex(idx);
+        if (onSegmentClick) onSegmentClick(seg.segmentId);
+      });
+    });
+
+    // 3. Draw Grounded Markers (Origin, Destination, Transfer Hubs)
+    waypoints.forEach((wp) => {
+      const isOrigin = wp.hubType === 'origin';
+      const isDest = wp.hubType === 'destination';
+      const hasXR = !!wp.xrSceneId;
+
+      let iconHtml = '';
+      if (isOrigin) {
+        iconHtml = `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;">
+            <div style="position: absolute; width: 28px; height: 28px; border-radius: 9999px; background: #10b981; opacity: 0.35; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 20px; height: 20px; border-radius: 9999px; background: #059669; border: 2.5px solid #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+              <div style="width: 6px; height: 6px; border-radius: 9999px; background: #ffffff;"></div>
+            </div>
+          </div>
+        `;
+      } else if (isDest) {
+        iconHtml = `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;">
+            <div style="position: relative; width: 22px; height: 22px; border-radius: 9999px; background: #e11d48; border: 2.5px solid #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center;">
+              <div style="width: 7px; height: 7px; border-radius: 9999px; background: #ffffff;"></div>
+            </div>
+          </div>
+        `;
+      } else {
+        // Transfer Hub
+        iconHtml = `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;">
+            ${
+              hasXR
+                ? '<div style="position: absolute; width: 28px; height: 28px; border-radius: 9999px; background: #38bdf8; opacity: 0.45; animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>'
+                : ''
+            }
+            <div style="position: relative; width: 18px; height: 18px; border-radius: 9999px; background: #d97706; border: 2px solid #ffffff; box-shadow: 0 2px 4px rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center;">
+              <div style="width: 5px; height: 5px; border-radius: 9999px; background: #ffffff;"></div>
+            </div>
+          </div>
+        `;
+      }
+
+      const customIcon = L.divIcon({
+        className: 'custom-leaflet-marker',
+        html: iconHtml,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+        popupAnchor: [0, -14],
+      });
+
+      const marker = L.marker([wp.lat, wp.lng], { icon: customIcon }).addTo(featureGroup);
+
+      const xrButtonHtml = hasXR
+        ? `<button id="xr-btn-${wp.xrSceneId}" style="margin-top: 8px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 10px; background: #2563eb; color: #ffffff; font-weight: 700; font-size: 11px; border: none; border-radius: 8px; cursor: pointer;">
+             <span>Explore 360° Concourse</span>
+           </button>`
+        : '';
+
+      const markerPopup = `
+        <div style="font-family: sans-serif; min-width: 170px; padding: 2px;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: ${
+            isOrigin ? '#059669' : isDest ? '#e11d48' : '#d97706'
+          }; margin-bottom: 2px;">
+            ${isOrigin ? 'Journey Origin' : isDest ? 'Final Destination' : 'Transfer Hub'}
+          </div>
+          <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${wp.title}</div>
+          <div style="font-size: 11px; color: #64748b; margin-bottom: 4px;">${wp.city} · ${wp.type}</div>
+          <div style="font-size: 10px; font-family: monospace; color: #64748b;">
+            ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E
+          </div>
+          ${
+            wp.transferBufferMinutes
+              ? `<div style="margin-top: 4px; font-size: 11px; font-weight: 600; color: #d97706;">Transfer Buffer: +${wp.transferBufferMinutes} min</div>`
+              : ''
+          }
+          ${xrButtonHtml}
+        </div>
+      `;
+
+      marker.bindPopup(markerPopup);
+
+      // Attach XR click listener on popup open
+      if (hasXR) {
+        marker.on('popupopen', () => {
+          const btn = document.getElementById(`xr-btn-${wp.xrSceneId}`);
+          if (btn) {
+            btn.onclick = () => {
+              navigate(`/xr/${wp.xrSceneId}`);
+            };
+          }
+        });
+      }
+
+      marker.on('click', () => {
+        if (wp.segmentIndex !== undefined) {
+          setActiveSegmentIndex(wp.segmentIndex);
+        }
+      });
+    });
+
+    // 4. Fit Bounds with comfortable padding
+    if (allLatLangs.length > 0) {
+      const boundsObj = L.latLngBounds(allLatLangs as L.LatLngTuple[]);
+      map.fitBounds(boundsObj, {
+        padding: [45, 45],
+        maxZoom: 14,
+        animate: true,
+      });
+    }
+  }, [effectiveRoute, segments, alternativeJourneys, effectiveActiveSegmentIndex, viewMode, waypoints, targetJourney.id, onSelectJourney, onSegmentClick, navigate]);
+
+  // Map control callbacks
+  const handleZoomIn = () => {
+    mapInstanceRef.current?.zoomIn();
+  };
+
+  const handleZoomOut = () => {
+    mapInstanceRef.current?.zoomOut();
+  };
+
+  const handleFitRoute = () => {
+    if (layersGroupRef.current && mapInstanceRef.current) {
+      const b = layersGroupRef.current.getBounds();
+      if (b.isValid()) {
+        mapInstanceRef.current.fitBounds(b, { padding: [45, 45], maxZoom: 14, animate: true });
+      }
     }
   };
 
-  // Active segment
-  const activeSegment = segments[activeSegmentIndex] || segments[0];
-  const activeEnrichedSeg = enrichedRoute?.segments?.[activeSegmentIndex];
+  const handleRecenterOrigin = () => {
+    if (mapInstanceRef.current && segments[0]) {
+      const { lat, lng } = segments[0].origin.coordinates;
+      mapInstanceRef.current.setView([lat, lng], 13, { animate: true });
+    }
+  };
+
+  const handleRecenterDestination = () => {
+    if (mapInstanceRef.current && segments[segments.length - 1]) {
+      const { lat, lng } = segments[segments.length - 1].destination.coordinates;
+      mapInstanceRef.current.setView([lat, lng], 13, { animate: true });
+    }
+  };
+
+  // Active segment inspection
+  const activeSegment = segments[effectiveActiveSegmentIndex] || segments[0];
+  const activeEnrichedSeg = effectiveRoute?.segments?.[effectiveActiveSegmentIndex];
 
   // Total summary telemetry
-  const totalKm = enrichedRoute
-    ? Math.round(enrichedRoute.total_distance_meters / 1000)
+  const totalKm = effectiveRoute
+    ? Math.round(effectiveRoute.total_distance_meters / 1000)
     : segments.reduce((sum, s) => sum + (s.distanceKm || 0), 0);
 
-  const totalMin = enrichedRoute
-    ? Math.round(enrichedRoute.total_duration_seconds / 60)
+  const totalMin = effectiveRoute
+    ? Math.round(effectiveRoute.total_duration_seconds / 60)
     : segments.reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
 
-  const providerSource = enrichedRoute?.source || 'deterministic_geo';
-  const isGoogleSource = providerSource.includes('google');
+  const providerSource = effectiveRoute?.source || 'deterministic_geo';
+  const hasLiveGeometry = effectiveRoute?.has_live_geometry || effectiveRoute.segments?.some((s) => s.is_live_geometry);
   const isValhallaSource = providerSource.includes('valhalla');
+  const isGoogleSource = providerSource.includes('google');
 
-  const providerBadgeLabel = isGoogleSource
-    ? 'Google Routes API'
-    : isValhallaSource
-    ? 'Valhalla OSM Engine'
-    : 'KogniSync Geo-Engine';
+  const providerBadgeLabel = hasLiveGeometry
+    ? isValhallaSource
+      ? 'Valhalla OSM Live'
+      : isGoogleSource
+      ? 'Google Routes Live'
+      : 'Live Route Geometry'
+    : 'Deterministic Corridor';
 
   return (
     <div
       className={`rounded-2xl border border-slate-200 bg-white overflow-hidden flex flex-col shadow-sm relative ${className}`}
     >
       {/* Top Map Toolbar */}
-      <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/90 flex flex-wrap items-center justify-between gap-3 z-10">
+      <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/95 flex flex-wrap items-center justify-between gap-3 z-10">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
             <Compass className="w-4 h-4 animate-spin-slow" />
           </div>
           <div className="flex flex-col">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-900 font-display">
-              Multimodal Journey Spatial Map
+              Multimodal Journey Navigation Map
             </span>
             <span className="text-[10px] text-slate-500 font-mono">
               {segments[0]?.origin?.city} → {segments[segments.length - 1]?.destination?.city} · Door-to-Door Corridor
@@ -293,7 +563,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           </div>
         </div>
 
-        {/* View Mode Switch & Provider Badge */}
+        {/* View Mode Switch & Live Geometry Provenance Badge */}
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-white p-0.5 rounded-lg border border-slate-200 text-[11px] font-mono shadow-2xs">
             <button
@@ -321,192 +591,134 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           </div>
 
           <span
-            className={`inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md border ${
-              isGoogleSource || isValhallaSource
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+            className={`inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md border font-semibold ${
+              hasLiveGeometry
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
                 : 'bg-blue-50 text-blue-800 border-blue-200'
             }`}
           >
-            <Sparkles className="w-2.5 h-2.5" />
+            {hasLiveGeometry ? (
+              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+            ) : (
+              <Sparkles className="w-3 h-3 text-blue-600" />
+            )}
             {providerBadgeLabel}
           </span>
         </div>
       </div>
 
-      {/* Map Canvas / Visualization Viewport */}
-      <div className="relative h-80 sm:h-96 w-full bg-slate-950 flex flex-col items-center justify-center overflow-hidden">
-        {/* Subtle grid pattern background */}
-        <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#38bdf8_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none" />
-
-        {/* Coordinate HUD in top corner */}
-        <div className="absolute top-3 left-4 flex items-center gap-2 text-[10px] font-mono text-slate-400 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800 pointer-events-none z-10 backdrop-blur-xs">
-          <span className="text-blue-400">LAT:</span> {bounds.minLat.toFixed(2)}° – {bounds.maxLat.toFixed(2)}° N
-          <span className="text-slate-600">|</span>
-          <span className="text-blue-400">LNG:</span> {bounds.minLng.toFixed(2)}° – {bounds.maxLng.toFixed(2)}° E
+      {/* Alternative Journey Routes Bar (if available) */}
+      {alternativeJourneys.length > 0 && (
+        <div className="px-4 py-2 bg-slate-100/80 border-b border-slate-200 flex items-center gap-2 overflow-x-auto text-[11px] font-mono">
+          <span className="text-slate-500 font-semibold uppercase tracking-wider text-[10px] shrink-0">
+            Pareto Routes:
+          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => onSelectJourney?.(targetJourney.id)}
+              className="px-2.5 py-1 rounded-md bg-white border border-blue-600 text-blue-700 font-bold shadow-2xs flex items-center gap-1"
+            >
+              <div className="w-2 h-2 rounded-full bg-blue-600" />
+              <span>{targetJourney.title || 'Selected Route'} (₹{targetJourney.totalPrice})</span>
+            </button>
+            {alternativeJourneys.map((alt) => (
+              <button
+                key={alt.id}
+                onClick={() => onSelectJourney?.(alt.id)}
+                className="px-2.5 py-1 rounded-md bg-white/70 hover:bg-white border border-slate-200 text-slate-600 hover:text-slate-900 transition-colors flex items-center gap-1"
+              >
+                <div className="w-2 h-2 rounded-full bg-slate-400" />
+                <span>{alt.title} (₹{alt.totalPrice})</span>
+              </button>
+            ))}
+          </div>
         </div>
+      )}
 
-        {viewMode === 'geographic' ? (
+      {/* Map Canvas / Visualization Viewport */}
+      <div className="relative h-80 sm:h-96 w-full bg-slate-900 flex flex-col items-center justify-center overflow-hidden">
+        {viewMode === 'geographic' && !leafletError ? (
           /* =========================================================================
-             MODE A: 2D Spatial SVG Vector Map Projection
+             MODE A: Leaflet Interactive OpenStreetMap / Valhalla Map
              ========================================================================= */
-          <svg
-            viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-            className="w-full h-full object-contain select-none"
-          >
-            <defs>
-              {/* Radial glow for active pins */}
-              <radialGradient id="hubGlow" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.6" />
-                <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
-              </radialGradient>
-              {/* Gradient for flight corridors */}
-              <linearGradient id="flightGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#6366f1" />
-                <stop offset="100%" stopColor="#a855f7" />
-              </linearGradient>
-            </defs>
+          <div className="relative w-full h-full">
+            <div
+              ref={mapContainerRef}
+              className="w-full h-full z-0 bg-slate-100"
+              style={{ minHeight: '100%' }}
+            />
 
-            {/* Faint latitude/longitude guide lines */}
-            <line x1={padding} y1={svgHeight / 2} x2={svgWidth - padding} y2={svgHeight / 2} stroke="#1e293b" strokeDasharray="4 4" strokeWidth="1" />
-            <line x1={svgWidth / 2} y1={padding} x2={svgWidth / 2} y2={svgHeight - padding} stroke="#1e293b" strokeDasharray="4 4" strokeWidth="1" />
-
-            {/* Segment Polylines */}
-            {segments.map((seg, idx) => {
-              const enrichedSeg = enrichedRoute?.segments?.[idx];
-              const modeColor = getModeColor(seg.mode);
-              const isActive = activeSegmentIndex === idx;
-
-              // Generate SVG path string from coordinates
-              let pathD = '';
-              if (enrichedSeg?.coordinates?.length) {
-                enrichedSeg.coordinates.forEach((c, cIdx) => {
-                  const pt = project(c.latitude, c.longitude);
-                  if (cIdx === 0) pathD += `M ${pt.x} ${pt.y}`;
-                  else pathD += ` L ${pt.x} ${pt.y}`;
-                });
-              } else {
-                const p1 = project(seg.origin.coordinates.lat, seg.origin.coordinates.lng);
-                const p2 = project(seg.destination.coordinates.lat, seg.destination.coordinates.lng);
-                if (seg.mode === 'flight') {
-                  const midX = (p1.x + p2.x) / 2;
-                  const midY = (p1.y + p2.y) / 2 - 40; // Arc elevation
-                  pathD = `M ${p1.x} ${p1.y} Q ${midX} ${midY} ${p2.x} ${p2.y}`;
-                } else {
-                  pathD = `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
-                }
-              }
-
-              return (
-                <g key={`path-group-${seg.segmentId}`} className="cursor-pointer">
-                  {/* Outer glow stroke when active */}
-                  {isActive && (
-                    <path
-                      d={pathD}
-                      fill="none"
-                      stroke={modeColor}
-                      strokeWidth="10"
-                      strokeOpacity="0.25"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  )}
-
-                  {/* Main Route Polyline */}
-                  <path
-                    d={pathD}
-                    fill="none"
-                    stroke={modeColor}
-                    strokeWidth={isActive ? '4' : '3'}
-                    strokeDasharray={
-                      seg.mode === 'flight' ? '8 6' : seg.mode === 'train' ? '10 5' : undefined
-                    }
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="transition-all hover:stroke-width-5"
-                    onClick={() => {
-                      setActiveSegmentIndex(idx);
-                      if (onSegmentClick) onSegmentClick(seg.segmentId);
-                    }}
-                  />
-                </g>
-              );
-            })}
-
-            {/* Waypoint Pins & Nodes */}
-            {projectedWaypoints.map((wp, idx) => {
-              const isFirst = wp.hubType === 'origin';
-              const isLast = wp.hubType === 'destination';
-              const hasXR = !!wp.xrSceneId;
-
-              return (
-                <g
-                  key={`wp-${wp.title}-${idx}`}
-                  transform={`translate(${wp.x}, ${wp.y})`}
-                  className="cursor-pointer group"
-                  onClick={() => {
-                    if (wp.segmentIndex !== undefined) setActiveSegmentIndex(wp.segmentIndex);
-                  }}
-                  onMouseEnter={() => setHoveredNode(wp)}
-                  onMouseLeave={() => setHoveredNode(null)}
+            {/* Floating Navigation Controls */}
+            {interactive && (
+              <div className="absolute top-3 right-3 flex flex-col gap-1.5 z-[1000] bg-white/95 rounded-xl border border-slate-200 p-1 shadow-md backdrop-blur-xs">
+                <button
+                  type="button"
+                  onClick={handleZoomIn}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-slate-900 transition-colors cursor-pointer"
+                  title="Zoom In"
                 >
-                  {/* Pulse ring for XR-enabled hubs */}
-                  {hasXR && (
-                    <circle
-                      r="16"
-                      fill="url(#hubGlow)"
-                      className="animate-ping opacity-60 pointer-events-none"
-                    />
-                  )}
+                  <ZoomIn className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleZoomOut}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-slate-900 transition-colors cursor-pointer"
+                  title="Zoom Out"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </button>
+                <div className="h-px bg-slate-200 my-0.5" />
+                <button
+                  type="button"
+                  onClick={handleFitRoute}
+                  className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-700 hover:text-slate-900 transition-colors cursor-pointer"
+                  title="Fit Whole Route"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRecenterOrigin}
+                  className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700 transition-colors cursor-pointer"
+                  title="Focus Origin"
+                >
+                  <MapPin className="w-4 h-4 text-emerald-600" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRecenterDestination}
+                  className="p-1.5 rounded-lg hover:bg-rose-50 text-rose-700 transition-colors cursor-pointer"
+                  title="Focus Destination"
+                >
+                  <Navigation className="w-4 h-4 text-rose-600" />
+                </button>
+              </div>
+            )}
 
-                  {/* Outer circle */}
-                  <circle
-                    r={isFirst || isLast ? '9' : '7'}
-                    fill={isFirst ? '#16a34a' : isLast ? '#e11d48' : '#0f172a'}
-                    stroke={isFirst ? '#86efac' : isLast ? '#fda4af' : hasXR ? '#38bdf8' : '#94a3b8'}
-                    strokeWidth={hasXR ? '3' : '2'}
-                    className="transition-transform group-hover:scale-125"
-                  />
+            {/* Route Legend Indicator */}
+            <div className="absolute bottom-2 left-2 z-[1000] bg-white/95 px-3 py-1.5 rounded-lg border border-slate-200 shadow-xs backdrop-blur-xs flex items-center gap-3 text-[10px] font-mono text-slate-600">
+              <div className="flex items-center gap-1.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
+                <span>Origin</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                <span>Transfer</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2.5 h-2.5 rounded-full bg-rose-600" />
+                <span>Destination</span>
+              </div>
+            </div>
 
-                  {/* Inner dot */}
-                  <circle
-                    r={isFirst || isLast ? '3' : '2'}
-                    fill="#ffffff"
-                  />
-
-                  {/* Label pill above node */}
-                  <g
-                    transform={`translate(0, ${isFirst || isLast ? -16 : -14})`}
-                    className="pointer-events-none"
-                  >
-                    <rect
-                      x="-50"
-                      y="-12"
-                      width="100"
-                      height="16"
-                      rx="4"
-                      fill="#0f172a"
-                      fillOpacity="0.9"
-                      stroke="#334155"
-                      strokeWidth="0.8"
-                    />
-                    <text
-                      textAnchor="middle"
-                      y="0"
-                      fill="#f8fafc"
-                      fontSize="9"
-                      fontWeight="bold"
-                      fontFamily="sans-serif"
-                    >
-                      {wp.city}
-                    </text>
-                  </g>
-                </g>
-              );
-            })}
-          </svg>
+            {/* Basemap Tile Attribution */}
+            <div className="absolute bottom-1 right-2 z-[1000] px-2 py-0.5 rounded bg-white/90 backdrop-blur-xs text-[9px] text-slate-500 border border-slate-200 shadow-2xs pointer-events-auto select-none">
+              &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="hover:underline text-slate-700 font-medium">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer" className="hover:underline text-slate-700 font-medium">CARTO</a>
+            </div>
+          </div>
         ) : (
           /* =========================================================================
-             MODE B: Corridor Topology Schematic Diagram
+             MODE B: Corridor Topology Schematic Diagram (Accessible SVG Fallback)
              ========================================================================= */
           <div className="w-full max-w-2xl flex flex-col justify-center h-full relative z-10 px-6">
             <div className="relative flex items-center justify-between w-full">
@@ -522,7 +734,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
                         backgroundColor: meta.accentColor,
                       }}
                       className={`h-full transition-opacity cursor-pointer ${
-                        activeSegmentIndex === idx
+                        effectiveActiveSegmentIndex === idx
                           ? 'opacity-100 ring-2 ring-white'
                           : 'opacity-75 hover:opacity-100'
                       }`}
@@ -537,7 +749,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
               </div>
 
               {/* Waypoint Nodes along the route */}
-              {projectedWaypoints.map((wp, idx) => {
+              {waypoints.map((wp, idx) => {
                 const isFirst = wp.hubType === 'origin';
                 const isLast = wp.hubType === 'destination';
 
@@ -575,43 +787,6 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
             </div>
           </div>
         )}
-
-        {/* Hover / Node inspector card */}
-        {hoveredNode && (
-          <div className="absolute top-12 left-4 bg-slate-900/95 border border-slate-700 p-3 rounded-xl shadow-xl z-30 max-w-xs text-xs text-slate-200 backdrop-blur-md animate-in fade-in">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-1.5 mb-2">
-              <span className="font-bold text-white text-sm">{hoveredNode.title}</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-800 font-mono text-slate-300">
-                {hoveredNode.city}
-              </span>
-            </div>
-            <div className="flex flex-col gap-1 text-[11px] text-slate-300">
-              <div>
-                <strong className="text-slate-400">Coords:</strong> {hoveredNode.lat.toFixed(4)}°N,{' '}
-                {hoveredNode.lng.toFixed(4)}°E
-              </div>
-              {hoveredNode.transferBufferMinutes && (
-                <div className="text-amber-400 font-medium">
-                  Transfer Connection Buffer: +{hoveredNode.transferBufferMinutes} min
-                </div>
-              )}
-            </div>
-            {hoveredNode.xrSceneId && (
-              <button
-                onClick={() => navigate(`/xr/${hoveredNode.xrSceneId}`)}
-                className="mt-2.5 w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors shadow-xs"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Explore Station in 360°</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* OpenStreetMap Attribution Label */}
-        <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded bg-slate-900/80 backdrop-blur-xs text-[10px] text-slate-400 border border-slate-800 shadow-2xs pointer-events-none select-none z-20">
-          Map data © <span className="text-slate-300 font-medium">OpenStreetMap</span> contributors
-        </div>
       </div>
 
       {/* Segment Selector & Detailed Telemetry Bar */}
@@ -619,8 +794,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         {/* Mode Selector Pills */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
           {segments.map((seg, idx) => {
-            const isSelected = activeSegmentIndex === idx;
-            const modeMeta = getModeMeta(seg.mode);
+            const isSelected = effectiveActiveSegmentIndex === idx;
             const dist = seg.distanceKm || (activeEnrichedSeg ? Math.round(activeEnrichedSeg.distance_meters / 1000) : 0);
 
             return (
@@ -654,7 +828,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
             <div className="flex items-center gap-3">
               <div
                 className="w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 shadow-xs"
-                style={{ backgroundColor: getModeColor(activeSegment.mode) }}
+                style={{ backgroundColor: getModeStyle(activeSegment.mode).stroke }}
               >
                 <ModeIcon mode={activeSegment.mode} size={20} />
               </div>
@@ -663,9 +837,14 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
                   <span className="text-xs font-bold text-slate-950 font-display">
                     {activeSegment.origin.city} → {activeSegment.destination.city}
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 uppercase">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 uppercase font-semibold">
                     {activeSegment.mode}
                   </span>
+                  {activeEnrichedSeg?.is_live_geometry && (
+                    <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">
+                      LIVE ROAD
+                    </span>
+                  )}
                 </div>
                 <span className="text-xs text-slate-500 mt-0.5">
                   {activeSegment.origin.name} to {activeSegment.destination.name} via{' '}
@@ -736,11 +915,9 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           <div className="flex items-center gap-1.5 text-slate-400">
             <Info className="w-3.5 h-3.5" />
             <span>
-              {isGoogleSource
-                ? 'Routing computed via Google Routes API v2'
-                : isValhallaSource
-                ? 'Road routing computed via Valhalla OSM Engine · Map data © OpenStreetMap contributors'
-                : 'Routing computed via KogniSync spatial engine · Map data © OpenStreetMap contributors'}
+              {hasLiveGeometry
+                ? 'Road geometry powered by Valhalla OpenStreetMap routing'
+                : 'Corridor estimated using spatial transit topologies'}
             </span>
           </div>
         </div>
@@ -748,5 +925,3 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     </div>
   );
 };
-
-export default JourneyMap;

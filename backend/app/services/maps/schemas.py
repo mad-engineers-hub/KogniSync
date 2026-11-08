@@ -1,3 +1,4 @@
+from typing import Any
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 
 
@@ -18,10 +19,14 @@ class SegmentRouteGeometry(BaseModel):
     origin_coords: RouteCoordinate = Field(..., validation_alias=AliasChoices("origin_coords", "originCoords"))
     destination_coords: RouteCoordinate = Field(..., validation_alias=AliasChoices("destination_coords", "destinationCoords"))
     coordinates: list[RouteCoordinate] = Field(default_factory=list)
+    geojson_geometry: dict[str, Any] | None = Field(default=None, validation_alias=AliasChoices("geojson_geometry", "geojsonGeometry"))
     distance_meters: int = Field(..., validation_alias=AliasChoices("distance_meters", "distanceMeters"))
     duration_seconds: int = Field(..., validation_alias=AliasChoices("duration_seconds", "durationSeconds"))
     encoded_polyline: str | None = Field(default=None, validation_alias=AliasChoices("encoded_polyline", "encodedPolyline"))
     source: str = "deterministic_fallback"
+    is_live_geometry: bool = Field(default=False, validation_alias=AliasChoices("is_live_geometry", "isLiveGeometry"))
+    provenance_notes: str | None = Field(default=None, validation_alias=AliasChoices("provenance_notes", "provenanceNotes"))
+    maneuvers: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -33,6 +38,7 @@ class EnrichedJourneyRoute(BaseModel):
     segments: list[SegmentRouteGeometry]
     source: str = "deterministic_fallback"
     provider_status: str = Field(default="ok", validation_alias=AliasChoices("provider_status", "providerStatus"))
+    has_live_geometry: bool = Field(default=False, validation_alias=AliasChoices("has_live_geometry", "hasLiveGeometry"))
 
 
 class RouteEnrichRequestSegment(BaseModel):

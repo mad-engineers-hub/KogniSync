@@ -211,6 +211,21 @@ class JourneySegmentSchema(BaseModel):
         validation_alias=AliasChoices("provenance", "provenance"),
         serialization_alias="provenance",
     )
+    encoded_polyline: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("encoded_polyline", "encodedPolyline"),
+        serialization_alias="encodedPolyline",
+    )
+    geojson_geometry: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("geojson_geometry", "geojsonGeometry"),
+        serialization_alias="geojsonGeometry",
+    )
+    is_live_geometry: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_live_geometry", "isLiveGeometry"),
+        serialization_alias="isLiveGeometry",
+    )
 
 
 class AIExplanationSchema(BaseModel):

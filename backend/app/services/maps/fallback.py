@@ -5,7 +5,10 @@ from app.services.maps.schemas import (
     RouteEnrichRequestSegment,
     SegmentRouteGeometry,
 )
-from app.services.maps.polyline import encode_polyline
+from app.services.maps.polyline import (
+    encode_polyline,
+    coordinates_to_geojson_linestring,
+)
 
 
 def haversine_distance_meters(
@@ -162,6 +165,7 @@ class FallbackMapsProvider(MapsProvider):
             duration_seconds = max(60, int((dist_km / avg_speed_kmh) * 3600))
 
         encoded = encode_polyline(coords)
+        geojson = coordinates_to_geojson_linestring(coords)
 
         return SegmentRouteGeometry(
             segment_id=segment.segment_id,
@@ -173,9 +177,12 @@ class FallbackMapsProvider(MapsProvider):
             origin_coords=p1,
             destination_coords=p2,
             coordinates=coords,
+            geojson_geometry=geojson,
             distance_meters=distance_meters,
             duration_seconds=duration_seconds,
             encoded_polyline=encoded,
             source=self.name,
+            is_live_geometry=False,
+            provenance_notes=f"Deterministic {mode_lower} corridor estimate (KogniSync Geo-Engine)",
             warnings=[],
         )

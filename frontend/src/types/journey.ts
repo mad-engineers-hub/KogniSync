@@ -92,6 +92,12 @@ export interface JourneySegment {
   notes?: string;
   transferBufferMinutes?: number;
   provenance?: SegmentProvenance;
+  encodedPolyline?: string;
+  geojsonGeometry?: {
+    type: string;
+    coordinates: [number, number][];
+  };
+  isLiveGeometry?: boolean;
 }
 
 export type RecommendationCategory =
