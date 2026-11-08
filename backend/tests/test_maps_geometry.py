@@ -295,3 +295,234 @@ async def test_6_maps_service_composite_enrichment():
     assert enriched.provider_status == "ok"
     assert enriched.has_live_geometry is False
 
+
+# ============================================================================
+# 6. CONFIGURATION AUDIT & ENVIRONMENT READINESS (M3.5 AUDIT)
+# ============================================================================
+
+def test_7_valhalla_configuration_environments():
+    """Verify Valhalla settings behave safely across development and production environments."""
+    from app.core.config import Settings
+
+    # 1. Development default: Valhalla enabled on localhost:8002
+    dev_settings = Settings(ENVIRONMENT="development")
+    assert dev_settings.VALHALLA_ENABLED is True
+    assert dev_settings.VALHALLA_BASE_URL == "http://localhost:8002"
+
+    # 2. Production default: Never silently assumes localhost is reachable; auto-disables
+    prod_default = Settings(ENVIRONMENT="production")
+    assert prod_default.VALHALLA_ENABLED is False
+    assert prod_default.VALHALLA_BASE_URL == "http://localhost:8002"
+
+    # 3. Production with external Valhalla URL: Automatically remains enabled
+    prod_external = Settings(
+        ENVIRONMENT="production",
+        VALHALLA_BASE_URL="http://valhalla.cluster.internal:8002",
+    )
+    assert prod_external.VALHALLA_ENABLED is True
+    assert prod_external.VALHALLA_BASE_URL == "http://valhalla.cluster.internal:8002"
+
+    # 4. Production with explicit localhost opt-in (e.g. sidecar container setup)
+    prod_sidecar = Settings(
+        ENVIRONMENT="production",
+        VALHALLA_ALLOW_LOCALHOST=True,
+        VALHALLA_BASE_URL="http://localhost:8002",
+    )
+    assert prod_sidecar.VALHALLA_ENABLED is True
+
+    # 5. Production with explicit disable
+    prod_disabled = Settings(
+        ENVIRONMENT="production",
+        VALHALLA_ENABLED=False,
+        VALHALLA_BASE_URL="http://valhalla.cluster.internal:8002",
+    )
+    assert prod_disabled.VALHALLA_ENABLED is False
+
+
+@pytest.mark.anyio
+async def test_8_valhalla_provider_disabled_and_unconfigured():
+    """Verify provider-disabled and unconfigured behaviors route cleanly via fallback."""
+    seg = RouteEnrichRequestSegment(
+        segment_id="seg-cab-disabled",
+        mode="cab",
+        origin_name="A",
+        origin_city="Bangalore",
+        origin_lat=12.978,
+        origin_lng=77.572,
+        destination_name="B",
+        destination_city="Bangalore",
+        destination_lat=12.935,
+        destination_lng=77.624,
+        distance_km=10.0,
+        duration_minutes=20,
+    )
+
+    # 1. Explicitly disabled provider
+    provider_disabled = ValhallaMapsProvider(
+        base_url="http://localhost:8002",
+        enabled=False,
+    )
+    assert provider_disabled.is_available() is False
+    geom_disabled = await provider_disabled.compute_segment_route(seg)
+    assert geom_disabled.is_live_geometry is False
+    assert geom_disabled.source == "deterministic_fallback"
+    assert len(geom_disabled.coordinates) >= 2
+
+    # 2. Empty base URL provider
+    provider_empty_url = ValhallaMapsProvider(
+        base_url="",
+        enabled=True,
+    )
+    assert provider_empty_url.is_available() is False
+    geom_empty = await provider_empty_url.compute_segment_route(seg)
+    assert geom_empty.is_live_geometry is False
+    assert geom_empty.source == "deterministic_fallback"
+
+
+@pytest.mark.anyio
+async def test_9_valhalla_provider_timeout_and_error_handling():
+    """Verify provider-timeout and HTTP error codes trigger graceful fallback without unhandled exceptions."""
+    seg = RouteEnrichRequestSegment(
+        segment_id="seg-cab-err",
+        mode="cab",
+        origin_name="A",
+        origin_city="Bangalore",
+        origin_lat=12.978,
+        origin_lng=77.572,
+        destination_name="B",
+        destination_city="Bangalore",
+        destination_lat=12.935,
+        destination_lng=77.624,
+        distance_km=10.0,
+        duration_minutes=20,
+    )
+
+    # 1. Timeout handling
+    def timeout_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("Socket read timed out after 3.0s")
+
+    client_timeout = httpx.AsyncClient(transport=httpx.MockTransport(timeout_handler))
+    provider_timeout = ValhallaMapsProvider(
+        base_url="http://localhost:8002",
+        enabled=True,
+        http_client=client_timeout,
+    )
+    geom_timeout = await provider_timeout.compute_segment_route(seg)
+    assert geom_timeout.is_live_geometry is False
+    assert geom_timeout.source == "deterministic_fallback"
+    assert any("unavailable" in w.lower() for w in geom_timeout.warnings)
+
+    # 2. HTTP 503 Service Unavailable
+    def unavailable_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="Service Temporarily Unavailable")
+
+    client_503 = httpx.AsyncClient(transport=httpx.MockTransport(unavailable_handler))
+    provider_503 = ValhallaMapsProvider(
+        base_url="http://localhost:8002",
+        enabled=True,
+        http_client=client_503,
+    )
+    geom_503 = await provider_503.compute_segment_route(seg)
+    assert geom_503.is_live_geometry is False
+    assert geom_503.source == "deterministic_fallback"
+    assert any("unavailable" in w.lower() for w in geom_503.warnings)
+
+    # 3. HTTP 429 Rate Limit
+    def ratelimit_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="Too Many Requests")
+
+    client_429 = httpx.AsyncClient(transport=httpx.MockTransport(ratelimit_handler))
+    provider_429 = ValhallaMapsProvider(
+        base_url="http://localhost:8002",
+        enabled=True,
+        http_client=client_429,
+    )
+    geom_429 = await provider_429.compute_segment_route(seg)
+    assert geom_429.is_live_geometry is False
+    assert geom_429.source == "deterministic_fallback"
+
+
+@pytest.mark.anyio
+async def test_10_no_failed_request_preserves_stale_geometry():
+    """Verify that a failure after a success never leaks or preserves stale geometry or live flags."""
+    test_coords = [(12.978, 77.572), (12.935, 77.624)]
+    valhalla_shape = encode_polyline(test_coords, precision=6)
+    call_count = 0
+
+    def alternating_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First call succeeds
+            return httpx.Response(
+                200,
+                json={
+                    "trip": {
+                        "summary": {"time": 600.0, "length": 8.0},
+                        "legs": [
+                            {
+                                "shape": valhalla_shape,
+                                "summary": {"time": 600.0, "length": 8.0},
+                                "maneuvers": [],
+                            }
+                        ],
+                    }
+                },
+            )
+        else:
+            # Subsequent call fails catastrophically
+            raise httpx.ConnectError("Connection refused by localhost:8002")
+
+    client_alt = httpx.AsyncClient(transport=httpx.MockTransport(alternating_handler))
+    provider = ValhallaMapsProvider(
+        base_url="http://localhost:8002",
+        enabled=True,
+        http_client=client_alt,
+    )
+
+    seg_success = RouteEnrichRequestSegment(
+        segment_id="seg-live-success",
+        mode="cab",
+        origin_name="A",
+        origin_city="Bangalore",
+        origin_lat=12.978,
+        origin_lng=77.572,
+        destination_name="B",
+        destination_city="Bangalore",
+        destination_lat=12.935,
+        destination_lng=77.624,
+        distance_km=8.0,
+        duration_minutes=10,
+    )
+
+    seg_failure = RouteEnrichRequestSegment(
+        segment_id="seg-subsequent-failure",
+        mode="cab",
+        origin_name="C",
+        origin_city="Chennai",
+        origin_lat=13.082,
+        origin_lng=80.270,
+        destination_name="D",
+        destination_city="Chennai",
+        destination_lat=12.990,
+        destination_lng=80.170,
+        distance_km=18.0,
+        duration_minutes=35,
+    )
+
+    # 1. First call: success
+    res1 = await provider.compute_segment_route(seg_success)
+    assert res1.is_live_geometry is True
+    assert res1.source == "valhalla_live"
+    assert res1.encoded_polyline == valhalla_shape
+
+    # 2. Second call: failure -> must NOT retain res1 geometry or live status
+    res2 = await provider.compute_segment_route(seg_failure)
+    assert res2.is_live_geometry is False
+    assert res2.source == "deterministic_fallback"
+    assert res2.encoded_polyline != valhalla_shape
+    # Coordinates must reflect segment C->D, not segment A->B
+    assert abs(res2.coordinates[0].latitude - 13.082) < 1e-3
+    assert abs(res2.coordinates[-1].latitude - 12.990) < 1e-3
+
+

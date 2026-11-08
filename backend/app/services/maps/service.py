@@ -24,10 +24,14 @@ class MapsService:
             self.provider = self._resolve_default_provider()
 
     def _resolve_default_provider(self) -> MapsProvider:
-        if getattr(settings, "VALHALLA_ENABLED", False):
-            logger.info("MapsService initialized with ValhallaMapsProvider (OpenStreetMap Engine)")
+        valhalla_enabled = getattr(settings, "VALHALLA_ENABLED", False)
+        valhalla_url = getattr(settings, "VALHALLA_BASE_URL", "").strip()
+        if valhalla_enabled and valhalla_url:
+            logger.info(
+                f"MapsService initialized with ValhallaMapsProvider (OpenStreetMap Engine at {valhalla_url})"
+            )
             return ValhallaMapsProvider(
-                base_url=settings.VALHALLA_BASE_URL,
+                base_url=valhalla_url,
                 enabled=True,
                 timeout_seconds=settings.VALHALLA_TIMEOUT_SECONDS,
             )
@@ -44,7 +48,9 @@ class MapsService:
         is_key_set = bool(
             settings.GOOGLE_MAPS_API_KEY and settings.GOOGLE_MAPS_API_KEY.strip()
         )
-        valhalla_enabled = getattr(settings, "VALHALLA_ENABLED", False)
+        valhalla_enabled = getattr(settings, "VALHALLA_ENABLED", False) and bool(
+            getattr(settings, "VALHALLA_BASE_URL", "").strip()
+        )
         return MapsHealthResponse(
             enabled=valhalla_enabled or settings.GOOGLE_ROUTES_ENABLED,
             active_provider=self.provider.name,

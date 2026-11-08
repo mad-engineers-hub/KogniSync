@@ -39,7 +39,8 @@ class ValhallaMapsProvider(MapsProvider):
         timeout_seconds: float = 3.0,
         http_client: httpx.AsyncClient | None = None,
     ):
-        self.base_url = (base_url or settings.VALHALLA_BASE_URL).rstrip("/")
+        raw_url = base_url if base_url is not None else getattr(settings, "VALHALLA_BASE_URL", "")
+        self.base_url = raw_url.rstrip("/") if raw_url else ""
         self.enabled = enabled
         self.timeout_seconds = timeout_seconds
         self._http_client = http_client
@@ -50,7 +51,7 @@ class ValhallaMapsProvider(MapsProvider):
         return "valhalla"
 
     def is_available(self) -> bool:
-        return bool(self.enabled and self.base_url)
+        return bool(self.enabled and self.base_url and self.base_url.strip())
 
     async def compute_segment_route(
         self, segment: RouteEnrichRequestSegment
