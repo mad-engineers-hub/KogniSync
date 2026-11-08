@@ -148,8 +148,15 @@ class ValhallaMapsProvider(MapsProvider):
                             # Extract maneuvers if available
                             raw_maneuvers = legs[0].get("maneuvers", [])
                             parsed_maneuvers = []
-                            for m in raw_maneuvers[:10]:  # Cap to top 10 for performance
+                            for m in raw_maneuvers[:50]:  # Cap to top 50 for comprehensive navigation
                                 if isinstance(m, dict) and "instruction" in m:
+                                    begin_idx = m.get("begin_shape_index")
+                                    loc = None
+                                    if begin_idx is not None and isinstance(begin_idx, int) and 0 <= begin_idx < len(coords):
+                                        loc = {
+                                            "latitude": coords[begin_idx].latitude,
+                                            "longitude": coords[begin_idx].longitude,
+                                        }
                                     parsed_maneuvers.append(
                                         {
                                             "instruction": m.get("instruction"),
@@ -158,6 +165,10 @@ class ValhallaMapsProvider(MapsProvider):
                                             ),
                                             "time_seconds": int(m.get("time", 0)),
                                             "type": m.get("type"),
+                                            "street_names": m.get("street_names", []),
+                                            "begin_shape_index": begin_idx,
+                                            "end_shape_index": m.get("end_shape_index"),
+                                            "location": loc,
                                         }
                                     )
 

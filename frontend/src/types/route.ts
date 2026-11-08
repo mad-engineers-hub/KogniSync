@@ -28,6 +28,10 @@ export interface SegmentRouteGeometry {
     time_seconds?: number;
     type?: number;
     modifier?: string;
+    street_names?: string[];
+    begin_shape_index?: number;
+    end_shape_index?: number;
+    location?: RouteCoordinate;
   }>;
   source: string;
   warnings?: string[];

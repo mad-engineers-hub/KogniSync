@@ -8,7 +8,7 @@ import { AIRecommendationExplanation } from '../components/details/AIRecommendat
 import { OptimizationBadge } from '../components/common/OptimizationBadge';
 import { ProvenanceBadge } from '../components/common/ProvenanceBadge';
 import { formatCurrency, formatDuration } from '../lib/utils';
-import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle, Compass, Eye, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle, Compass, Eye, Sparkles, Navigation } from 'lucide-react';
 import { getJourneyXRReferences } from '../utils/xrMatching';
 
 export const DetailsPage: React.FC = () => {
@@ -99,8 +99,19 @@ export const DetailsPage: React.FC = () => {
           </div>
 
           <button
+            onClick={() => {
+              const el = document.getElementById('journey-map-section');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="px-4 py-3 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 font-bold text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+          >
+            <Navigation className="w-4 h-4 text-blue-600" />
+            <span>Guide Me</span>
+          </button>
+
+          <button
             onClick={() => navigate(`/booking/${journey.id}`)}
-            className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md shadow-blue-600/20 flex items-center gap-2 transition-all active:scale-98"
+            className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md shadow-blue-600/20 flex items-center gap-2 transition-all active:scale-98 cursor-pointer"
           >
             <span>Select Journey</span>
             <ArrowRight className="w-4 h-4" />
@@ -117,7 +128,7 @@ export const DetailsPage: React.FC = () => {
         </div>
 
         {/* Right column (5 cols): Map & Invariants metadata & XR Explorer */}
-        <div className="lg:col-span-5 flex flex-col gap-6">
+        <div id="journey-map-section" className="lg:col-span-5 flex flex-col gap-6 scroll-mt-20">
           <JourneyMap segments={journey.segments} journey={journey} />
 
           {/* XR Spatial Previews & AR Wayfinding Card */}

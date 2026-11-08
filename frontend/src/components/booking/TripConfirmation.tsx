@@ -10,7 +10,7 @@ import {
   AITripInsight,
   SystemVerification,
 } from '../trip';
-import { Download, Calendar, Headphones, ArrowRight, Compass, Eye, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Download, Calendar, Headphones, ArrowRight, Compass, Eye, Sparkles, CheckCircle2, Navigation } from 'lucide-react';
 import { getJourneyXRReferences } from '../../utils/xrMatching';
 
 interface TripConfirmationProps {
@@ -211,6 +211,15 @@ export const TripConfirmation: React.FC<TripConfirmationProps> = ({ trip }) => {
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
+
+          {/* Live Journey Guidance & Progress CTA */}
+          <Link
+            to={`/plan/${trip.journey.id}?guidance=true`}
+            className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white flex items-center justify-center gap-2 shadow-sm transition-colors"
+          >
+            <Navigation className="w-4 h-4" />
+            <span>Follow Navigation Guidance & Progress</span>
+          </Link>
 
           {/* Plan Another Journey CTA */}
           <Link

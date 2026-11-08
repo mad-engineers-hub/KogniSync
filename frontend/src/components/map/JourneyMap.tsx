@@ -27,6 +27,9 @@ import {
   AlertCircle,
 } from 'lucide-react';
 
+import { useJourneyGuidance } from '../../hooks/useJourneyGuidance';
+import { NavigationGuidanceDrawer } from '../navigation/NavigationGuidanceDrawer';
+
 export interface JourneyMapProps {
   segments: JourneySegment[];
   journey?: Journey;
@@ -38,6 +41,8 @@ export interface JourneyMapProps {
   className?: string;
   interactive?: boolean;
   initialViewMode?: 'geographic' | 'schematic';
+  showGuidance?: boolean;
+  initialGuidanceOpen?: boolean;
 }
 
 interface ProjectedWaypoint {
@@ -80,6 +85,8 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   className = '',
   interactive = true,
   initialViewMode = 'geographic',
+  showGuidance = true,
+  initialGuidanceOpen = false,
 }) => {
   const navigate = useNavigate();
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(0);
@@ -90,6 +97,13 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       if (params.get('view') === 'geographic') return 'geographic';
     }
     return initialViewMode;
+  });
+  const [guidanceOpen, setGuidanceOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('guidance') === 'true') return true;
+    }
+    return initialGuidanceOpen;
   });
   const [leafletError, setLeafletError] = useState<boolean>(false);
   const [tileError, setTileError] = useState<boolean>(false);
@@ -162,14 +176,20 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     return buildClientFallbackRoute(targetJourney);
   }, [enrichedRoute, targetJourney]);
 
-  // Effective active segment index derived from props or local state
+  // Unified navigation guidance and device-local progress hook
+  const guidance = useJourneyGuidance(targetJourney, effectiveRoute);
+
+  // Effective active segment index derived from props, guidance, or local state
   const effectiveActiveSegmentIndex = useMemo(() => {
     if (selectedSegmentId) {
       const idx = segments.findIndex((s) => s.segmentId === selectedSegmentId);
       if (idx !== -1) return idx;
     }
+    if (guidanceOpen) {
+      return guidance.activeSegmentIndex;
+    }
     return activeSegmentIndex;
-  }, [selectedSegmentId, segments, activeSegmentIndex]);
+  }, [selectedSegmentId, segments, activeSegmentIndex, guidanceOpen, guidance.activeSegmentIndex]);
 
   // Waypoints for both Leaflet markers and schematic representation
   const waypoints: ProjectedWaypoint[] = useMemo(() => {
@@ -351,11 +371,12 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       }
 
       // Main route polyline
+      const isCompleted = guidance.isSegmentCompleted(seg.segmentId);
       const line = L.polyline(latlngs, {
-        color: style.stroke,
+        color: isCompleted ? '#10b981' : style.stroke,
         weight: isActive ? style.weight + 2 : style.weight,
-        dashArray: style.dashArray,
-        opacity: isActive ? 1.0 : 0.85,
+        dashArray: isCompleted ? '6, 6' : style.dashArray,
+        opacity: isActive ? 1.0 : isCompleted ? 0.65 : 0.85,
         lineCap: 'round',
         lineJoin: 'round',
       }).addTo(featureGroup);
@@ -492,7 +513,38 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       });
     });
 
-    // 4. Fit Bounds with comfortable padding
+    // 4. Draw Foreground User Location (GPS / Demo Position) if active
+    if (guidance.locationState.coords) {
+      const { latitude, longitude } = guidance.locationState.coords;
+      const isLive = guidance.locationState.status === 'live_position';
+      const userMarkerHtml = `
+        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px;">
+          <div style="position: absolute; width: 24px; height: 24px; border-radius: 9999px; background: ${isLive ? '#2563eb' : '#6366f1'}; opacity: 0.45; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+          <div style="position: relative; width: 16px; height: 16px; border-radius: 9999px; background: ${isLive ? '#2563eb' : '#6366f1'}; border: 2.5px solid #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.35);"></div>
+        </div>
+      `;
+      const userIcon = L.divIcon({
+        className: 'user-gps-location-marker',
+        html: userMarkerHtml,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      });
+      L.marker([latitude, longitude], { icon: userIcon, zIndexOffset: 3000 })
+        .bindTooltip(isLive ? 'Current GPS Location' : 'Demo Guidance Location', { direction: 'top', offset: [0, -8] })
+        .addTo(featureGroup);
+
+      if (guidance.locationState.accuracyMeters && isLive) {
+        L.circle([latitude, longitude], {
+          radius: guidance.locationState.accuracyMeters,
+          color: '#2563eb',
+          fillColor: '#60a5fa',
+          fillOpacity: 0.15,
+          weight: 1,
+        }).addTo(featureGroup);
+      }
+    }
+
+    // 5. Fit Bounds with comfortable padding
     if (allLatLangs.length > 0) {
       const boundsObj = L.latLngBounds(allLatLangs as L.LatLngTuple[]);
       map.fitBounds(boundsObj, {
@@ -501,7 +553,21 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         animate: true,
       });
     }
-  }, [effectiveRoute, segments, alternativeJourneys, effectiveActiveSegmentIndex, viewMode, waypoints, targetJourney.id, onSelectJourney, onSegmentClick, navigate]);
+  }, [
+    effectiveRoute,
+    segments,
+    alternativeJourneys,
+    effectiveActiveSegmentIndex,
+    viewMode,
+    waypoints,
+    targetJourney.id,
+    onSelectJourney,
+    onSegmentClick,
+    navigate,
+    guidance.locationState.coords,
+    guidance.locationState.status,
+    guidance.progress.completedSegmentIds,
+  ]);
 
   // Map control callbacks
   const handleZoomIn = () => {
@@ -607,6 +673,21 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
               <span>Waypoints</span>
             </button>
           </div>
+
+          {interactive && showGuidance && (
+            <button
+              type="button"
+              onClick={() => setGuidanceOpen(!guidanceOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono font-bold transition-all cursor-pointer ${
+                guidanceOpen
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-white hover:bg-slate-50 border border-slate-200 text-slate-700'
+              }`}
+            >
+              <Compass className={`w-3.5 h-3.5 ${guidanceOpen ? 'animate-spin-slow' : 'text-blue-600'}`} />
+              <span>{guidanceOpen ? 'Guidance Active' : 'Guide Me'}</span>
+            </button>
+          )}
 
           <span
             className={`inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-md border font-semibold ${
@@ -955,6 +1036,15 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Navigation Guidance & Journey Progress Drawer */}
+      {interactive && showGuidance && guidanceOpen && (
+        <NavigationGuidanceDrawer
+          guidance={guidance}
+          segments={segments}
+          onClose={() => setGuidanceOpen(false)}
+        />
+      )}
     </div>
   );
 };
