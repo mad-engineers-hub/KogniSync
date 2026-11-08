@@ -1,5 +1,5 @@
-import React from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getJourneyById } from '../api/journey';
 import { JourneyTimeline } from '../components/details/JourneyTimeline';
@@ -14,6 +14,21 @@ import { getJourneyXRReferences } from '../utils/xrMatching';
 export const DetailsPage: React.FC = () => {
   const { journeyId } = useParams<{ journeyId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [guidanceActive, setGuidanceActive] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('guidance') === 'true';
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('guidance') === 'true') {
+      setGuidanceActive(true);
+    }
+  }, [location.search]);
 
   const {
     data: journey,
@@ -100,6 +115,7 @@ export const DetailsPage: React.FC = () => {
 
           <button
             onClick={() => {
+              setGuidanceActive(true);
               const el = document.getElementById('journey-map-section');
               if (el) el.scrollIntoView({ behavior: 'smooth' });
             }}
@@ -129,7 +145,7 @@ export const DetailsPage: React.FC = () => {
 
         {/* Right column (5 cols): Map & Invariants metadata & XR Explorer */}
         <div id="journey-map-section" className="lg:col-span-5 flex flex-col gap-6 scroll-mt-20">
-          <JourneyMap segments={journey.segments} journey={journey} />
+          <JourneyMap segments={journey.segments} journey={journey} initialGuidanceOpen={guidanceActive} />
 
           {/* XR Spatial Previews & AR Wayfinding Card */}
           {xrReferences.length > 0 && (

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, Check, ListOrdered } from 'lucide-react';
 import type { NormalizedManeuver } from '../../types/navigation';
-import { getManeuverIcon } from './ManeuverInstructionBanner';
+import { getManeuverIcon } from './navigationIcons';
 
 interface UpcomingManeuversListProps {
   maneuvers: NormalizedManeuver[];

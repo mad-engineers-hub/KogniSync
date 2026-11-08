@@ -1,5 +1,5 @@
 import type { JourneySegment } from '../../types/journey';
-import type { TransferReadiness, TransferReadinessState } from '../../types/navigation';
+import type { TransferReadiness } from '../../types/navigation';
 
 /**
  * Deterministic transfer readiness calculator.
@@ -79,7 +79,31 @@ export function calculateTransferReadiness(
   const minutesUntilDeparture = Math.round((outgoingDepartureMs - nowMs) / 60000);
   const isTimeEstimated = Boolean(incomingSegment.provenance?.isEstimate || outgoingSegment.provenance?.isEstimate);
 
-  // 3. User already completed incoming segment and is at the station/hub waiting
+  // 3. Estimated Missed Connection: departure timestamp has fully elapsed while outgoing leg is incomplete
+  if (nowMs > outgoingDepartureMs) {
+    const isAtStation = isIncomingCompleted && !isOutgoingCompleted;
+    return {
+      state: 'missed_estimated',
+      hubName,
+      incomingSegmentId: incomingSegment.segmentId,
+      outgoingSegmentId: outgoingSegment.segmentId,
+      incomingMode,
+      outgoingMode,
+      scheduledArrival: incomingSegment.arrivalTime,
+      scheduledDeparture: outgoingSegment.departureTime,
+      requiredBufferMinutes,
+      availableBufferMinutes,
+      minutesUntilTransfer,
+      stateTitle: isAtStation ? `Departure Elapsed at ${hubName}` : `Estimated Departure Elapsed`,
+      stateDescription: isAtStation
+        ? `Scheduled connection time via ${outgoingSegment.provider || outgoingMode} has elapsed. Please check with station or carrier staff for re-accommodation.`
+        : `Scheduled connection time via ${outgoingSegment.provider || outgoingMode} has passed. Verify current departure status with the operator.`,
+      badgeColor: 'rose',
+      isTimeEstimated,
+    };
+  }
+
+  // 4. User already completed incoming segment and is at the station/hub waiting
   if (isIncomingCompleted && !isOutgoingCompleted) {
     return {
       state: 'in_progress',
@@ -102,7 +126,7 @@ export function calculateTransferReadiness(
     };
   }
 
-  // 4. Tight Connection Warning: available buffer < 10 minutes or less than required buffer
+  // 5. Tight Connection Warning: available buffer < 10 minutes or less than required buffer
   if (availableBufferMinutes < 10 || availableBufferMinutes < requiredBufferMinutes) {
     return {
       state: 'tight_connection',
@@ -119,27 +143,6 @@ export function calculateTransferReadiness(
       stateTitle: `Tight Connection Window (${availableBufferMinutes} min buffer)`,
       stateDescription: `Limited transfer time between ${incomingMode} and ${outgoingMode} at ${hubName}. Prepare to disembark promptly upon arrival.`,
       badgeColor: 'amber',
-      isTimeEstimated,
-    };
-  }
-
-  // 5. Estimated Missed Connection: departure timestamp has fully elapsed while incoming not complete
-  if (nowMs > outgoingDepartureMs) {
-    return {
-      state: 'missed_estimated',
-      hubName,
-      incomingSegmentId: incomingSegment.segmentId,
-      outgoingSegmentId: outgoingSegment.segmentId,
-      incomingMode,
-      outgoingMode,
-      scheduledArrival: incomingSegment.arrivalTime,
-      scheduledDeparture: outgoingSegment.departureTime,
-      requiredBufferMinutes,
-      availableBufferMinutes,
-      minutesUntilTransfer,
-      stateTitle: `Estimated Departure Elapsed`,
-      stateDescription: `Scheduled connection time via ${outgoingSegment.provider || outgoingMode} has passed. Verify current departure status with the operator.`,
-      badgeColor: 'rose',
       isTimeEstimated,
     };
   }

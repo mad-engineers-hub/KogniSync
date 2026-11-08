@@ -1,11 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Navigation,
   Crosshair,
-  Compass,
-  AlertCircle,
   X,
-  ExternalLink,
 } from 'lucide-react';
 import type { UseJourneyGuidanceReturn } from '../../hooks/useJourneyGuidance';
 import { ManeuverInstructionBanner } from './ManeuverInstructionBanner';
@@ -50,6 +47,15 @@ export const NavigationGuidanceDrawer: React.FC<NavigationGuidanceDrawerProps> =
 
   const currentManeuvers = activeGuidance?.maneuvers || [];
   const nextManeuver = currentManeuvers[0];
+
+  // Stop foreground location tracking immediately whenever the navigation drawer unmounts or closes
+  useEffect(() => {
+    return () => {
+      if (isLocationTracking) {
+        stopLocationGuidance();
+      }
+    };
+  }, [isLocationTracking, stopLocationGuidance]);
 
   return (
     <div

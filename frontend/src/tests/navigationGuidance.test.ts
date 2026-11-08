@@ -37,19 +37,28 @@ console.log('=================================================================')
 // ============================================================================
 console.log('\n--- 1. Maneuver Normalization & Road Costing ---');
 
-// Test 1.1: Valhalla type code to action mapping
+// Test 1.1: Valhalla type code to action mapping (Official Valhalla enum)
 assert.strictEqual(mapValhallaManeuverTypeToAction(1), 'depart', 'Type 1 must map to depart');
 assert.strictEqual(mapValhallaManeuverTypeToAction(4), 'arrive', 'Type 4 must map to arrive');
-assert.strictEqual(mapValhallaManeuverTypeToAction(7), 'continue', 'Type 7 must map to continue');
-assert.strictEqual(mapValhallaManeuverTypeToAction(8), 'slight_right', 'Type 8 must map to slight_right');
-assert.strictEqual(mapValhallaManeuverTypeToAction(9), 'right', 'Type 9 must map to right');
-assert.strictEqual(mapValhallaManeuverTypeToAction(10), 'sharp_right', 'Type 10 must map to sharp_right');
-assert.strictEqual(mapValhallaManeuverTypeToAction(11), 'u_turn', 'Type 11 must map to u_turn');
-assert.strictEqual(mapValhallaManeuverTypeToAction(14), 'left', 'Type 14 must map to left');
-assert.strictEqual(mapValhallaManeuverTypeToAction(15), 'slight_left', 'Type 15 must map to slight_left');
-assert.strictEqual(mapValhallaManeuverTypeToAction(16), 'ramp', 'Type 16 must map to ramp');
-assert.strictEqual(mapValhallaManeuverTypeToAction(24), 'merge', 'Type 24 must map to merge');
-assert.strictEqual(mapValhallaManeuverTypeToAction(25), 'roundabout', 'Type 25 must map to roundabout');
+assert.strictEqual(mapValhallaManeuverTypeToAction(7), 'continue', 'Type 7 (kBecomes) must map to continue');
+assert.strictEqual(mapValhallaManeuverTypeToAction(8), 'continue', 'Type 8 (kContinue) must map to continue');
+assert.strictEqual(mapValhallaManeuverTypeToAction(9), 'slight_right', 'Type 9 (kSlightRight) must map to slight_right');
+assert.strictEqual(mapValhallaManeuverTypeToAction(10), 'right', 'Type 10 (kRight) must map to right');
+assert.strictEqual(mapValhallaManeuverTypeToAction(11), 'sharp_right', 'Type 11 (kSharpRight) must map to sharp_right');
+assert.strictEqual(mapValhallaManeuverTypeToAction(12), 'u_turn', 'Type 12 (kUturnRight) must map to u_turn');
+assert.strictEqual(mapValhallaManeuverTypeToAction(13), 'u_turn', 'Type 13 (kUturnLeft) must map to u_turn');
+assert.strictEqual(mapValhallaManeuverTypeToAction(14), 'sharp_left', 'Type 14 (kSharpLeft) must map to sharp_left');
+assert.strictEqual(mapValhallaManeuverTypeToAction(15), 'left', 'Type 15 (kLeft) must map to left');
+assert.strictEqual(mapValhallaManeuverTypeToAction(16), 'slight_left', 'Type 16 (kSlightLeft) must map to slight_left');
+assert.strictEqual(mapValhallaManeuverTypeToAction(17), 'ramp', 'Type 17 (kRampStraight) must map to ramp');
+assert.strictEqual(mapValhallaManeuverTypeToAction(22), 'continue', 'Type 22 (kStayStraight) must map to continue');
+assert.strictEqual(mapValhallaManeuverTypeToAction(23), 'slight_right', 'Type 23 (kStayRight) must map to slight_right');
+assert.strictEqual(mapValhallaManeuverTypeToAction(24), 'slight_left', 'Type 24 (kStayLeft) must map to slight_left');
+assert.strictEqual(mapValhallaManeuverTypeToAction(25), 'merge', 'Type 25 (kMerge) must map to merge');
+assert.strictEqual(mapValhallaManeuverTypeToAction(26), 'roundabout', 'Type 26 (kRoundaboutEnter) must map to roundabout');
+assert.strictEqual(mapValhallaManeuverTypeToAction(27), 'roundabout', 'Type 27 (kRoundaboutExit) must map to roundabout');
+assert.strictEqual(mapValhallaManeuverTypeToAction(28), 'ferry', 'Type 28 (kFerryEnter) must map to ferry');
+assert.strictEqual(mapValhallaManeuverTypeToAction(37), 'merge', 'Type 37 (kMergeRight) must map to merge');
 assert.strictEqual(mapValhallaManeuverTypeToAction(undefined), 'generic', 'Undefined type must map to generic');
 assert.strictEqual(mapValhallaManeuverTypeToAction(999), 'generic', 'Unknown type must map to generic');
 console.log('✓ Valhalla maneuver type codes successfully mapped to standardized navigation actions.');
@@ -83,7 +92,7 @@ const rawValhallaManeuvers = [
     instruction: 'Turn right onto Mount Road.',
     distance_meters: 1800,
     time_seconds: 180,
-    type: 9,
+    type: 10, // Valhalla kRight = 10
     street_names: ['Mount Road'],
     begin_shape_index: 4,
     end_shape_index: 12,
@@ -102,14 +111,24 @@ assert.strictEqual(normalized[1].formattedDuration, '3 min');
 assert.strictEqual(normalized[1].isCompleted, false, 'Second maneuver should not be completed');
 console.log('✓ Raw Valhalla maneuvers normalized with correct actions, formatting, and completion states.');
 
-// Test 1.4: Missing or invalid maneuver response handling
+// Test 1.4: Missing or invalid maneuver response handling and bounds checks
 assert.deepStrictEqual(normalizeManeuvers(undefined), [], 'Undefined maneuvers must return empty array');
 assert.deepStrictEqual(normalizeManeuvers([]), [], 'Empty maneuvers must return empty array');
 const malformedManeuver = normalizeManeuvers([{ instruction: '', distance_meters: undefined, time_seconds: undefined } as any]);
 assert.strictEqual(malformedManeuver.length, 1);
 assert.strictEqual(malformedManeuver[0].distanceMeters, 0);
 assert.strictEqual(malformedManeuver[0].durationSeconds, 0);
-console.log('✓ Empty and malformed maneuver responses handled safely without exceptions.');
+
+// Test 1.5: begin_shape_index polyline bounds guard (negative or beyond length)
+const mockCoords = [{ latitude: 12.97, longitude: 77.59 }, { latitude: 12.98, longitude: 77.60 }];
+const oobManeuvers = [
+  { instruction: 'Turn left', type: 15, begin_shape_index: 999 }, // out of bounds
+  { instruction: 'Turn slight left', type: 16, begin_shape_index: -1 }, // negative index
+];
+const normalizedOob = normalizeManeuvers(oobManeuvers, [], mockCoords);
+assert.strictEqual(normalizedOob[0].location, undefined, 'Out of bounds index must safely yield undefined location without throw');
+assert.strictEqual(normalizedOob[1].location, undefined, 'Negative index must safely yield undefined location');
+console.log('✓ Maneuver normalization bounds checks verified (negative & out-of-bounds indices safe).');
 
 // ============================================================================
 // 2. MULTIMODAL SEGMENT GUIDANCE & PROVENANCE
@@ -310,6 +329,17 @@ assert.strictEqual(readinessOvernight.availableBufferMinutes, 90, 'Overnight buf
 assert.strictEqual(readinessOvernight.minutesUntilTransfer, 45);
 console.log('✓ Overnight journey crossing midnight boundary correctly calculated without negative buffer.');
 
+// Test 3.9: Precedence: elapsed departure must yield missed_estimated even if buffer is tight
+const tightElapsed = calculateTransferReadiness(tightIncoming, baseOutgoing, refTimePast, new Set());
+assert.strictEqual(tightElapsed.state, 'missed_estimated', 'Elapsed departure must report missed_estimated rather than tight_connection');
+assert.strictEqual(tightElapsed.badgeColor, 'rose');
+console.log('✓ Precedence verified: missed_estimated takes priority over tight_connection when departure elapsed.');
+
+// Test 3.10: Completed state is immutable and never overwritten by elapsed time
+const completedAfterDeparture = calculateTransferReadiness(baseIncoming, baseOutgoing, refTimePast, completedSetBoth);
+assert.strictEqual(completedAfterDeparture.state, 'completed', 'Completed state must never be overwritten by elapsed time');
+console.log('✓ Completed progress immutability verified (never overwritten by elapsed-time calculations).');
+
 // ============================================================================
 // 4. JOURNEY PROGRESS STATE MACHINE & STORAGE
 // ============================================================================
@@ -439,6 +469,29 @@ stopWatch();
 assert.strictEqual(clearedWatchId, 101, 'clearWatch must be invoked with watch ID');
 assert.strictEqual(isForegroundTrackingActive(), false);
 console.log('✓ Foreground GPS tracking cleanly starts, captures live fixes, and stops without background leakage.');
+
+// Test 5.3: Geolocation failure modes and error handling
+let errorState: any = null;
+startForegroundLocationTracking((s) => {
+  errorState = s;
+});
+mockErrorCallback({ code: 1, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+assert.strictEqual(errorState.status, 'permission_denied');
+assert(errorState.errorMessage?.includes('permission was denied'));
+
+startForegroundLocationTracking((s) => {
+  errorState = s;
+});
+mockErrorCallback({ code: 2, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+assert.strictEqual(errorState.status, 'unavailable');
+
+startForegroundLocationTracking((s) => {
+  errorState = s;
+});
+mockErrorCallback({ code: 3, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+assert.strictEqual(errorState.status, 'unavailable');
+stopForegroundLocationTracking();
+console.log('✓ GPS permission denied, unavailable, and timeout failure modes handle gracefully.');
 
 console.log('\n=================================================================');
 console.log('ALL NAVIGATION GUIDANCE & JOURNEY PROGRESS TESTS PASSED (M3.6) ✓');

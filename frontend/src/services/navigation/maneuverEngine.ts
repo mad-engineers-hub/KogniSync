@@ -1,4 +1,4 @@
-import type { JourneySegment, TransportMode } from '../../types/journey';
+import type { JourneySegment } from '../../types/journey';
 import type { SegmentRouteGeometry, RouteCoordinate } from '../../types/route';
 import type {
   NavigationManeuverAction,
@@ -8,13 +8,22 @@ import type {
 
 /**
  * Valhalla maneuver type code mapping to standardized navigation action.
- * Standard Valhalla maneuver types:
+ * Official Valhalla DirectionsLeg.Maneuver.Type enumeration:
+ * 0: kNone
  * 1: kStart, 2: kStartRight, 3: kStartLeft
  * 4: kDestination, 5: kDestinationRight, 6: kDestinationLeft
- * 7: kContinue, 8: kSlightRight, 9: kRight, 10: kSharpRight, 11: kUturnRight, 12: kUturnLeft,
- * 13: kSharpLeft, 14: kLeft, 15: kSlightLeft, 16: kRampStraight, 17: kRampRight, 18: kRampLeft,
- * 19: kExitRight, 20: kExitLeft, 21: kStayStraight, 22: kStayRight, 23: kStayLeft,
- * 24: kMerge, 25: kRoundaboutEnter, 26: kRoundaboutExit, 27: kFerryEnter, 28: kFerryExit
+ * 7: kBecomes, 8: kContinue
+ * 9: kSlightRight, 10: kRight, 11: kSharpRight
+ * 12: kUturnRight, 13: kUturnLeft
+ * 14: kSharpLeft, 15: kLeft, 16: kSlightLeft
+ * 17: kRampStraight, 18: kRampRight, 19: kRampLeft
+ * 20: kExitRight, 21: kExitLeft
+ * 22: kStayStraight, 23: kStayRight, 24: kStayLeft
+ * 25: kMerge
+ * 26: kRoundaboutEnter, 27: kRoundaboutExit
+ * 28: kFerryEnter, 29: kFerryExit
+ * 30-36: Transit / post-transit
+ * 37: kMergeRight, 38: kMergeLeft
  */
 export function mapValhallaManeuverTypeToAction(type?: number): NavigationManeuverAction {
   if (type === undefined || type === null) return 'generic';
@@ -29,38 +38,41 @@ export function mapValhallaManeuverTypeToAction(type?: number): NavigationManeuv
     case 6:
       return 'arrive';
     case 7:
-    case 21:
-      return 'continue';
     case 8:
     case 22:
-      return 'slight_right';
+      return 'continue';
     case 9:
-      return 'right';
-    case 10:
-      return 'sharp_right';
-    case 11:
-    case 12:
-      return 'u_turn';
-    case 13:
-      return 'sharp_left';
-    case 14:
-      return 'left';
-    case 15:
     case 23:
-      return 'slight_left';
+      return 'slight_right';
+    case 10:
+      return 'right';
+    case 11:
+      return 'sharp_right';
+    case 12:
+    case 13:
+      return 'u_turn';
+    case 14:
+      return 'sharp_left';
+    case 15:
+      return 'left';
     case 16:
+    case 24:
+      return 'slight_left';
     case 17:
     case 18:
     case 19:
     case 20:
+    case 21:
       return 'ramp';
-    case 24:
-      return 'merge';
     case 25:
+    case 37:
+    case 38:
+      return 'merge';
     case 26:
-      return 'roundabout';
     case 27:
+      return 'roundabout';
     case 28:
+    case 29:
       return 'ferry';
     default:
       return 'generic';
@@ -122,7 +134,13 @@ export function normalizeManeuvers(
     const action = mapValhallaManeuverTypeToAction(m.type);
 
     let location = m.location;
-    if (!location && m.begin_shape_index !== undefined && segmentCoordinates.length > m.begin_shape_index) {
+    if (
+      !location &&
+      m.begin_shape_index !== undefined &&
+      typeof m.begin_shape_index === 'number' &&
+      m.begin_shape_index >= 0 &&
+      segmentCoordinates.length > m.begin_shape_index
+    ) {
       location = segmentCoordinates[m.begin_shape_index];
     }
 

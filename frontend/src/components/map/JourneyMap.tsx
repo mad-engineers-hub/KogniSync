@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Journey, JourneySegment } from '../../types/journey';
@@ -89,6 +89,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   initialGuidanceOpen = false,
 }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(0);
   const [viewMode, setViewMode] = useState<'geographic' | 'schematic'>(() => {
     if (typeof window !== 'undefined') {
@@ -105,6 +106,14 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     }
     return initialGuidanceOpen;
   });
+
+  // Re-sync with URL query parameter changes or parent prop
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('guidance') === 'true' || initialGuidanceOpen) {
+      setGuidanceOpen(true);
+    }
+  }, [location.search, initialGuidanceOpen]);
   const [leafletError, setLeafletError] = useState<boolean>(false);
   const [tileError, setTileError] = useState<boolean>(false);
 

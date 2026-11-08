@@ -1,54 +1,15 @@
 import React from 'react';
 import {
-  ArrowUp,
-  ArrowUpRight,
-  ArrowRight,
-  CornerUpRight,
-  RotateCcw,
-  CornerUpLeft,
-  ArrowLeft,
-  ArrowUpLeft,
-  GitMerge,
   Compass,
-  MapPin,
   CheckCircle2,
 } from 'lucide-react';
 import type { NormalizedManeuver } from '../../types/navigation';
+import { getManeuverIcon } from './navigationIcons';
 
 interface ManeuverInstructionBannerProps {
   maneuver?: NormalizedManeuver;
   onComplete?: () => void;
   className?: string;
-}
-
-export function getManeuverIcon(action: NormalizedManeuver['action']) {
-  switch (action) {
-    case 'depart':
-      return <Compass className="w-6 h-6 text-emerald-400 shrink-0" />;
-    case 'arrive':
-      return <MapPin className="w-6 h-6 text-rose-400 shrink-0" />;
-    case 'continue':
-      return <ArrowUp className="w-6 h-6 text-blue-400 shrink-0" />;
-    case 'slight_right':
-      return <ArrowUpRight className="w-6 h-6 text-blue-400 shrink-0" />;
-    case 'right':
-      return <ArrowRight className="w-6 h-6 text-blue-400 shrink-0" />;
-    case 'sharp_right':
-      return <CornerUpRight className="w-6 h-6 text-amber-400 shrink-0" />;
-    case 'u_turn':
-      return <RotateCcw className="w-6 h-6 text-amber-400 shrink-0" />;
-    case 'sharp_left':
-      return <CornerUpLeft className="w-6 h-6 text-amber-400 shrink-0" />;
-    case 'left':
-      return <ArrowLeft className="w-6 h-6 text-blue-400 shrink-0" />;
-    case 'slight_left':
-      return <ArrowUpLeft className="w-6 h-6 text-blue-400 shrink-0" />;
-    case 'merge':
-    case 'ramp':
-      return <GitMerge className="w-6 h-6 text-indigo-400 shrink-0" />;
-    default:
-      return <Compass className="w-6 h-6 text-blue-400 shrink-0" />;
-  }
 }
 
 export const ManeuverInstructionBanner: React.FC<ManeuverInstructionBannerProps> = ({

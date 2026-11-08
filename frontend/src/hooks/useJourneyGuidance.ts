@@ -54,8 +54,18 @@ export function useJourneyGuidance(
   enrichedRoute?: EnrichedJourneyRoute
 ): UseJourneyGuidanceReturn {
   const journeyId = journey.id;
-  const segments = journey.segments || [];
+  const segments = useMemo(() => journey.segments || [], [journey.segments]);
   const totalSegments = segments.length;
+
+  const [currentTimeMs, setCurrentTimeMs] = useState<number>(() => Date.now());
+
+  // Periodically refresh current time every 30s to keep transfer readiness up-to-date
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTimeMs(Date.now());
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 1. Journey Progress State (restored from localStorage if available)
   const [progress, setProgress] = useState<JourneyProgressState>(() => {
@@ -127,11 +137,11 @@ export function useJourneyGuidance(
     if (currentIdx < totalSegments - 1) {
       const incoming = segments[currentIdx];
       const outgoing = segments[currentIdx + 1];
-      return calculateTransferReadiness(incoming, outgoing, Date.now(), completedSet);
+      return calculateTransferReadiness(incoming, outgoing, currentTimeMs, completedSet);
     }
 
     return null;
-  }, [segments, activeSegmentIndex, progress.completedSegmentIds, totalSegments]);
+  }, [segments, activeSegmentIndex, progress.completedSegmentIds, totalSegments, currentTimeMs]);
 
   // 5. Actions
   const isSegmentCompleted = useCallback(

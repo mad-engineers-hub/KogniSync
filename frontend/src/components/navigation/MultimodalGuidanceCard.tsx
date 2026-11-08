@@ -1,10 +1,5 @@
 import React from 'react';
 import {
-  Train,
-  Plane,
-  Bus,
-  Car,
-  Footprints,
   Compass,
   AlertCircle,
   Clock,
@@ -12,31 +7,11 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import type { SegmentGuidance } from '../../types/navigation';
-import type { TransportMode } from '../../types/journey';
+import { getModeIcon } from './navigationIcons';
 
 interface MultimodalGuidanceCardProps {
   guidance: SegmentGuidance;
   className?: string;
-}
-
-export function getModeIcon(mode: TransportMode) {
-  switch (mode) {
-    case 'train':
-      return <Train className="w-5 h-5 text-purple-600" />;
-    case 'flight':
-      return <Plane className="w-5 h-5 text-indigo-600" />;
-    case 'bus':
-      return <Bus className="w-5 h-5 text-amber-600" />;
-    case 'cab':
-    case 'auto':
-      return <Car className="w-5 h-5 text-blue-600" />;
-    case 'rapido':
-      return <Compass className="w-5 h-5 text-violet-600" />;
-    case 'walk':
-      return <Footprints className="w-5 h-5 text-emerald-600" />;
-    default:
-      return <Compass className="w-5 h-5 text-slate-600" />;
-  }
 }
 
 export const MultimodalGuidanceCard: React.FC<MultimodalGuidanceCardProps> = ({

@@ -63,22 +63,25 @@ Each maneuver retains:
 - `begin_shape_index` / `end_shape_index`: Polyline index range.
 
 ### 3.2 Action Normalization
-The frontend `maneuverEngine.ts` normalizes Valhalla type codes into standard navigation actions:
+The frontend `maneuverEngine.ts` normalizes Valhalla type codes according to the official Valhalla `DirectionsLeg.Maneuver.Type` protocol buffer enumeration into standard navigation actions:
 
-| Valhalla Code | Normalized Action | Visual Icon Representation |
-| :--- | :--- | :--- |
-| `1`, `2`, `3` | `depart` | Upward departure arrow |
-| `4`, `5`, `6` | `arrive` | Destination checkered flag / pin |
-| `7`, `8` | `slight_left` | Angled up-left arrow |
-| `9`, `10` | `left` | 90° left turn arrow |
-| `11` | `sharp_left` | Sharp hairpin left arrow |
-| `12`, `13` | `slight_right` | Angled up-right arrow |
-| `14`, `15` | `right` | 90° right turn arrow |
-| `16` | `sharp_right` | Sharp hairpin right arrow |
-| `17`, `18` | `u_turn` | U-turn loop arrow |
-| `24` | `merge` | Road merge indicator |
-| `26`, `27` | `roundabout` | Roundabout circle icon |
-| `Default` | `straight` | Straight continuation arrow |
+| Valhalla Code | Valhalla Enum Constant | Normalized Action | Visual Icon Representation |
+| :--- | :--- | :--- | :--- |
+| `1`, `2`, `3` | `kStart`, `kStartRight`, `kStartLeft` | `depart` | Departure compass / start pin |
+| `4`, `5`, `6` | `kDestination`, `kDestinationRight`, `kDestinationLeft` | `arrive` | Destination checkered flag / pin |
+| `7`, `8`, `22` | `kBecomes`, `kContinue`, `kStayStraight` | `continue` | Straight continuation arrow |
+| `9`, `23` | `kSlightRight`, `kStayRight` | `slight_right` | Angled up-right arrow |
+| `10` | `kRight` | `right` | 90° right turn arrow |
+| `11` | `kSharpRight` | `sharp_right` | Sharp hairpin right arrow |
+| `12`, `13` | `kUturnRight`, `kUturnLeft` | `u_turn` | U-turn loop arrow |
+| `14` | `kSharpLeft` | `sharp_left` | Sharp hairpin left arrow |
+| `15` | `kLeft` | `left` | 90° left turn arrow |
+| `16`, `24` | `kSlightLeft`, `kStayLeft` | `slight_left` | Angled up-left arrow |
+| `17`–`21` | `kRampStraight`, `kRampRight`, `kRampLeft`, `kExitRight`, `kExitLeft` | `ramp` | Highway off-ramp / fork indicator |
+| `25`, `37`, `38` | `kMerge`, `kMergeRight`, `kMergeLeft` | `merge` | Road merge indicator |
+| `26`, `27` | `kRoundaboutEnter`, `kRoundaboutExit` | `roundabout` | Roundabout circle icon |
+| `28`, `29` | `kFerryEnter`, `kFerryExit` | `ferry` | Ferry vessel indicator |
+| `Default` / Unknown | Any unmapped code (e.g. 0 `kNone`, transit codes) | `generic` | Neutral heading compass |
 
 ### 3.3 Strict Multimodal Truth & Provenance
 Non-road transit modes (**Train, Metro, Flight, Ferry**) operate under strict data provenance rules:
@@ -120,6 +123,16 @@ stateDiagram-v2
 
 ### 4.2 Midnight Boundary Handling
 Timestamps are parsed with full millisecond epoch arithmetic (`outgoingDepartureMs - incomingArrivalMs`). Overnight itineraries spanning midnight (e.g., 23:45 arrival to 00:30 departure) calculate positive connection buffers (+45 min) rather than negative arithmetic errors.
+
+### 4.3 Deterministic Evaluation Precedence
+To prevent ambiguous or misleading states, transfer readiness is evaluated in strict order:
+1. **Timestamp Validation**: Missing or unparseable ISO strings immediately resolve to `unknown`.
+2. **Completion Immutability**: If both segments around the hub are marked completed, the state is locked to `completed`. Elapsed time calculations never overwrite verified user completions.
+3. **Elapsed Departure Precedence**: If the outgoing departure timestamp has fully elapsed (`nowMs > outgoingDepartureMs`), the state evaluates to `missed_estimated`. This takes precedence over `tight_connection`, preventing past departures with small buffers from incorrectly reporting as upcoming tight connections.
+4. **Active Interchange (`in_progress`)**: If the incoming segment is marked completed while the outgoing departure remains pending.
+5. **Tight Connection**: If available buffer is under 10 minutes or less than the required transfer buffer.
+6. **Imminent Transfer (`prepare`)**: If arrival is within 15 minutes or transfer window is currently active.
+7. **Upcoming Connection**: All future connections with healthy buffers.
 
 ---
 
@@ -187,3 +200,4 @@ For testing and simulated demonstration (e.g., user reviewing guidance from desk
 1. **No Fictional Telemetry**: KogniSync does not fabricate live bus or train positions on map tracks. Real-time arrival delays are only displayed when provided by verified partner APIs.
 2. **Turn-by-Turn Rerouting**: Dynamic off-route rerouting during driving requires continuous turn-by-turn navigation engines (e.g. Mapbox/Google Navigation SDKs) beyond the web application scope.
 3. **Turn Instructions for Transit**: Public transit segments provide station interchange and boarding guidance rather than road turn maneuvers.
+
