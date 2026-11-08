@@ -37,6 +37,7 @@ export interface JourneyMapProps {
   onSegmentClick?: (segmentId: string) => void;
   className?: string;
   interactive?: boolean;
+  initialViewMode?: 'geographic' | 'schematic';
 }
 
 interface ProjectedWaypoint {
@@ -78,11 +79,20 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   onSegmentClick,
   className = '',
   interactive = true,
+  initialViewMode = 'geographic',
 }) => {
   const navigate = useNavigate();
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(0);
-  const [viewMode, setViewMode] = useState<'geographic' | 'schematic'>('geographic');
+  const [viewMode, setViewMode] = useState<'geographic' | 'schematic'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('view') === 'schematic') return 'schematic';
+      if (params.get('view') === 'geographic') return 'geographic';
+    }
+    return initialViewMode;
+  });
   const [leafletError, setLeafletError] = useState<boolean>(false);
+  const [tileError, setTileError] = useState<boolean>(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -216,11 +226,19 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           maxZoom: 19,
         });
 
-        // CartoDB Positron Basemap Tile Layer
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-          subdomains: 'abcd',
+        // Configurable Basemap Tile Layer (defaulting to CARTO Positron with OSM attribution)
+        const tileUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_URL) ||
+          'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+        const tileSubdomains = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_SUBDOMAINS) || 'abcd';
+
+        const tileLayer = L.tileLayer(tileUrl, {
+          subdomains: tileSubdomains,
           maxZoom: 19,
         }).addTo(map);
+
+        tileLayer.on('tileerror', () => {
+          setTileError(true);
+        });
 
         const featureGroup = L.featureGroup().addTo(map);
         layersGroupRef.current = featureGroup;
@@ -691,6 +709,21 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
                   title="Focus Destination"
                 >
                   <Navigation className="w-4 h-4 text-rose-600" />
+                </button>
+              </div>
+            )}
+
+            {/* Tile Error Resilience Banner */}
+            {tileError && (
+              <div className="absolute top-3 left-3 z-[1000] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-50/95 border border-amber-200 text-[10px] text-amber-800 shadow-sm backdrop-blur-xs font-mono">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>Basemap tiles temporarily unavailable.</span>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('schematic')}
+                  className="font-bold underline ml-1 text-amber-900 hover:text-amber-950 cursor-pointer"
+                >
+                  Switch to Waypoints View
                 </button>
               </div>
             )}

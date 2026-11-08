@@ -294,3 +294,4 @@ async def test_6_maps_service_composite_enrichment():
     assert enriched.total_duration_seconds > 10000
     assert enriched.provider_status == "ok"
     assert enriched.has_live_geometry is False
+

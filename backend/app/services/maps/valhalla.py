@@ -199,3 +199,4 @@ class ValhallaMapsProvider(MapsProvider):
                 ]
             }
         )
+

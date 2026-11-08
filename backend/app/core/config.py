@@ -38,10 +38,10 @@ class Settings(BaseSettings):
     GOOGLE_ROUTES_ENABLED: bool = False
     GOOGLE_MAPS_API_KEY: str | None = None
 
-    # Valhalla OpenStreetMap Routing Configuration (Optional, Self-Hosted Engine)
-    VALHALLA_ENABLED: bool = False
+    # Valhalla OpenStreetMap Routing Configuration (Self-Hosted Engine)
+    VALHALLA_ENABLED: bool = True
     VALHALLA_BASE_URL: str = "http://localhost:8002"
-    VALHALLA_TIMEOUT_SECONDS: float = 3.0
+    VALHALLA_TIMEOUT_SECONDS: float = 5.0
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),
