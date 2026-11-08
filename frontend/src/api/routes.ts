@@ -75,6 +75,12 @@ export function buildClientFallbackRoute(journey: Journey): EnrichedJourneyRoute
         longitude: seg.destination.coordinates.lng,
       },
       coordinates: coords,
+      geojson_geometry: {
+        type: 'LineString',
+        coordinates: coords.map((c) => [c.longitude, c.latitude] as [number, number]),
+      },
+      is_live_geometry: false,
+      provenance_notes: 'Client-side interpolated corridor estimate',
       distance_meters: distMeters,
       duration_seconds: durSeconds,
       source: 'client_fallback',
@@ -87,6 +93,7 @@ export function buildClientFallbackRoute(journey: Journey): EnrichedJourneyRoute
     total_distance_meters: totalDistanceMeters,
     total_duration_seconds: totalDurationSeconds,
     segments,
+    has_live_geometry: false,
     source: 'client_fallback',
     provider_status: 'ok',
   };
@@ -121,7 +128,7 @@ export async function enrichJourneyRoute(journey: Journey): Promise<EnrichedJour
       body: JSON.stringify(payload),
     });
     return enriched;
-  } catch (err) {
+  } catch {
     // Graceful offline fallback
     return buildClientFallbackRoute(journey);
   }

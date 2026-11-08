@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,10 +39,30 @@ class Settings(BaseSettings):
     GOOGLE_ROUTES_ENABLED: bool = False
     GOOGLE_MAPS_API_KEY: str | None = None
 
-    # Valhalla OpenStreetMap Routing Configuration (Optional, Self-Hosted Engine)
-    VALHALLA_ENABLED: bool = False
+    # Valhalla OpenStreetMap Routing Configuration (Self-Hosted Engine)
+    VALHALLA_ENABLED: bool = True
     VALHALLA_BASE_URL: str = "http://localhost:8002"
-    VALHALLA_TIMEOUT_SECONDS: float = 3.0
+    VALHALLA_TIMEOUT_SECONDS: float = 5.0
+    VALHALLA_ALLOW_LOCALHOST: bool = False
+
+    @model_validator(mode="after")
+    def validate_valhalla_production_config(self) -> "Settings":
+        """
+        Ensure production does not silently assume http://localhost:8002 is a reachable external Valhalla service.
+        In production:
+        1. If VALHALLA_BASE_URL points to localhost/loopback, VALHALLA_ENABLED is automatically disabled
+           unless VALHALLA_ALLOW_LOCALHOST is explicitly set to True (e.g. for sidecar container deployments).
+        2. If VALHALLA_BASE_URL points to an external routing service, VALHALLA_ENABLED remains enabled
+           unless explicitly set to False.
+        """
+        is_localhost = any(
+            h in (self.VALHALLA_BASE_URL or "").lower()
+            for h in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+        )
+        if self.ENVIRONMENT == "production" and is_localhost:
+            if not self.VALHALLA_ALLOW_LOCALHOST:
+                self.VALHALLA_ENABLED = False
+        return self
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),

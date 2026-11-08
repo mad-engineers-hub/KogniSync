@@ -284,7 +284,7 @@ async def test_6_missing_coordinates_clean_fallback():
     )
 
     status_dict: dict[str, str] = {}
-    dur, dist, prov = await service._resolve_segment_data(
+    dur, dist, prov, *rest = await service._resolve_segment_data(
         origin_node=broken_origin,
         dest_node=valid_dest,
         mode="cab",
@@ -327,7 +327,7 @@ async def test_7_invalid_coordinates_clean_fallback():
     )
 
     status_dict: dict[str, str] = {}
-    dur, dist, prov = await service._resolve_segment_data(
+    dur, dist, prov, *rest = await service._resolve_segment_data(
         origin_node=invalid_node,
         dest_node=valid_dest,
         mode="cab",

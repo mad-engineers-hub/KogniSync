@@ -28,6 +28,26 @@ async def lifespan(app: FastAPI):
             logger.critical("Startup aborted: INTERNAL_API_KEY must be configured in production.")
             raise RuntimeError("Startup aborted: INTERNAL_API_KEY must be configured in production.")
 
+        # Valhalla routing engine readiness audit
+        if settings.VALHALLA_ENABLED:
+            is_localhost = any(
+                h in settings.VALHALLA_BASE_URL.lower()
+                for h in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+            )
+            if is_localhost:
+                logger.warning(
+                    f"Production environment configured with localhost Valhalla URL '{settings.VALHALLA_BASE_URL}'. "
+                    "Ensure an external Valhalla instance or sidecar container is active on that port."
+                )
+            else:
+                logger.info(
+                    f"Valhalla routing engine enabled for production pointing to: {settings.VALHALLA_BASE_URL}"
+                )
+        else:
+            logger.info(
+                "Valhalla routing engine is disabled for production environment; using deterministic fallback."
+            )
+
     yield
     logger.info(f"Shutting down {settings.PROJECT_NAME} backend service...")
 

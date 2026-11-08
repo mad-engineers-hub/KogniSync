@@ -9,6 +9,7 @@ from app.services.maps.schemas import (
 from app.services.maps.provider import MapsProvider
 from app.services.maps.fallback import FallbackMapsProvider
 from app.services.maps.google_routes import GoogleRoutesProvider
+from app.services.maps.valhalla import ValhallaMapsProvider
 from app.services.maps.service import MapsService, maps_service
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "MapsProvider",
     "FallbackMapsProvider",
     "GoogleRoutesProvider",
+    "ValhallaMapsProvider",
     "MapsService",
     "maps_service",
 ]

@@ -191,7 +191,12 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
       {/* Interactive Google Routes & Geo Map Visualization */}
       {showMap && activeJourney && (
         <div className="animate-in fade-in duration-200">
-          <JourneyMap journey={activeJourney} segments={activeJourney.segments} />
+          <JourneyMap
+            journey={activeJourney}
+            segments={activeJourney.segments}
+            alternativeJourneys={journeys.filter((j) => j.id !== activeJourney.id)}
+            onSelectJourney={(id) => setSelectedJourneyId(id)}
+          />
         </div>
       )}
 

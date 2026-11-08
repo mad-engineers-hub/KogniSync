@@ -8,7 +8,10 @@ from app.services.maps.schemas import (
     RouteEnrichRequestSegment,
     SegmentRouteGeometry,
 )
-from app.services.maps.polyline import decode_polyline
+from app.services.maps.polyline import (
+    decode_polyline,
+    coordinates_to_geojson_linestring,
+)
 
 logger = logging.getLogger("kognisync.maps.google")
 
@@ -129,6 +132,8 @@ class GoogleRoutesProvider(MapsProvider):
                     if mode_lower in ("train", "rail") and segment.duration_minutes:
                         duration_seconds = int(segment.duration_minutes * 60)
 
+                    geojson = coordinates_to_geojson_linestring(coords)
+
                     return SegmentRouteGeometry(
                         segment_id=segment.segment_id,
                         mode=segment.mode,
@@ -139,10 +144,13 @@ class GoogleRoutesProvider(MapsProvider):
                         origin_coords=p1,
                         destination_coords=p2,
                         coordinates=coords,
+                        geojson_geometry=geojson,
                         distance_meters=distance_meters,
                         duration_seconds=duration_seconds,
                         encoded_polyline=encoded_polyline,
                         source=self.name,
+                        is_live_geometry=True,
+                        provenance_notes="Live Google Routes v2 road geometry",
                         warnings=[],
                     )
                 else:

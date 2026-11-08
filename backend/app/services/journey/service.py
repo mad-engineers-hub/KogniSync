@@ -390,6 +390,12 @@ class JourneyOrchestrationService:
                         metric_overrides["duration_minutes"] = norm_res.duration_minutes
                     if norm_res.distance_km is not None:
                         metric_overrides["distance_km"] = norm_res.distance_km
+                    if norm_res.encoded_polyline is not None:
+                        metric_overrides["encoded_polyline"] = norm_res.encoded_polyline
+                    if norm_res.geojson_geometry is not None:
+                        metric_overrides["geojson_geometry"] = norm_res.geojson_geometry
+                    if norm_res.is_live_geometry:
+                        metric_overrides["is_live_geometry"] = True
                     # First matching live provider completes the segment query
                     break
             except asyncio.TimeoutError:
@@ -446,7 +452,7 @@ class JourneyOrchestrationService:
         provider_status: dict[str, str],
         departure_time: str | None = None,
         arrival_deadline: str | None = None,
-    ) -> tuple[int, float, dict[str, AttributeProvenanceSchema]]:
+    ) -> tuple[int, float, dict[str, AttributeProvenanceSchema], dict[str, Any]]:
         """
         Resolves duration, distance, and provenance overrides for a single segment.
         Tries legacy callable registry first, then registered TransportProvider adapters.
@@ -458,7 +464,7 @@ class JourneyOrchestrationService:
                 {"origin": origin_node.city, "destination": dest_node.city, "mode": mode},
                 provider_status,
             )
-            return default_duration, default_distance, legacy_res or {}
+            return default_duration, default_distance, legacy_res or {}, {}
 
         # 2. Coordinate validation boundary (M3.3)
         orig_coords = getattr(origin_node, "coordinates", None)
@@ -479,7 +485,7 @@ class JourneyOrchestrationService:
             logger.debug(
                 f"Missing or invalid coordinates for segment {origin_node.name} -> {dest_node.name}; cleanly falling back to deterministic baseline."
             )
-            return default_duration, default_distance, {}
+            return default_duration, default_distance, {}, {}
 
         # 3. Check registered TransportProvider adapters
         req = TransportSegmentSearchRequest(
@@ -499,7 +505,12 @@ class JourneyOrchestrationService:
         overrides, metric_overrides = await self._query_transport_providers(req, provider_status)
         duration = metric_overrides.get("duration_minutes", default_duration)
         distance = metric_overrides.get("distance_km", default_distance)
-        return duration, distance, overrides
+        geom_info = {
+            "encoded_polyline": metric_overrides.get("encoded_polyline"),
+            "geojson_geometry": metric_overrides.get("geojson_geometry"),
+            "is_live_geometry": metric_overrides.get("is_live_geometry", False),
+        }
+        return duration, distance, overrides, geom_info
 
     async def search_journeys(self, request: JourneySearchRequest) -> JourneySearchResponse:
         """
@@ -909,9 +920,9 @@ class JourneyOrchestrationService:
                 fm["provider"],
             )
 
-            dur3, dist3, prov_overrides3 = resolved_map[k3]
-            dur2, dist2, prov_overrides2 = resolved_map[k2]
-            dur1, dist1, prov_overrides1 = resolved_map[k1]
+            dur3, dist3, prov_overrides3, geom3 = resolved_map[k3]
+            dur2, dist2, prov_overrides2, geom2 = resolved_map[k2]
+            dur1, dist1, prov_overrides1, geom1 = resolved_map[k1]
 
             # Compute segment boundaries backward with resolved durations
             seg3_arr = final_arr_date
@@ -957,6 +968,9 @@ class JourneyOrchestrationService:
                 transfer_buffer_minutes=fm["transfer_buffer_min"],
                 notes=f"Direct pickup at {origin_hubs.user_node.name}. Planning assumption: {fm['transfer_buffer_min']}m transfer buffer at {dep_hub.name}.",
                 provenance=prov1,
+                encoded_polyline=geom1.get("encoded_polyline"),
+                geojson_geometry=geom1.get("geojson_geometry"),
+                is_live_geometry=geom1.get("is_live_geometry", False),
             )
 
             # Leg 2: Main Transit Corridor
@@ -993,6 +1007,9 @@ class JourneyOrchestrationService:
                 transfer_buffer_minutes=mt["transfer_buffer_min"],
                 notes=f"{mt['notes']} Planning assumption: {mt['transfer_buffer_min']}m transfer buffer at {arr_hub.name}.",
                 provenance=prov2,
+                encoded_polyline=geom2.get("encoded_polyline"),
+                geojson_geometry=geom2.get("geojson_geometry"),
+                is_live_geometry=geom2.get("is_live_geometry", False),
             )
 
             # Leg 3: Last-Mile Drop-Off
@@ -1026,6 +1043,9 @@ class JourneyOrchestrationService:
                 comfort_score=lm["comfort_score"],
                 notes=f"Final transfer to {dest_hubs.user_node.name}. Driver will meet at {arr_hub.name} arrival exit.",
                 provenance=prov3,
+                encoded_polyline=geom3.get("encoded_polyline"),
+                geojson_geometry=geom3.get("geojson_geometry"),
+                is_live_geometry=geom3.get("is_live_geometry", False),
             )
 
             segments = [segment1, segment2, segment3]
