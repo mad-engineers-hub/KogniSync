@@ -10,6 +10,7 @@ const tests = [
   'src/tests/trustAwareJourney.test.ts',
   'src/tests/multimodalRoutingIntelligence.test.ts',
   'src/tests/gpsStartingLocation.test.ts',
+  'src/tests/navigationGuidance.test.ts',
 ];
 
 for (const testPath of tests) {
