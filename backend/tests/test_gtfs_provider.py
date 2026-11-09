@@ -159,3 +159,86 @@ async def test_gtfs_timeout_and_error_handling():
             assert provider._consecutive_failure_count == 1
             cap = provider.get_capabilities()
             assert cap.consecutive_failure_count == 1
+
+
+def test_gtfs_ssrf_protections():
+    from app.services.disruption.providers.gtfs_realtime import is_ssrf_safe_url
+
+    # Insecure HTTP
+    safe, msg = is_ssrf_safe_url("http://transit.example.gov/feed.json", allow_http=False)
+    assert safe is False
+    assert "Insecure HTTP scheme" in msg
+
+    # Localhost
+    safe, msg = is_ssrf_safe_url("https://localhost:8000/feed.json")
+    assert safe is False
+    assert "SSRF Protection" in msg
+
+    # Loopback IP
+    safe, msg = is_ssrf_safe_url("https://127.0.0.1/feed.json")
+    assert safe is False
+    assert "SSRF Protection" in msg
+
+    # Private IP 10.x
+    safe, msg = is_ssrf_safe_url("https://10.0.0.5/feed.json")
+    assert safe is False
+    assert "SSRF Protection" in msg
+
+    # Cloud metadata service (169.254.169.254)
+    safe, msg = is_ssrf_safe_url("https://169.254.169.254/latest/meta-data/")
+    assert safe is False
+    assert "SSRF Protection" in msg
+
+    # Google cloud metadata
+    safe, msg = is_ssrf_safe_url("https://metadata.google.internal/computeMetadata/v1/")
+    assert safe is False
+    assert "SSRF Protection" in msg
+
+    # Valid public endpoint
+    safe, msg = is_ssrf_safe_url("https://api.transport.nsw.gov.au/live/feed.json")
+    assert safe is True
+
+
+def test_gtfs_vehicle_positions_parsing():
+    now_ts = int(time.time())
+    payload = {
+        "header": {
+            "gtfs_realtime_version": "2.0",
+            "timestamp": now_ts - 30,
+        },
+        "entity": [
+            {
+                "id": "veh-congestion-99",
+                "vehicle": {
+                    "trip": {"trip_id": "BMTC-V-335E", "route_id": "335E"},
+                    "position": {"latitude": 12.9716, "longitude": 77.5946},
+                    "congestion_level": "SEVERE_CONGESTION",
+                    "timestamp": now_ts - 20,
+                },
+            },
+            {
+                "id": "veh-normal-100",
+                "vehicle": {
+                    "trip": {"trip_id": "BMTC-V-335E-2", "route_id": "335E"},
+                    "position": {"latitude": 12.9750, "longitude": 77.6000},
+                    "congestion_level": "RUNNING_SMOOTHLY",
+                    "timestamp": now_ts - 20,
+                },
+            },
+        ],
+    }
+
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.json")
+    events = provider.parse_gtfs_payload(payload)
+
+    # Normal running vehicle should NOT create a disruption event
+    # Only severe/congested vehicle creates a disruption event
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.id == "gtfs-veh-veh-congestion-99"
+    assert ev.event_type == "traffic_congestion"
+    assert ev.severity == "critical"
+    assert ev.point is not None
+    assert ev.point.lat == 12.9716
+    assert ev.point.lng == 77.5946
+    assert ev.estimated_delay_minutes == 15

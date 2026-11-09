@@ -24,16 +24,27 @@ Where commercial credentials or authorized agency feeds are not present in the r
 
 ## 2. Provider Capability & Operational Verification Matrix
 
-To prevent misleading claims, KogniSync rigorously distinguishes between **connector implementation**, **credential configuration**, **connectivity validation**, and **successful live verification**:
+To prevent misleading claims, KogniSync rigorously distinguishes between the six required operational dimensions:
 
-| Capability | Connector Implementation | Credential Configuration | Live Verified | Current Operational Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **TomTom Road Incidents** | Fully implemented (`TomTomOrbisTrafficProvider`) | Absent in local environment (`TOMTOM_API_KEY` unset) | Contract Test Verified (mocked Orbis v2 responses) | **BLOCKED** — commercial API credentials required. Fail-closed without live fabrication. |
-| **GTFS Trip Updates** | Fully implemented (`GTFSRealtimeProvider`) | Absent in local environment (`GTFS_REALTIME_FEED_URL` unset) | Contract Test Verified (mocked protobuf/JSON feeds) | **BLOCKED** — authorized regional transit feed unavailable. |
-| **GTFS Service Alerts** | Fully implemented (`GTFSRealtimeProvider`) | Absent in local environment (`GTFS_REALTIME_FEED_URL` unset) | Contract Test Verified (mocked protobuf/JSON feeds) | **BLOCKED** — authorized regional transit feed unavailable. |
-| **GTFS Vehicle Positions** | Supported entity parser implemented | Absent in local environment (`GTFS_REALTIME_FEED_URL` unset) | Contract Test Verified | **BLOCKED** — authorized regional transit feed unavailable. |
-| **Valhalla Road Routing** | Fully implemented (`ValhallaRoutingService`) | Self-hosted local Docker engine (`http://localhost:8002`) | Live Runtime Verified (M3.5.1 / M3.6) | **AVAILABLE** — road routing engine only (does not provide traffic incident feeds). |
-| **Deterministic Disruption Simulator** | Fully implemented (`SimulatedDisruptionProvider`) | Not required (internal deterministic scenario generator) | Verified across all test suites | **AVAILABLE** — active in sandbox/demo mode with explicit simulation badges. |
+| Dimension | Required Evidence | Verification Method |
+| :--- | :--- | :--- |
+| **Connector** | Source implementation present | Adapter class implemented and verified via unit tests |
+| **Credentials** | Safe presence check | Non-empty API key / token verified without leaking values |
+| **Connectivity** | Successful network response | HTTP handshake succeeded within configured timeout window |
+| **Provider response** | Validated actual response | Valid schema-conforming payload parsed without error |
+| **Live verification** | Actual data validated against provider | Real-world incidents extracted from active network query |
+| **Coverage** | Confirmed geographic & mode coverage | Bounded spatial query mapped to active route geometry |
+
+### Provider Operational Evaluation Matrix
+
+| Capability | Connector Implementation | Credential Configuration | Connectivity Status | Live Verified | Current Operational Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **TomTom Road Incidents** | Fully implemented (`TomTomOrbisTrafficProvider`) | Absent in local environment (`TOMTOM_API_KEY` unset) | Not configured | Contract Test Verified (mocked Orbis v2 responses) | **BLOCKED** — commercial API credentials required. Fail-closed without live fabrication. |
+| **GTFS Trip Updates** | Fully implemented (`GTFSRealtimeProvider`) | Absent in local environment (`GTFS_REALTIME_FEED_URL` unset) | Not configured | Contract Test Verified (mocked GTFS-RT feeds) | **BLOCKED** — authorized regional transit feed unavailable. |
+| **GTFS Service Alerts** | Fully implemented (`GTFSRealtimeProvider`) | Absent in local environment (`GTFS_REALTIME_FEED_URL` unset) | Not configured | Contract Test Verified (mocked GTFS-RT feeds) | **BLOCKED** — authorized regional transit feed unavailable. |
+| **GTFS Vehicle Positions** | Fully implemented (`GTFSRealtimeProvider`) | Absent in local environment (`GTFS_REALTIME_FEED_URL` unset) | Not configured | Contract Test Verified | **BLOCKED** — authorized regional transit feed unavailable. |
+| **Valhalla Road Routing** | Fully implemented (`ValhallaRoutingService`) | Self-hosted local Docker engine (`http://localhost:8002`) | Available | Live Runtime Verified (M3.5.1 / M3.6) | **AVAILABLE** — road routing engine only (does not provide traffic incident feeds). |
+| **Deterministic Disruption Simulator** | Fully implemented (`SimulatedDisruptionProvider`) | Not required (internal deterministic scenario generator) | Available | Verified across all test suites | **AVAILABLE** — active in sandbox/demo mode with explicit simulation badges. |
 
 > [!IMPORTANT]
 > **No Masquerading Rule**: A connector existing in the repository does **NOT** indicate live operational data. In absence of valid credentials, the system reports `BLOCKED`, never fabricates incidents, and never sets `is_available: True`.

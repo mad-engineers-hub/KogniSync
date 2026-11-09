@@ -274,3 +274,55 @@ async def test_missing_or_malformed_geometry_handled_safely():
         # Safely skipped the 2 malformed records and normalized the 1 valid record
         assert len(events) == 1
         assert events[0].id == "tt-inc-valid-03"
+
+
+def test_split_bounding_box_edge_cases():
+    from app.services.disruption.providers.tomtom_orbis import (
+        split_bounding_box,
+        approx_bbox_area_km2,
+        MAX_BBOX_AREA_KM2,
+    )
+
+    # 1. Box below limit (< 10,000 km²)
+    small_box = split_bounding_box(77.5, 12.9, 77.6, 13.0)
+    assert len(small_box) == 1
+    assert small_box[0] == (77.5, 12.9, 77.6, 13.0)
+
+    # 2. Box exactly at limit
+    # Area ~ 10,000 km²: width ~ 100km (~0.9 deg), height ~ 100km (~0.9 deg)
+    exact_box = split_bounding_box(77.0, 12.0, 77.0 + 0.9, 12.0 + 0.9, max_area_km2=MAX_BBOX_AREA_KM2)
+    assert len(exact_box) == 1
+
+    # 3. Box above limit (Bengaluru to Chennai corridor ~ 350km x 350km ~ 120,000 km²)
+    big_box = split_bounding_box(77.0, 12.0, 80.5, 13.5, max_area_km2=MAX_BBOX_AREA_KM2)
+    assert len(big_box) > 1
+    assert len(big_box) <= 5  # Clamped to TOMTOM_MAX_REQUESTS_PER_ASSESSMENT
+
+    # 4. Very wide corridor (lon_span >> lat_span)
+    wide_box = split_bounding_box(70.0, 12.9, 85.0, 13.1, max_area_km2=MAX_BBOX_AREA_KM2)
+    assert len(wide_box) > 1
+    # Wide corridor splits along longitude, so lat span is preserved
+    for b in wide_box:
+        assert b[1] == 12.9
+        assert b[3] == 13.1
+
+    # 5. Very tall corridor (lat_span >> lon_span)
+    tall_box = split_bounding_box(77.5, 8.0, 77.7, 28.0, max_area_km2=MAX_BBOX_AREA_KM2)
+    assert len(tall_box) > 1
+    # Tall corridor splits along latitude, so lon span is preserved
+    for b in tall_box:
+        assert b[0] == 77.5
+        assert b[2] == 77.7
+
+    # 6. Reversed coordinates: min > max
+    reversed_box = split_bounding_box(80.0, 14.0, 77.0, 12.0, max_area_km2=MAX_BBOX_AREA_KM2)
+    assert len(reversed_box) >= 1
+    for b in reversed_box:
+        assert b[0] <= b[2]
+        assert b[1] <= b[3]
+
+    # 7. Antimeridian crossing: min_lon = 179.0, max_lon = -179.0
+    antimeridian_box = split_bounding_box(179.0, -10.0, -179.0, 10.0, max_area_km2=MAX_BBOX_AREA_KM2)
+    assert len(antimeridian_box) == 2
+    assert antimeridian_box[0] == (179.0, -10.0, 180.0, 10.0)
+    assert antimeridian_box[1] == (-180.0, -10.0, -179.0, 10.0)

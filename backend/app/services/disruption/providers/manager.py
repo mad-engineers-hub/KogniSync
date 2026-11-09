@@ -81,12 +81,21 @@ class DisruptionProviderRegistry:
         valid_events: list[DisruptionEvent] = []
 
         for ev in events:
-            # 1. Freshness check
-            data_type = (
-                "road_incident"
-                if any(m in ("cab", "bus", "auto", "rapido") for m in ev.affected_modes)
-                else "service_alert"
-            )
+            # 1. Freshness check with precise data type mapping
+            if ev.source == "gtfs_realtime":
+                if ev.event_type in ("transport_delay", "service_cancellation"):
+                    data_type = "trip_update"
+                elif ev.event_type == "traffic_congestion":
+                    data_type = "vehicle_position"
+                else:
+                    data_type = "service_alert"
+            elif any(m in ("cab", "auto", "rapido") for m in ev.affected_modes):
+                data_type = "road_incident"
+            elif "bus" in ev.affected_modes and ev.source != "gtfs_realtime":
+                data_type = "road_incident"
+            else:
+                data_type = "service_alert"
+
             report = freshness_engine.evaluate_event_freshness(ev, data_type=data_type)
 
             if report.is_expired:

@@ -76,14 +76,34 @@ def approx_bbox_area_km2(min_lon: float, min_lat: float, max_lon: float, max_lat
 
 
 def split_bounding_box(
-    min_lon: float, min_lat: float, max_lon: float, max_lat: float, max_area_km2: float = MAX_BBOX_AREA_KM2
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    max_area_km2: float = MAX_BBOX_AREA_KM2,
+    depth: int = 0,
+    max_depth: int = 6,
 ) -> list[tuple[float, float, float, float]]:
     """
     Subdivides a bounding box recursively if it exceeds the maximum allowable area.
-    Clamps subdivisions to a safe budget to avoid request storms.
+    Normalizes reversed coordinates, handles antimeridian crossing, limits recursion depth,
+    and clamps subdivisions to a safe budget to avoid request storms.
     """
+    # 1. Antimeridian crossing check (e.g. min_lon = 179.0, max_lon = -179.0)
+    if min_lon > max_lon:
+        if max_lon < 0 and min_lon > 0 and (180.0 - min_lon + max_lon + 180.0) < 180.0:
+            box_east = (min_lon, min(min_lat, max_lat), 180.0, max(min_lat, max_lat))
+            box_west = (-180.0, min(min_lat, max_lat), max_lon, max(min_lat, max_lat))
+            return [box_east, box_west][: settings.TOMTOM_MAX_REQUESTS_PER_ASSESSMENT]
+        else:
+            # Reversed coordinates: normalize
+            min_lon, max_lon = max_lon, min_lon
+
+    if min_lat > max_lat:
+        min_lat, max_lat = max_lat, min_lat
+
     area = approx_bbox_area_km2(min_lon, min_lat, max_lon, max_lat)
-    if area <= max_area_km2:
+    if area <= max_area_km2 or depth >= max_depth:
         return [(min_lon, min_lat, max_lon, max_lat)]
 
     # Split along the longer dimension
@@ -101,7 +121,11 @@ def split_bounding_box(
 
     subboxes: list[tuple[float, float, float, float]] = []
     for b in [box1, box2]:
-        subboxes.extend(split_bounding_box(b[0], b[1], b[2], b[3], max_area_km2))
+        subboxes.extend(
+            split_bounding_box(
+                b[0], b[1], b[2], b[3], max_area_km2, depth=depth + 1, max_depth=max_depth
+            )
+        )
     return subboxes[: settings.TOMTOM_MAX_REQUESTS_PER_ASSESSMENT]
 
 

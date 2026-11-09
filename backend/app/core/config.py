@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     GTFS_REALTIME_FEED_URL: str | None = None
     GTFS_REALTIME_API_KEY: str | None = None
     GTFS_REALTIME_TIMEOUT_SECONDS: float = 5.0
+    GTFS_REALTIME_ALLOW_HTTP: bool = False  # Strict HTTPS enforced by default (SSRF safeguard)
 
     # Data Freshness Thresholds (seconds) (Milestone M3.8)
     FRESHNESS_ROAD_INCIDENT_SECONDS: int = 1800       # 30 min fresh threshold
