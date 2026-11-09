@@ -12,6 +12,7 @@ from app.api.routes.booking import router as booking_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.journeys import router as journeys_router
 from app.api.routes.location import router as location_router
+from app.api.routes.disruptions import router as disruptions_router
 
 
 @asynccontextmanager
@@ -76,3 +77,4 @@ app.include_router(booking_router)
 app.include_router(auth_router)
 app.include_router(journeys_router)
 app.include_router(location_router)
+app.include_router(disruptions_router)

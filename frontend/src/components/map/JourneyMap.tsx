@@ -29,6 +29,7 @@ import {
 
 import { useJourneyGuidance } from '../../hooks/useJourneyGuidance';
 import { NavigationGuidanceDrawer } from '../navigation/NavigationGuidanceDrawer';
+import { DisruptionEvent, JourneyDisruptionAssessment } from '../../types/disruption';
 
 export interface JourneyMapProps {
   segments: JourneySegment[];
@@ -43,6 +44,8 @@ export interface JourneyMapProps {
   initialViewMode?: 'geographic' | 'schematic';
   showGuidance?: boolean;
   initialGuidanceOpen?: boolean;
+  disruptions?: DisruptionEvent[];
+  disruptionAssessment?: JourneyDisruptionAssessment | null;
 }
 
 interface ProjectedWaypoint {
@@ -87,6 +90,8 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   initialViewMode = 'geographic',
   showGuidance = true,
   initialGuidanceOpen = false,
+  disruptions = [],
+  disruptionAssessment = null,
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -345,6 +350,12 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     }
 
     // 2. Draw Active Journey Segments (Real Valhalla / Geo Geometry)
+    const disruptedSegmentMap = new Map(
+      (disruptionAssessment?.segmentImpacts || [])
+        .filter((imp) => imp.impactLevel !== 'none')
+        .map((imp) => [imp.segmentId, imp])
+    );
+
     segments.forEach((seg, idx) => {
       const enrichedSeg = effectiveRoute.segments?.[idx];
       const style = getModeStyle(seg.mode);
@@ -376,6 +387,18 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           opacity: 0.45,
           lineCap: 'round',
           lineJoin: 'round',
+        }).addTo(featureGroup);
+      }
+
+      // Disrupted segment hazard casing
+      if (disruptedSegmentMap.has(seg.segmentId)) {
+        const imp = disruptedSegmentMap.get(seg.segmentId)!;
+        L.polyline(latlngs, {
+          color: imp.impactLevel === 'critical' ? '#e11d48' : '#d97706',
+          weight: style.weight + 4,
+          dashArray: '8, 8',
+          opacity: 0.95,
+          lineCap: 'round',
         }).addTo(featureGroup);
       }
 
@@ -522,6 +545,71 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       });
     });
 
+    // 3B. Draw Active Disruption Incident Markers
+    const activeEvents: DisruptionEvent[] = [
+      ...(disruptions || []),
+      ...(disruptionAssessment?.activeDisruptions || []),
+    ];
+    const uniqueEvents = Array.from(new Map(activeEvents.map((e) => [e.id, e])).values());
+
+    uniqueEvents.forEach((ev) => {
+      const pt = ev.point || ev.affectedLocations?.[0]?.coordinates;
+      if (!pt) return;
+
+      const isCrit = ev.severity === 'critical';
+      const isSim = ev.provenance === 'simulated';
+      const markerColor = isCrit ? '#e11d48' : '#d97706';
+      const pingColor = isCrit ? '#f43f5e' : '#f59e0b';
+
+      const incidentIconHtml = `
+        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 34px; height: 34px;" title="${ev.title}">
+          <div style="position: absolute; width: 34px; height: 34px; border-radius: 9999px; background: ${pingColor}; opacity: 0.45; animation: ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+          <div style="position: relative; width: 24px; height: 24px; border-radius: 9999px; background: ${markerColor}; border: 2.5px solid #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: #ffffff; font-size: 12px; font-weight: bold;">
+            ⚠️
+          </div>
+        </div>
+      `;
+
+      const incidentIcon = L.divIcon({
+        className: 'disruption-marker-icon',
+        html: incidentIconHtml,
+        iconSize: [34, 34],
+        iconAnchor: [17, 17],
+      });
+
+      const popupHtml = `
+        <div style="font-family: sans-serif; min-width: 200px; max-width: 260px; padding: 2px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; gap: 4px;">
+            <span style="font-size: 10px; font-family: monospace; font-weight: bold; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; background: ${
+              isCrit ? '#ffe4e6' : '#fef3c7'
+            }; color: ${isCrit ? '#9f1239' : '#92400e'};">
+              ${ev.severity} disruption
+            </span>
+            <span style="font-size: 9px; font-family: monospace; font-weight: bold; background: #0f172a; color: ${
+              isSim ? '#fcd34d' : '#93c5fd'
+            }; padding: 1px 5px; border-radius: 4px;">
+              ${isSim ? 'SIMULATED' : 'LIVE'}
+            </span>
+          </div>
+          <div style="font-weight: 700; font-size: 12px; color: #0f172a; margin-bottom: 3px;">
+            ${ev.title}
+          </div>
+          <div style="font-size: 11px; color: #475569; line-height: 1.4; margin-bottom: 6px;">
+            ${ev.description}
+          </div>
+          ${
+            ev.estimatedDelayMinutes
+              ? `<div style="font-size: 11px; font-family: monospace; color: #b91c1c; font-weight: bold;">Estimated Delay: +${ev.estimatedDelayMinutes} min</div>`
+              : ''
+          }
+        </div>
+      `;
+
+      const marker = L.marker([pt.lat, pt.lng], { icon: incidentIcon }).addTo(featureGroup);
+      marker.bindPopup(popupHtml);
+      allLatLangs.push([pt.lat, pt.lng]);
+    });
+
     // 4. Draw Foreground User Location (GPS / Demo Position) if active
     if (guidance.locationState.coords) {
       const { latitude, longitude } = guidance.locationState.coords;
@@ -576,6 +664,8 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     guidance.locationState.coords,
     guidance.locationState.status,
     guidance.progress.completedSegmentIds,
+    disruptions,
+    disruptionAssessment,
   ]);
 
   // Map control callbacks

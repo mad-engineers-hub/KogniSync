@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getJourneyById } from '../api/journey';
+import { assessJourneyDisruptions, recoverDisruptedJourney } from '../api/disruptions';
 import { JourneyTimeline } from '../components/details/JourneyTimeline';
 import { JourneyMap } from '../components/details/JourneyMap';
 import { AIRecommendationExplanation } from '../components/details/AIRecommendationExplanation';
 import { OptimizationBadge } from '../components/common/OptimizationBadge';
 import { ProvenanceBadge } from '../components/common/ProvenanceBadge';
+import { DisruptionBanner } from '../components/disruption/DisruptionBanner';
+import { DisruptionRecoveryCard } from '../components/disruption/DisruptionRecoveryCard';
+import { DemoDisruptionController } from '../components/disruption/DemoDisruptionController';
+import { Journey } from '../types/journey';
 import { formatCurrency, formatDuration } from '../lib/utils';
 import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle, Compass, Eye, Sparkles, Navigation } from 'lucide-react';
 import { getJourneyXRReferences } from '../utils/xrMatching';
@@ -15,20 +20,17 @@ export const DetailsPage: React.FC = () => {
   const { journeyId } = useParams<{ journeyId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const [guidanceActive, setGuidanceActive] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      return params.get('guidance') === 'true';
-    }
-    return false;
-  });
 
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get('guidance') === 'true') {
-      setGuidanceActive(true);
-    }
-  }, [location.search]);
+  const searchParams = new URLSearchParams(location.search);
+  const isGuidanceRequested = searchParams.get('guidance') === 'true';
+  const [manualGuidanceOpen, setManualGuidanceOpen] = useState<boolean>(false);
+  const guidanceActive = isGuidanceRequested || manualGuidanceOpen;
+
+  const [disruptionScenario, setDisruptionScenario] = useState<string | null>(
+    () => searchParams.get('scenario') || null
+  );
+  const [selectedRecovery, setSelectedRecovery] = useState<Journey | null>(null);
+  const [isRecoveryOpen, setIsRecoveryOpen] = useState<boolean>(false);
 
   const {
     data: journey,
@@ -38,6 +40,39 @@ export const DetailsPage: React.FC = () => {
     queryKey: ['journey', journeyId],
     queryFn: () => getJourneyById(journeyId || ''),
     enabled: !!journeyId,
+  });
+
+  const {
+    data: disruptionAssessment,
+    isLoading: isAssessmentLoading,
+    refetch: refetchAssessment,
+  } = useQuery({
+    queryKey: ['disruptions-assess', journey?.id, disruptionScenario],
+    queryFn: () =>
+      journey
+        ? assessJourneyDisruptions({
+            journey,
+            includeSimulated: true,
+            scenario: disruptionScenario,
+          })
+        : null,
+    enabled: !!journey,
+  });
+
+  const {
+    data: recoveryResponse,
+    isLoading: isRecoveryLoading,
+  } = useQuery({
+    queryKey: ['disruptions-recover', journey?.id, disruptionScenario],
+    queryFn: () =>
+      journey && disruptionAssessment?.isDisrupted
+        ? recoverDisruptedJourney({
+            journey,
+            includeSimulated: true,
+            scenario: disruptionScenario,
+          })
+        : null,
+    enabled: !!journey && Boolean(disruptionAssessment?.isDisrupted),
   });
 
   if (isLoading) {
@@ -115,7 +150,7 @@ export const DetailsPage: React.FC = () => {
 
           <button
             onClick={() => {
-              setGuidanceActive(true);
+              setManualGuidanceOpen(true);
               const el = document.getElementById('journey-map-section');
               if (el) el.scrollIntoView({ behavior: 'smooth' });
             }}
@@ -135,17 +170,94 @@ export const DetailsPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Disruption Intelligence Banner (Milestone M3.7) */}
+      <DisruptionBanner
+        assessment={disruptionAssessment || null}
+        isLoading={isAssessmentLoading}
+        onRefresh={() => refetchAssessment()}
+        onViewRecovery={() => setIsRecoveryOpen(!isRecoveryOpen)}
+        isRecoveryOpen={isRecoveryOpen}
+      />
+
+      {/* Multimodal Journey Recovery Recommendations Panel */}
+      {isRecoveryOpen && recoveryResponse && recoveryResponse.recommendations.length > 0 && (
+        <div className="flex flex-col gap-4 p-5 sm:p-6 rounded-2xl border border-blue-200 bg-gradient-to-br from-blue-50/60 via-white to-slate-50 shadow-sm animate-fade-in">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-blue-950">
+              <Sparkles className="w-5 h-5 text-blue-600" />
+              <h2 className="text-base sm:text-lg font-black font-display">
+                Pareto Recommended Recovery Alternatives
+              </h2>
+            </div>
+            <span className="text-xs font-mono font-bold text-slate-500">
+              {recoveryResponse.recommendations.length} Candidate Option{recoveryResponse.recommendations.length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-600 leading-relaxed font-medium">
+            KogniSync re-evaluated multimodal corridors to eliminate disruption delays while satisfying travel safety.
+            Inspect candidate recovery options below. Selecting an alternative previews its geometry and timeline.
+          </p>
+
+          <div className="flex flex-col gap-4">
+            {recoveryResponse.recommendations.map((rec) => (
+              <DisruptionRecoveryCard
+                key={rec.recommendationId}
+                recommendation={rec}
+                isSelected={selectedRecovery?.id === rec.recoveredJourney?.id}
+                onSelectRecovery={(recJourney) => {
+                  setSelectedRecovery(selectedRecovery?.id === recJourney?.id ? null : recJourney);
+                  const mapEl = document.getElementById('journey-map-section');
+                  if (mapEl) mapEl.scrollIntoView({ behavior: 'smooth' });
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Main Grid: Left Timeline & AI explanation; Right Map & Telemetry */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Left column (7 cols): AI Explanation & Timeline */}
         <div className="lg:col-span-7 flex flex-col gap-6">
-          <AIRecommendationExplanation journey={journey} />
-          <JourneyTimeline journey={journey} />
+          {selectedRecovery && (
+            <div className="p-4 rounded-xl border border-blue-300 bg-blue-50/80 flex items-center justify-between gap-3 text-xs text-blue-950 font-medium shadow-2xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="p-1 rounded-md bg-blue-600 text-white text-[10px] font-bold font-mono uppercase">
+                  Previewing Recovery
+                </span>
+                <span className="truncate">Active view switched to: <strong>{selectedRecovery.title}</strong></span>
+              </div>
+              <button
+                onClick={() => setSelectedRecovery(null)}
+                className="px-2.5 py-1 rounded-lg bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 font-bold shrink-0 cursor-pointer"
+              >
+                Reset to Original
+              </button>
+            </div>
+          )}
+          <AIRecommendationExplanation journey={selectedRecovery || journey} />
+          <JourneyTimeline journey={selectedRecovery || journey} />
         </div>
 
         {/* Right column (5 cols): Map & Invariants metadata & XR Explorer */}
         <div id="journey-map-section" className="lg:col-span-5 flex flex-col gap-6 scroll-mt-20">
-          <JourneyMap segments={journey.segments} journey={journey} initialGuidanceOpen={guidanceActive} />
+          <JourneyMap
+            segments={(selectedRecovery || journey).segments}
+            journey={selectedRecovery || journey}
+            disruptionAssessment={disruptionAssessment}
+            initialGuidanceOpen={guidanceActive}
+          />
+
+          {/* Disruption Simulation Demo Controller (M3.7 Evaluation Tool) */}
+          <DemoDisruptionController
+            activeScenario={disruptionScenario}
+            onSelectScenario={(sc) => {
+              setDisruptionScenario(sc);
+              setSelectedRecovery(null);
+            }}
+            isLoading={isAssessmentLoading || isRecoveryLoading}
+          />
 
           {/* XR Spatial Previews & AR Wayfinding Card */}
           {xrReferences.length > 0 && (
