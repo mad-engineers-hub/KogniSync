@@ -84,6 +84,9 @@ export interface TransferReadiness {
   stateDescription: string;
   badgeColor: 'emerald' | 'amber' | 'blue' | 'rose' | 'slate';
   isTimeEstimated: boolean;
+  disruptionRisk?: 'safe' | 'at_risk' | 'critical' | 'missed_estimated' | 'unknown';
+  disruptionDelayMinutes?: number;
+  disruptionNotice?: string;
 }
 
 export interface JourneyProgressState {

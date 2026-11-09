@@ -236,3 +236,70 @@ function createUnknownReadiness(
   };
 }
 
+/**
+ * Disruption-aware transfer readiness calculator (Milestone M3.7).
+ * Combines existing scheduled transfer readiness with external disruption delay estimates.
+ * Preserves completed user progress (completed progress is immutable).
+ */
+export function calculateDisruptedTransferReadiness(
+  incomingSegment: JourneySegment,
+  outgoingSegment: JourneySegment,
+  disruptionDelayMinutes: number = 0,
+  currentTime: Date | string | number = Date.now(),
+  completedSegmentIds: Set<string> = new Set()
+): TransferReadiness {
+  const base = calculateTransferReadiness(
+    incomingSegment,
+    outgoingSegment,
+    currentTime,
+    completedSegmentIds
+  );
+
+  // If completed or unknown, disruption does not alter completed status
+  if (base.state === 'completed' || base.state === 'unknown' || disruptionDelayMinutes <= 0) {
+    return {
+      ...base,
+      disruptionRisk: 'safe',
+      disruptionDelayMinutes: 0,
+    };
+  }
+
+  // Calculate adjusted buffer: scheduled buffer - disruption delay
+  const adjustedBuffer = base.availableBufferMinutes - disruptionDelayMinutes;
+
+  let disruptionRisk: 'safe' | 'at_risk' | 'critical' | 'missed_estimated' = 'safe';
+  let state = base.state;
+  let badgeColor = base.badgeColor;
+  let stateTitle = base.stateTitle;
+  let stateDescription = base.stateDescription;
+
+  if (adjustedBuffer < 0) {
+    disruptionRisk = 'critical';
+    state = 'missed_estimated';
+    badgeColor = 'rose';
+    stateTitle = `Critical Disruption: Transfer at Risk at ${base.hubName}`;
+    stateDescription = `Estimated +${disruptionDelayMinutes}m delay on incoming ${incomingSegment.mode} eliminates connection buffer (shortfall: ${Math.abs(
+      adjustedBuffer
+    )}m). Recovery rerouting recommended.`;
+  } else if (adjustedBuffer < base.requiredBufferMinutes) {
+    disruptionRisk = 'at_risk';
+    state = 'tight_connection';
+    badgeColor = 'amber';
+    stateTitle = `Tight Connection (+${disruptionDelayMinutes}m Disruption Delay)`;
+    stateDescription = `Incoming disruption reduces buffer to ${adjustedBuffer}m (required: ${base.requiredBufferMinutes}m) at ${base.hubName}. Prepare for expedited transfer.`;
+  }
+
+  return {
+    ...base,
+    state,
+    badgeColor,
+    stateTitle,
+    stateDescription,
+    availableBufferMinutes: adjustedBuffer,
+    disruptionRisk,
+    disruptionDelayMinutes,
+    disruptionNotice: `+${disruptionDelayMinutes}m Disruption Delay`,
+  };
+}
+
+

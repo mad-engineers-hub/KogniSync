@@ -7,6 +7,13 @@ from fastapi import APIRouter, HTTPException, status
 from app.core.logging import logger
 from app.services.journey.schemas import JourneySearchRequest, JourneySearchResponse
 from app.services.journey.service import journey_orchestrator
+from app.services.disruption.schemas import (
+    DisruptionAssessRequest,
+    DisruptionRecoverRequest,
+    DisruptionRecoveryResponse,
+    JourneyDisruptionAssessment,
+)
+from app.services.disruption.service import disruption_service
 
 router = APIRouter(prefix="/api/v1/journeys", tags=["Journey Orchestration"])
 
@@ -70,3 +77,58 @@ async def search_journeys(request: JourneySearchRequest) -> JourneySearchRespons
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Journey orchestration service encountered an unexpected error. Please verify search parameters.",
         )
+
+
+@router.post(
+    "/{journey_id}/assess-disruptions",
+    response_model=JourneyDisruptionAssessment,
+    summary="Assess disruptions for a specific journey ID (Milestone M3.7)",
+)
+async def assess_journey_by_id(
+    journey_id: str,
+    request: DisruptionAssessRequest,
+) -> JourneyDisruptionAssessment:
+    """Evaluates active disruptions affecting the provided journey payload."""
+    try:
+        return await disruption_service.assess_journey_disruptions(
+            journey=request.journey,
+            include_simulated=request.include_simulated,
+            scenario=request.scenario,
+        )
+    except ValueError as val_err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
+    except Exception as e:
+        logger.error(f"Error assessing journey {journey_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to assess disruptions for the requested journey.",
+        )
+
+
+@router.post(
+    "/{journey_id}/recover",
+    response_model=DisruptionRecoveryResponse,
+    summary="Generate recovery recommendations for a specific journey ID (Milestone M3.7)",
+)
+async def recover_journey_by_id(
+    journey_id: str,
+    request: DisruptionRecoverRequest,
+) -> DisruptionRecoveryResponse:
+    """Generates Pareto-ranked recovery alternatives for the disrupted journey."""
+    try:
+        return await disruption_service.recover_journey(
+            journey=request.journey,
+            budget_max=request.budget_max,
+            preferred_arrival_before=request.preferred_arrival_before,
+            include_simulated=request.include_simulated,
+            scenario=request.scenario,
+        )
+    except ValueError as val_err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
+    except Exception as e:
+        logger.error(f"Error recovering journey {journey_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate recovery alternatives for the requested journey.",
+        )
+
