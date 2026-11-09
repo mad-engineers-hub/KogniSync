@@ -11,6 +11,7 @@ import { ProvenanceBadge } from '../components/common/ProvenanceBadge';
 import { DisruptionBanner } from '../components/disruption/DisruptionBanner';
 import { DisruptionRecoveryCard } from '../components/disruption/DisruptionRecoveryCard';
 import { DemoDisruptionController } from '../components/disruption/DemoDisruptionController';
+import { ProviderIntelligencePanel } from '../components/disruption/ProviderIntelligencePanel';
 import { Journey } from '../types/journey';
 import { formatCurrency, formatDuration } from '../lib/utils';
 import { ArrowLeft, ArrowRight, ShieldCheck, AlertCircle, Compass, Eye, Sparkles, Navigation } from 'lucide-react';
@@ -178,6 +179,9 @@ export const DetailsPage: React.FC = () => {
         onViewRecovery={() => setIsRecoveryOpen(!isRecoveryOpen)}
         isRecoveryOpen={isRecoveryOpen}
       />
+
+      {/* Provider Intelligence & Operational Feeds Status (Milestone M3.8) */}
+      <ProviderIntelligencePanel onRefresh={() => refetchAssessment()} />
 
       {/* Multimodal Journey Recovery Recommendations Panel */}
       {isRecoveryOpen && recoveryResponse && recoveryResponse.recommendations.length > 0 && (

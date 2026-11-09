@@ -62,6 +62,10 @@ export interface DisruptionEvent {
   provenance: ProvenanceSourceType;
   confidence: number;
   estimatedDelayMinutes?: number;
+  delaySeconds?: number | null;
+  roadNumbers?: string[];
+  dataFreshnessStatus?: 'fresh' | 'aging' | 'stale' | 'expired' | 'unknown';
+  fetchedAt?: string | null;
 }
 
 export interface DisruptedSegmentImpact {
@@ -125,13 +129,36 @@ export interface DisruptionRecoveryResponse {
   feasibleAlternativesFound: boolean;
 }
 
+export type ProviderConnectivityStatus =
+  | 'available'
+  | 'degraded'
+  | 'unconfigured'
+  | 'blocked'
+  | 'rate_limited'
+  | 'unreachable'
+  | 'invalid_response'
+  | 'unknown';
+
 export interface DisruptionProviderCapability {
   name: string;
   displayName: string;
+  providerType?: string;
   isAvailable: boolean;
+  isConfigured?: boolean;
+  credentialsPresent?: boolean;
+  connectivityStatus?: ProviderConnectivityStatus;
+  lastSuccessfulRequest?: string | null;
+  lastFailedRequest?: string | null;
+  lastObservationTime?: string | null;
+  lastResponseLatencyMs?: number | null;
+  consecutiveFailureCount?: number;
+  isRateLimited?: boolean;
+  supportedAttributes?: string[];
+  supportedGeographicCoverage?: string;
   provenanceSource: ProvenanceSourceType;
   supportedModes: TransportMode[];
   statusNotice: string;
+  statusReason?: string;
 }
 
 export interface DisruptionAssessRequest {

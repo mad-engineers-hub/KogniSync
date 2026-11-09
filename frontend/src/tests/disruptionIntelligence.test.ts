@@ -159,7 +159,7 @@ async function runTests() {
 
   const capabilities = await getDisruptionProviders();
   assert.ok(Array.isArray(capabilities), 'Capabilities should be an array');
-  assert.ok(capabilities.length >= 2, 'Should report at least 2 provider adapters');
+  assert.ok(capabilities.length >= 3, 'Should report at least 3 provider adapters (TomTom, GTFS-RT, Simulator)');
 
   const simCap = capabilities.find((c) => c.name === 'simulation_engine');
   assert.ok(simCap, 'Simulation engine provider must be registered');
@@ -168,10 +168,21 @@ async function runTests() {
 
   const liveCap = capabilities.find((c) => c.name === 'live_traffic_feed');
   assert.ok(liveCap, 'Live traffic feed provider must be registered');
+  assert.strictEqual(liveCap?.providerType, 'traffic_incidents');
   if (!liveCap?.isAvailable) {
     assert.ok(
       liveCap?.statusNotice.includes('BLOCKED'),
       'Unavailable live provider must explicitly disclose credentials block'
+    );
+  }
+
+  const gtfsCap = capabilities.find((c) => c.name === 'gtfs_realtime_feed');
+  assert.ok(gtfsCap, 'GTFS Realtime feed provider must be registered');
+  assert.strictEqual(gtfsCap?.providerType, 'gtfs_realtime');
+  if (!gtfsCap?.isAvailable) {
+    assert.ok(
+      gtfsCap?.statusNotice.includes('BLOCKED'),
+      'Unavailable GTFS feed must explicitly disclose feed unavailable block'
     );
   }
   console.log('✓ Provider capability discovery correctly reflects live & simulation status');

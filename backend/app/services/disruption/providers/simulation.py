@@ -35,7 +35,11 @@ class SimulatedDisruptionProvider(DisruptionProvider):
         return DisruptionProviderCapability(
             name=self.name,
             display_name=self.display_name,
+            provider_type="simulation",
             is_available=True,
+            is_configured=True,
+            credentials_present=True,
+            connectivity_status="available",
             provenance_source="simulated",
             supported_modes=[
                 "cab",
@@ -47,7 +51,16 @@ class SimulatedDisruptionProvider(DisruptionProvider):
                 "rapido",
                 "walk",
             ],
+            supported_attributes=[
+                "geometry",
+                "incident_type",
+                "severity",
+                "estimated_delay",
+                "validity_window",
+            ],
+            supported_geographic_coverage="demo_scenarios",
             status_notice="Active in sandbox/demo mode. Generates deterministic incidents with visible simulation badges.",
+            status_reason="Deterministic scenario engine available for testing and demos.",
         )
 
     def is_available(self) -> bool:
@@ -194,6 +207,7 @@ class SimulatedDisruptionProvider(DisruptionProvider):
         corridor: str | None = None,
         modes: Sequence[TransportMode] | None = None,
         scenario: str | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
     ) -> list[DisruptionEvent]:
         events: list[DisruptionEvent] = []
 

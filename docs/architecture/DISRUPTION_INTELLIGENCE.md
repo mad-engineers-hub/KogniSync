@@ -29,12 +29,17 @@ SimulatedDisruptionProvider        LiveTrafficIncidentProvider
  [provenance: "simulated"]          [provenance: "provider_live"]
 ```
 
-### 2.1 Provider Implementation Status
+### 2.1 Provider Operational Dimensions Matrix
 
-| Provider | Implementation Status | Credential Requirements | Default State | Provenance |
-| :--- | :--- | :--- | :--- | :--- |
-| `LiveTrafficIncidentProvider` | **Genuinely implemented client** (TomTom Incident Details parser, bounded 3.0s timeout, HTTP 429 rate limit handling) | Requires `TRAFFIC_INCIDENT_API_KEY` in environment | `is_available: False`<br>`BLOCKED — credentials unavailable` | `provider_live` (only upon valid API response) |
-| `SimulatedDisruptionProvider` | **Deterministic sandbox engine** (stateless, repeatable corridor incidents) | None (in-memory deterministic fixtures) | `is_available: True`<br>`Simulation active` | `simulated` (all payloads carry visible simulation badges) |
+To avoid ambiguity between implemented code and operational live data, KogniSync distinguishes across five distinct operational dimensions:
+
+| Dimension | `TomTomOrbisTrafficProvider` (`live_traffic_feed`) | `GTFSRealtimeProvider` (`gtfs_realtime_feed`) | `SimulatedDisruptionProvider` (`simulation_engine`) |
+| :--- | :--- | :--- | :--- |
+| **1. Connector Implementation** | **Genuinely implemented** (Orbis v2 client, bbox splitter, GeoJSON parser, bounded timeouts) | **Genuinely implemented** (GTFS-RT consumer, trip updates, service alerts, timestamp checks) | **Fully implemented** (Deterministic scenario generator) |
+| **2. Credential Configuration** | **Unconfigured** by default (`TOMTOM_API_KEY` absent) | **Unconfigured** by default (`GTFS_REALTIME_FEED_URL` absent) | **None required** (self-contained engine) |
+| **3. Connectivity Status** | `unconfigured` (fails closed to prevent spoofing) | `unconfigured` | `available` |
+| **4. Live Response Verification** | Contract test verified via mocked Orbis v2 fixtures | Contract test verified via mocked feed fixtures | Unit and integration test verified |
+| **5. Production Operational Status** | **BLOCKED** — commercial API credentials required | **BLOCKED** — authorized regional transit feed unavailable | **ACTIVE** in sandbox / demo with mandatory simulation notices |
 
 ### 2.2 Reliability & Security Guarantees
 1. **Server-Side Credentials**: API keys are accessed only on the backend through secure configuration settings; never exposed in client payloads.
@@ -47,8 +52,9 @@ SimulatedDisruptionProvider        LiveTrafficIncidentProvider
 
 The matching engine (`RouteDisruptionMatcher`) evaluates incidents against journey legs using pure mathematical calculations without heavy GIS dependencies:
 
-### 3.1 Spatial Tolerances
-- **Road Corridor Tolerance**: Default **2.0 km** (or incident `radius_meters / 1000.0`, whichever is greater). This tolerance accounts for GPS positioning variance and parallel access road proximity while preventing false-positive matches on unrelated highway corridors (e.g., roads $\ge 2.5$ km away).
+### 3.1 Spatial Tolerances & Authoritative Source of Truth
+- **Road Corridor Tolerance (Authoritative Source of Truth)**: Configured as **`road_tolerance_km = 2.0`** (or incident `radius_meters / 1000.0`, whichever is greater) in `RouteDisruptionMatcher`.
+  - *Tolerance Boundary Verification*: The boundary is strictly verified by unit tests: an incident at offset $\approx 1.77\text{ km}$ ($0.016^\circ$ latitude offset) matches cleanly because $1.77 \le 2.0\text{ km}$, while an incident at $\approx 2.43\text{ km}$ ($0.022^\circ$ latitude offset) is rejected because $2.43 > 2.0\text{ km}$. Earlier reports mentioning "1.8 km" referenced the test fixture coordinate offset, while the operational source of truth in code and tests is **2.0 km**.
 - **Hub Proximity Tolerance**: Default **6.0 km** around origin/destination station coordinates for non-road segments lacking polyline geometry.
 
 ### 3.2 Matching Dimensions
@@ -145,7 +151,17 @@ Alternative Mode        Same-Mode Detour        Earlier Departure
 ### 6.2 Earlier Departure Invariant
 - **Traveler Underway Guard**: Earlier departure is **only** recommended when the first segment has not yet started. If scheduled departure has already elapsed or the passenger is underway, the engine suppresses earlier departure recommendations.
 
-### 6.3 What Recovery Recommendations Cannot Guarantee
+### 6.3 Alternative Transport Inventory Status & Provenance Distinctions
+
+To ensure audit accuracy and avoid conflating database records with live reality, the architecture establishes strict semantic distinctions for alternative transport inventory:
+
+1. **Inventory Record Exists**: Only flight and hotel inventory tables exist in the canonical organizer database (`APS-05.db`). Railway lines and bus services do **NOT** exist in `APS-05.db`.
+2. **Service or Trip is Scheduled**: Train timetables (e.g. Vande Bharat Express) and bus timings are deterministic schedule models derived from transit timetable references.
+3. **Seats are Available (Local Ledger)**: `total_units - booked_units - held_units` in local SQLite/PostgreSQL tables reflects local platform capacity only.
+4. **Seats are Held / Booked**: Represents local platform reservation holds and confirmed booking records.
+5. **External Provider Inventory is Verified**: **Currently UNVERIFIED / NOT CONNECTED**. KogniSync does not maintain a live bidirectional GDS, airline API, or Indian Railways (IRCTC/CRIS) seat inventory reservation feed. A stored local inventory row is **never** treated as proof of real-world carrier availability.
+
+### 6.4 What Recovery Recommendations Cannot Guarantee
 1. **No Guaranteed Seat Inventory**: Recovery alternatives represent mathematically feasible routing corridors. They do not hold or lock unconfirmed carrier inventory.
 2. **No Automatic Carrier Mutation**: In accordance with consumer travel protections, existing bookings and payment transactions are never automatically cancelled, modified, or re-charged.
 3. **Manual Rebooking Mandatory**: Every recommendation requires explicit user review and confirmation (`manual_rebooking_required: true`).

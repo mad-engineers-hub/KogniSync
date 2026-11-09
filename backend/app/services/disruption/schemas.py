@@ -113,6 +113,26 @@ class DisruptionEvent(BaseModel):
         validation_alias=AliasChoices("estimated_delay_minutes", "estimatedDelayMinutes"),
         serialization_alias="estimatedDelayMinutes",
     )
+    delay_seconds: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("delay_seconds", "delaySeconds"),
+        serialization_alias="delaySeconds",
+    )
+    road_numbers: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("road_numbers", "roadNumbers"),
+        serialization_alias="roadNumbers",
+    )
+    fetched_at: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("fetched_at", "fetchedAt"),
+        serialization_alias="fetchedAt",
+    )
+    data_freshness_status: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("data_freshness_status", "dataFreshnessStatus"),
+        serialization_alias="dataFreshnessStatus",
+    )
 
 
 class DisruptedSegmentImpact(BaseModel):
@@ -359,6 +379,18 @@ class DisruptionRecoverRequest(BaseModel):
     scenario: str | None = None
 
 
+ProviderConnectivityStatus = Literal[
+    "available",
+    "degraded",
+    "unconfigured",
+    "blocked",
+    "rate_limited",
+    "unreachable",
+    "invalid_response",
+    "unknown",
+]
+
+
 class DisruptionProviderCapability(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -367,9 +399,69 @@ class DisruptionProviderCapability(BaseModel):
         validation_alias=AliasChoices("display_name", "displayName"),
         serialization_alias="displayName",
     )
+    provider_type: str = Field(
+        default="traffic_incidents",
+        validation_alias=AliasChoices("provider_type", "providerType"),
+        serialization_alias="providerType",
+    )
     is_available: bool = Field(
         validation_alias=AliasChoices("is_available", "isAvailable"),
         serialization_alias="isAvailable",
+    )
+    is_configured: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_configured", "isConfigured"),
+        serialization_alias="isConfigured",
+    )
+    credentials_present: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("credentials_present", "credentialsPresent"),
+        serialization_alias="credentialsPresent",
+    )
+    connectivity_status: ProviderConnectivityStatus = Field(
+        default="unconfigured",
+        validation_alias=AliasChoices("connectivity_status", "connectivityStatus"),
+        serialization_alias="connectivityStatus",
+    )
+    last_successful_request: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_successful_request", "lastSuccessfulRequest"),
+        serialization_alias="lastSuccessfulRequest",
+    )
+    last_failed_request: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_failed_request", "lastFailedRequest"),
+        serialization_alias="lastFailedRequest",
+    )
+    last_observation_time: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_observation_time", "lastObservationTime"),
+        serialization_alias="lastObservationTime",
+    )
+    last_response_latency_ms: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_response_latency_ms", "lastResponseLatencyMs"),
+        serialization_alias="lastResponseLatencyMs",
+    )
+    consecutive_failure_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("consecutive_failure_count", "consecutiveFailureCount"),
+        serialization_alias="consecutiveFailureCount",
+    )
+    is_rate_limited: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_rate_limited", "isRateLimited"),
+        serialization_alias="isRateLimited",
+    )
+    supported_attributes: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("supported_attributes", "supportedAttributes"),
+        serialization_alias="supportedAttributes",
+    )
+    supported_geographic_coverage: str = Field(
+        default="global",
+        validation_alias=AliasChoices("supported_geographic_coverage", "supportedGeographicCoverage"),
+        serialization_alias="supportedGeographicCoverage",
     )
     provenance_source: ProvenanceSourceType = Field(
         validation_alias=AliasChoices("provenance_source", "provenanceSource"),
@@ -383,5 +475,10 @@ class DisruptionProviderCapability(BaseModel):
     status_notice: str = Field(
         validation_alias=AliasChoices("status_notice", "statusNotice"),
         serialization_alias="statusNotice",
+    )
+    status_reason: str = Field(
+        default="",
+        validation_alias=AliasChoices("status_reason", "statusReason"),
+        serialization_alias="statusReason",
     )
 

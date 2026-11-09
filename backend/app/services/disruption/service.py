@@ -55,6 +55,7 @@ class DisruptionIntelligenceService:
         modes: Sequence[TransportMode] | None = None,
         include_simulated: bool = True,
         scenario: str | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
     ) -> list[DisruptionEvent]:
         """Queries providers and returns active disruptions."""
         return await self.registry.get_all_disruptions(
@@ -62,6 +63,7 @@ class DisruptionIntelligenceService:
             modes=modes,
             include_simulated=include_simulated,
             scenario=scenario,
+            bbox=bbox,
         )
 
     async def assess_journey_disruptions(
@@ -71,12 +73,34 @@ class DisruptionIntelligenceService:
         scenario: str | None = None,
     ) -> JourneyDisruptionAssessment:
         """Fetches active disruptions and computes deterministic impact on the journey."""
+        bbox = self._extract_journey_bbox(journey)
         events = await self.get_active_disruptions(
             modes=journey.modes,
             include_simulated=include_simulated,
             scenario=scenario,
+            bbox=bbox,
         )
         return self.assessor.assess_journey(journey=journey, events=events)
+
+    def _extract_journey_bbox(
+        self, journey: JourneySchema, buffer_deg: float = 0.05
+    ) -> tuple[float, float, float, float] | None:
+        lats: list[float] = []
+        lngs: list[float] = []
+        for seg in journey.segments:
+            if seg.origin and seg.origin.coordinates:
+                lats.append(seg.origin.coordinates.lat)
+                lngs.append(seg.origin.coordinates.lng)
+            if seg.destination and seg.destination.coordinates:
+                lats.append(seg.destination.coordinates.lat)
+                lngs.append(seg.destination.coordinates.lng)
+        if not lats or not lngs:
+            return None
+        min_lat = max(-90.0, min(lats) - buffer_deg)
+        max_lat = min(90.0, max(lats) + buffer_deg)
+        min_lon = max(-180.0, min(lngs) - buffer_deg)
+        max_lon = min(180.0, max(lngs) + buffer_deg)
+        return (min_lon, min_lat, max_lon, max_lat)
 
     async def recover_journey(
         self,

@@ -44,6 +44,7 @@ class DisruptionProvider(ABC):
         corridor: str | None = None,
         modes: Sequence[TransportMode] | None = None,
         scenario: str | None = None,
+        bbox: tuple[float, float, float, float] | None = None,
     ) -> list[DisruptionEvent]:
         """Fetches active disruptions matching query parameters with bounded timeouts."""
         ...

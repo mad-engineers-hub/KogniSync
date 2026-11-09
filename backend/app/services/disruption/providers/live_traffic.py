@@ -1,39 +1,26 @@
 """
 backend/app/services/disruption/providers/live_traffic.py
 
-Real-time live traffic and transit incident provider foundation (Milestone M3.7).
-Enforces rigorous validation: never fabricates live data or treats static route geometry
-as real-time traffic congestion. Gracefully falls back when credentials are absent.
+Backwards-compatible wrapper around TomTomOrbisTrafficProvider (Milestone M3.8).
+Ensures existing M3.7 references to LiveTrafficIncidentProvider retain stability
+while upgrading the underlying transport to TomTom Orbis Traffic API v2.
 """
-import httpx
-from datetime import datetime, timezone
-from typing import Any, Sequence
-from app.core.config import settings
-from app.core.logging import logger
-from app.services.disruption.providers.base import DisruptionProvider
+from typing import Sequence
+from app.services.disruption.providers.tomtom_orbis import (
+    TomTomOrbisTrafficProvider,
+)
 from app.services.disruption.schemas import (
     DisruptionEvent,
     DisruptionProviderCapability,
 )
-from app.services.journey.schemas import CoordinatesSchema, TransportMode
+from app.services.journey.schemas import TransportMode
 
 
-class LiveTrafficIncidentProvider(DisruptionProvider):
+class LiveTrafficIncidentProvider(TomTomOrbisTrafficProvider):
     """
-    Live external traffic and road disruption feed adapter.
-    Discloses credentials availability; bounded timeouts; strict response validation.
+    Backwards-compatible live traffic provider alias pointing to TomTom Orbis v2.
+    Retains provider name 'live_traffic_feed' for legacy caller compatibility.
     """
-
-    def __init__(
-        self,
-        api_key: str | None = None,
-        base_url: str = "https://api.tomtom.com/traffic/services/5/incidentDetails",
-        timeout_seconds: float = 3.0,
-    ):
-        self._api_key = api_key or getattr(settings, "TRAFFIC_INCIDENT_API_KEY", None)
-        self._base_url = base_url
-        self._timeout_seconds = timeout_seconds
-        self._last_successful_observation: str | None = None
 
     @property
     def name(self) -> str:
@@ -41,117 +28,32 @@ class LiveTrafficIncidentProvider(DisruptionProvider):
 
     @property
     def display_name(self) -> str:
-        return "Live Traffic & Incident Provider"
-
-    def is_available(self) -> bool:
-        """Returns True only when valid API credentials are configured."""
-        return bool(self._api_key and len(self._api_key.strip()) > 8)
+        return "Live Traffic & Incident Provider (TomTom Orbis v2)"
 
     def get_capabilities(self) -> DisruptionProviderCapability:
-        available = self.is_available()
-        status_notice = (
-            "Connected to live traffic incident feed."
-            if available
-            else "BLOCKED — credentials unavailable (commercial API key required). Simulation active."
-        )
+        cap = super().get_capabilities()
+        # Override name and display_name for backwards compatibility
         return DisruptionProviderCapability(
             name=self.name,
             display_name=self.display_name,
-            is_available=available,
-            provenance_source="provider_live" if available else "unknown",
-            supported_modes=["cab", "bus", "auto", "rapido"],
-            status_notice=status_notice,
+            provider_type="traffic_incidents",
+            is_available=cap.is_available,
+            is_configured=cap.is_configured,
+            credentials_present=cap.credentials_present,
+            connectivity_status=cap.connectivity_status,
+            last_successful_request=cap.last_successful_request,
+            last_failed_request=cap.last_failed_request,
+            last_observation_time=cap.last_observation_time,
+            last_response_latency_ms=cap.last_response_latency_ms,
+            consecutive_failure_count=cap.consecutive_failure_count,
+            is_rate_limited=cap.is_rate_limited,
+            supported_attributes=cap.supported_attributes,
+            supported_geographic_coverage=cap.supported_geographic_coverage,
+            provenance_source=cap.provenance_source,
+            supported_modes=cap.supported_modes,
+            status_notice=cap.status_notice,
+            status_reason=cap.status_reason,
         )
 
-    async def fetch_disruptions(
-        self,
-        corridor: str | None = None,
-        modes: Sequence[TransportMode] | None = None,
-        scenario: str | None = None,
-    ) -> list[DisruptionEvent]:
-        """
-        Fetches live incidents from external provider.
-        If credentials are not configured or request fails, returns empty list
-        without raising unhandled exceptions or spoofing live state.
-        """
-        if not self.is_available():
-            logger.debug(
-                "LiveTrafficIncidentProvider: Skipped fetch — credentials unavailable."
-            )
-            return []
 
-        # When credentials are provided, perform bounded HTTP request
-        try:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                params: dict[str, Any] = {
-                    "key": self._api_key,
-                    "language": "en-GB",
-                }
-                response = await client.get(self._base_url, params=params)
-                if response.status_code == 200:
-                    data = response.json()
-                    events = self._parse_live_incidents(data)
-                    self._last_successful_observation = datetime.now(timezone.utc).isoformat()
-                    return events
-                elif response.status_code == 429:
-                    logger.warning("LiveTrafficIncidentProvider: Rate limit exceeded (HTTP 429).")
-                    return []
-                else:
-                    logger.warning(
-                        f"LiveTrafficIncidentProvider: Provider returned HTTP {response.status_code}"
-                    )
-                    return []
-        except httpx.TimeoutException:
-            logger.warning(
-                f"LiveTrafficIncidentProvider: Request timed out after {self._timeout_seconds}s"
-            )
-            return []
-        except Exception as e:
-            logger.error(
-                f"LiveTrafficIncidentProvider: Unexpected error querying live incidents: {e}"
-            )
-            return []
-
-    def _parse_live_incidents(self, payload: dict[str, Any]) -> list[DisruptionEvent]:
-        """Validates external payload and maps to DisruptionEvent with provider_live provenance."""
-        events: list[DisruptionEvent] = []
-        now_iso = datetime.now(timezone.utc).isoformat()
-
-        incidents = payload.get("incidents", [])
-        if not isinstance(incidents, list):
-            return []
-
-        for inc in incidents:
-            try:
-                inc_id = str(inc.get("id", f"live-{len(events)}"))
-                geometry = inc.get("geometry", {})
-                coords = geometry.get("coordinates", [0, 0])
-                lat = float(coords[1]) if len(coords) > 1 else 0.0
-                lng = float(coords[0]) if len(coords) > 0 else 0.0
-
-                event = DisruptionEvent(
-                    id=f"live-inc-{inc_id}",
-                    source="live_traffic_feed",
-                    source_id=inc_id,
-                    event_type="traffic_congestion",
-                    severity="moderate",
-                    status="active",
-                    title=str(inc.get("description", "Live Traffic Disruption")),
-                    description=str(inc.get("cause", "Live congestion reported by traffic sensor")),
-                    affected_modes=["cab", "bus"],
-                    point=CoordinatesSchema(lat=lat, lng=lng),
-                    radius_meters=1000.0,
-                    valid_from=now_iso,
-                    valid_until=None,
-                    observed_at=now_iso,
-                    last_verified_at=now_iso,
-                    provenance="provider_live",
-                    confidence=0.9,
-                    estimated_delay_minutes=int(inc.get("delay", 0)) // 60,
-                )
-                events.append(event)
-            except Exception as parse_err:
-                logger.debug(f"Failed to parse live incident record: {parse_err}")
-                continue
-
-        return events
+__all__ = ["LiveTrafficIncidentProvider", "TomTomOrbisTrafficProvider"]
