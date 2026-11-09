@@ -290,15 +290,16 @@ class JourneyRecoveryEngine:
         self._recompute_multimodal_totals(recovered)
 
         tradeoffs = [
+            "Hypothetical railway alternative: requires independent verification of IRCTC/station timetable and seat inventory.",
             "Bypasses NH-75 landslide entirely via electrified railway corridor.",
-            "Fare reduced by ~30% compared to private road booking.",
-            "Carbon emissions reduced by ~65%.",
+            "Corridor estimated fare (~30% less than private road booking); inventory unverified.",
+            "Estimated travel duration (~65% lower carbon footprint); manual booking required.",
             "Fixed railway timetable requires scheduled station boarding.",
         ]
         return (
             recovered,
             "alternative_transport_mode",
-            "Shift to Electrified Railway Corridor",
+            "Shift to Electrified Railway Corridor (Estimated Alternative)",
             tradeoffs,
         )
 
@@ -342,7 +343,12 @@ class JourneyRecoveryEngine:
                     carbon_kg=round(s.carbon_kg + 5.2, 2),
                     comfort_score=max(1.0, s.comfort_score - 0.5),
                     transfer_buffer_minutes=20,
-                    provenance=s.provenance,
+                    provenance=SegmentProvenanceSchema(
+                        source_type="deterministic_estimate",
+                        provider_name=f"{s.provider or 'Road Transport'} (Detour Route)",
+                        is_estimate=True,
+                        has_live_provider=False,
+                    ),
                     is_live_geometry=False,
                 )
                 new_segments.append(detour_seg)
@@ -376,6 +382,16 @@ class JourneyRecoveryEngine:
 
         first_seg = journey.segments[0]
         if impact.segment_id != first_seg.segment_id:
+            return None
+
+        # Do not suggest earlier departure if the traveller is already underway
+        # or the scheduled initial departure has already passed.
+        orig_dep_dt = parse_iso_datetime(first_seg.departure_time)
+        now_utc = datetime.now(timezone.utc)
+        if orig_dep_dt and orig_dep_dt <= now_utc:
+            logger.debug(
+                f"Skipped earlier departure: first segment departure {first_seg.departure_time} is in the past."
+            )
             return None
 
         advance_minutes = max(30, impact.estimated_delay_minutes + 15)

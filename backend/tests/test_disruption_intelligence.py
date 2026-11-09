@@ -611,3 +611,359 @@ def test_api_disruptions_assess_and_recover(sample_multimodal_journey):
     assert res_jny_assess.status_code == 200
     assert res_jny_assess.json()["isDisrupted"] is True
 
+
+# --- 6. M3.7.1 Targeted Feasibility, Freshness & Tolerance Tests ---
+
+def test_route_matching_tolerance_boundary():
+    """Verifies matching behavior: directly on route, within tolerance, outside tolerance, unrelated."""
+    matcher = RouteDisruptionMatcher(road_tolerance_km=2.0, hub_tolerance_km=5.0)
+
+    # Road segment between (12.9000, 77.6000) and (12.9000, 77.7000)
+    origin_loc = LocationSchema(
+        id="loc-test-a",
+        name="Point A",
+        city="TestCity",
+        type="landmark",
+        coordinates=CoordinatesSchema(lat=12.9000, lng=77.6000),
+    )
+    dest_loc = LocationSchema(
+        id="loc-test-b",
+        name="Point B",
+        city="TestCity",
+        type="landmark",
+        coordinates=CoordinatesSchema(lat=12.9000, lng=77.7000),
+    )
+    now_iso = datetime.now(timezone.utc).isoformat()
+    seg = JourneySegmentSchema(
+        segment_id="seg-test-corridor",
+        sequence=1,
+        mode="cab",
+        provider="TestCab",
+        origin=origin_loc,
+        destination=dest_loc,
+        departure_time=now_iso,
+        arrival_time=now_iso,
+        duration_minutes=30,
+        price=200.0,
+        currency="INR",
+        distance_km=11.0,
+        carbon_kg=2.0,
+        comfort_score=7.0,
+        encoded_polyline=encode_polyline([(12.9000, 77.6000), (12.9000, 77.7000)], precision=5),
+    )
+
+    # 1. Point at offset ~1.8 km (approx 0.016 degrees latitude offset: 0.016 * 110.574 = 1.77 km)
+    event_within = DisruptionEvent(
+        id="ev-within",
+        title="Event Within Tolerance",
+        description="Within tolerance",
+        affected_modes=["cab"],
+        point=CoordinatesSchema(lat=12.9160, lng=77.6500),
+        radius_meters=1000.0,
+        valid_from=now_iso,
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    match_within = matcher.match_event_to_segment(event_within, seg)
+    assert match_within is not None
+    assert match_within.min_distance_km <= 2.0
+
+    # 2. Point at offset ~2.4 km (approx 0.022 degrees lat offset: 0.022 * 110.574 = 2.43 km > 2.0 km)
+    event_outside = DisruptionEvent(
+        id="ev-outside",
+        title="Event Outside Tolerance",
+        description="Outside tolerance",
+        affected_modes=["cab"],
+        point=CoordinatesSchema(lat=12.9220, lng=77.6500),
+        radius_meters=1000.0,
+        valid_from=now_iso,
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    match_outside = matcher.match_event_to_segment(event_outside, seg)
+    assert match_outside is None
+
+    # 3. Unrelated road 15 km away
+    event_unrelated = DisruptionEvent(
+        id="ev-unrelated",
+        title="Unrelated Incident",
+        description="Far away",
+        affected_modes=["cab"],
+        point=CoordinatesSchema(lat=13.0400, lng=77.6500),
+        radius_meters=1000.0,
+        valid_from=now_iso,
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    match_unrelated = matcher.match_event_to_segment(event_unrelated, seg)
+    assert match_unrelated is None
+
+
+def test_route_matching_missing_geometry_and_invalid_coordinates():
+    matcher = RouteDisruptionMatcher(road_tolerance_km=2.0)
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Segment without encoded polyline
+    origin = LocationSchema(
+        id="loc-o", name="Origin", city="CityA", type="landmark",
+        coordinates=CoordinatesSchema(lat=12.9000, lng=77.6000),
+    )
+    dest = LocationSchema(
+        id="loc-d", name="Dest", city="CityB", type="landmark",
+        coordinates=CoordinatesSchema(lat=12.9500, lng=77.6500),
+    )
+    seg_no_geom = JourneySegmentSchema(
+        segment_id="seg-no-geom",
+        sequence=1,
+        mode="cab",
+        provider="TestCab",
+        origin=origin,
+        destination=dest,
+        departure_time=now_iso,
+        arrival_time=now_iso,
+        duration_minutes=30,
+        price=150.0,
+        currency="INR",
+        distance_km=8.0,
+        carbon_kg=1.5,
+        comfort_score=7.0,
+        encoded_polyline=None,  # Missing geometry
+    )
+
+    # Event without point or locations
+    empty_event = DisruptionEvent(
+        id="ev-empty",
+        title="Empty Event",
+        description="No point",
+        affected_modes=["cab"],
+        point=None,
+        affected_locations=[],
+        valid_from=now_iso,
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    assert matcher.match_event_to_segment(empty_event, seg_no_geom) is None
+
+
+def test_event_lifecycle_resolved_and_expired_exclusion():
+    matcher = RouteDisruptionMatcher()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    origin = LocationSchema(
+        id="loc-o", name="Origin", city="CityA", type="landmark",
+        coordinates=CoordinatesSchema(lat=12.9000, lng=77.6000),
+    )
+    dest = LocationSchema(
+        id="loc-d", name="Dest", city="CityB", type="landmark",
+        coordinates=CoordinatesSchema(lat=12.9100, lng=77.6100),
+    )
+    seg = JourneySegmentSchema(
+        segment_id="seg-1",
+        sequence=1,
+        mode="cab",
+        provider="TestCab",
+        origin=origin,
+        destination=dest,
+        departure_time=(now + timedelta(hours=2)).isoformat(),
+        arrival_time=(now + timedelta(hours=3)).isoformat(),
+        duration_minutes=60,
+        price=100.0,
+        currency="INR",
+        distance_km=5.0,
+        carbon_kg=1.0,
+        comfort_score=7.0,
+    )
+
+    # 1. Resolved event must be excluded
+    resolved_event = DisruptionEvent(
+        id="ev-res",
+        title="Resolved Roadblock",
+        description="Cleared",
+        status="resolved",
+        affected_modes=["cab"],
+        point=CoordinatesSchema(lat=12.9050, lng=77.6050),
+        valid_from=(now - timedelta(hours=2)).isoformat(),
+        valid_until=(now + timedelta(hours=5)).isoformat(),
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    assert matcher.is_temporally_valid(resolved_event, seg) is False
+
+    # 2. Expired event (valid_until in past) must be excluded
+    expired_event = DisruptionEvent(
+        id="ev-exp",
+        title="Expired Congestion",
+        description="Expired 10m ago",
+        status="active",
+        affected_modes=["cab"],
+        point=CoordinatesSchema(lat=12.9050, lng=77.6050),
+        valid_from=(now - timedelta(hours=2)).isoformat(),
+        valid_until=(now - timedelta(minutes=10)).isoformat(),
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    assert matcher.is_temporally_valid(expired_event, seg) is False
+
+    # 3. Disruption ending before segment departs must be excluded
+    ended_before_seg = DisruptionEvent(
+        id="ev-ended-before",
+        title="Ends Before Leg",
+        description="Ends in 1 hour; leg departs in 2 hours",
+        status="active",
+        affected_modes=["cab"],
+        point=CoordinatesSchema(lat=12.9050, lng=77.6050),
+        valid_from=now_iso,
+        valid_until=(now + timedelta(hours=1)).isoformat(),
+        observed_at=now_iso,
+        last_verified_at=now_iso,
+    )
+    assert matcher.is_temporally_valid(ended_before_seg, seg) is False
+
+
+def test_earlier_departure_disabled_when_underway(sample_multimodal_journey):
+    """Guarantees earlier departure is NEVER recommended for a traveller already underway."""
+    recovery_engine = JourneyRecoveryEngine()
+    sim_provider = SimulatedDisruptionProvider()
+    silk_event = sim_provider.get_demo_silk_board_event()
+
+    # Artificially set first segment departure to 45 minutes in the past
+    past_dep = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+    sample_multimodal_journey.segments[0].departure_time = past_dep
+
+    impact = DisruptedSegmentImpact(
+        segment_id="seg-1-cab",
+        sequence=1,
+        mode="cab",
+        impact_level="high",
+        estimated_delay_minutes=45,
+        original_departure_time=past_dep,
+        original_arrival_time=datetime.now(timezone.utc).isoformat(),
+        estimated_arrival_time=datetime.now(timezone.utc).isoformat(),
+        matching_events=[silk_event],
+    )
+
+    earlier_alt = recovery_engine._generate_earlier_departure_recovery(
+        journey=sample_multimodal_journey,
+        impact=impact,
+    )
+    # Must be None: traveller is already underway, earlier departure is physically impossible
+    assert earlier_alt is None
+
+
+def test_detour_alternative_provenance_is_deterministic_estimate(sample_multimodal_journey):
+    """Guarantees detour candidates carry deterministic_estimate and never claim live road geometry."""
+    recovery_engine = JourneyRecoveryEngine()
+    sim_provider = SimulatedDisruptionProvider()
+    shiradi_event = sim_provider.get_demo_shiradi_ghat_event()
+
+    impact = DisruptedSegmentImpact(
+        segment_id="seg-2-road",
+        sequence=2,
+        mode="bus",
+        impact_level="critical",
+        estimated_delay_minutes=180,
+        original_departure_time=sample_multimodal_journey.segments[1].departure_time,
+        original_arrival_time=sample_multimodal_journey.segments[1].arrival_time,
+        estimated_arrival_time=sample_multimodal_journey.segments[1].arrival_time,
+        matching_events=[shiradi_event],
+    )
+
+    detour_res = recovery_engine._generate_reroute_same_mode_recovery(
+        journey=sample_multimodal_journey,
+        impact=impact,
+    )
+    assert detour_res is not None
+    recovered_journey, strategy, title, tradeoffs = detour_res
+    assert strategy == "reroute_same_mode"
+    assert "Charmadi" in title
+
+    detour_seg = next(s for s in recovered_journey.segments if s.segment_id == "seg-2-road-rec-detour")
+    assert detour_seg.is_live_geometry is False
+    assert detour_seg.provenance is not None
+    assert detour_seg.provenance.source_type == "deterministic_estimate"
+    assert detour_seg.provenance.has_live_provider is False
+
+
+def test_railway_alternative_is_estimated_and_unverified(sample_multimodal_journey):
+    """Guarantees rail mode shifts are labeled as estimated alternatives with unverified inventory."""
+    recovery_engine = JourneyRecoveryEngine()
+    sim_provider = SimulatedDisruptionProvider()
+    shiradi_event = sim_provider.get_demo_shiradi_ghat_event()
+
+    impact = DisruptedSegmentImpact(
+        segment_id="seg-2-road",
+        sequence=2,
+        mode="bus",
+        impact_level="critical",
+        estimated_delay_minutes=180,
+        original_departure_time=sample_multimodal_journey.segments[1].departure_time,
+        original_arrival_time=sample_multimodal_journey.segments[1].arrival_time,
+        estimated_arrival_time=sample_multimodal_journey.segments[1].arrival_time,
+        matching_events=[shiradi_event],
+    )
+
+    rail_res = recovery_engine._generate_alternative_mode_recovery(
+        journey=sample_multimodal_journey,
+        impact=impact,
+    )
+    assert rail_res is not None
+    recovered_journey, strategy, title, tradeoffs = rail_res
+    assert strategy == "alternative_transport_mode"
+    assert "Estimated Alternative" in title
+    assert any("IRCTC" in to for to in tradeoffs)
+    assert any("unverified" in to for to in tradeoffs)
+
+    # Check that AI explanation marks availability as unverified
+    assert recovered_journey.ai_explanation.is_availability_verified is False
+    assert recovered_journey.ai_explanation.is_fare_estimated is True
+
+
+def test_downstream_transfer_buffer_states(sample_multimodal_journey):
+    """Verifies safe, at_risk, critical connection risk and missing timestamps handling."""
+    assessor = JourneyImpactAssessor()
+    now = datetime.now(timezone.utc)
+
+    seg_a = sample_multimodal_journey.segments[0]
+    seg_b = sample_multimodal_journey.segments[1]
+
+    # 1. Safe transfer (buffer = 30 min, required = 15)
+    dep_b = now + timedelta(minutes=45)
+    arr_a = now + timedelta(minutes=15)
+    risk_safe, red_safe = assessor._evaluate_downstream_transfer(
+        current_est_arr_dt=arr_a,
+        next_segment=seg_b.model_copy(update={"departure_time": dep_b.isoformat()}),
+        segment_buffer_min=15,
+    )
+    assert risk_safe == "safe"
+    assert red_safe == 0
+
+    # 2. At risk transfer (buffer = 10 min < required 15 min)
+    dep_b_tight = now + timedelta(minutes=25)
+    risk_tight, red_tight = assessor._evaluate_downstream_transfer(
+        current_est_arr_dt=arr_a,
+        next_segment=seg_b.model_copy(update={"departure_time": dep_b_tight.isoformat()}),
+        segment_buffer_min=15,
+    )
+    assert risk_tight == "at_risk"
+    assert red_tight == 5
+
+    # 3. Negative buffer -> critical
+    dep_b_neg = now + timedelta(minutes=5)  # Departs before incoming arrives at +15
+    risk_neg, red_neg = assessor._evaluate_downstream_transfer(
+        current_est_arr_dt=arr_a,
+        next_segment=seg_b.model_copy(update={"departure_time": dep_b_neg.isoformat()}),
+        segment_buffer_min=15,
+    )
+    assert risk_neg == "critical"
+    assert red_neg > 15
+
+    # 4. Missing timestamps -> unknown
+    risk_unk, _ = assessor._evaluate_downstream_transfer(
+        current_est_arr_dt=arr_a,
+        next_segment=seg_b.model_copy(update={"departure_time": ""}),
+        segment_buffer_min=15,
+    )
+    assert risk_unk == "unknown"
+
+

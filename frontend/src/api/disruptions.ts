@@ -310,14 +310,14 @@ function createFallbackRecovery(
     recommendationId: `rec-${recoveredJourney.id}`,
     journeyId: journey.id,
     strategy: 'alternative_transport_mode' as const,
-    title: 'Shift to Electrified Railway Corridor',
+    title: 'Shift to Electrified Railway Corridor (Estimated Alternative)',
     summary:
       'Shifts travel from disrupted road link to electrified railway corridor. Eliminates 180 min landslide delay.',
     tradeOffs: [
+      'Hypothetical railway alternative: requires independent verification of IRCTC/station timetable and seat inventory.',
       'Bypasses road closure entirely via railway corridor.',
-      'Fare reduced by ~25% compared to road booking.',
-      'Carbon emissions reduced by ~55%.',
-      'Requires scheduled railway station boarding.',
+      'Corridor estimated fare (~25% less than road booking); inventory unverified.',
+      'Carbon emissions reduced by ~55%; scheduled station boarding required.',
     ],
     originalJourney: journey,
     recoveredJourney,

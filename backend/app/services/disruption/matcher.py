@@ -109,12 +109,29 @@ class RouteDisruptionMatcher:
 
         now = datetime.now(timezone.utc)
 
-        # Check expiration against current time or segment time
+        # 1. Check expiration against current wall-clock time
         if event.valid_until:
             try:
                 valid_until_dt = datetime.fromisoformat(event.valid_until.replace("Z", "+00:00"))
                 if valid_until_dt < now:
                     return False
+                # If segment departure is known and occurs after event expiration, no conflict
+                if segment.departure_time:
+                    seg_dep_dt = datetime.fromisoformat(segment.departure_time.replace("Z", "+00:00"))
+                    if valid_until_dt < seg_dep_dt:
+                        return False
+            except Exception:
+                pass
+
+        # 2. Check future scheduled events against segment arrival
+        if event.valid_from:
+            try:
+                valid_from_dt = datetime.fromisoformat(event.valid_from.replace("Z", "+00:00"))
+                if segment.arrival_time:
+                    seg_arr_dt = datetime.fromisoformat(segment.arrival_time.replace("Z", "+00:00"))
+                    if valid_from_dt > seg_arr_dt:
+                        # Event has not started yet during this leg
+                        return False
             except Exception:
                 pass
 

@@ -1,43 +1,21 @@
-# Real-Time Journey Disruption Intelligence & Recovery (Milestone M3.7)
+# Real-Time Journey Disruption Intelligence & Recovery Foundation (Milestone M3.7 & M3.7.1)
 
-## 1. Executive Summary
+## 1. Product Description & Scope
 
-Milestone M3.7 introduces **Disruption Intelligence & Multimodal Journey Recovery** to KogniSync. Building on the foundation established across M3.1–M3.6 (real Valhalla road routing, multimodal corridor composition, deterministic Pareto optimization, attribute-level provenance, Leaflet interactive mapping, GPS location, and navigation guidance), M3.7 equips KogniSync to monitor active transit corridors, detect incidents, assess their cascading impact on multimodal connections, and generate feasible recovery alternatives.
+KogniSync provides a **real-time disruption intelligence and multimodal journey recovery foundation**. It bridges live corridor monitoring with multi-modal journey synchronization. Rather than treating static road geometry as live traffic or fabricating real-time congestion, the platform evaluates the cascading impact of verified or simulated incidents along travel corridors and generates Pareto-ranked recovery alternatives.
+
+> **Operational Status**: Live disruption ingestion is ready to connect and pending until an authorized commercial traffic provider is configured and verified. In the interim, the deterministic simulation engine provides repeatable, explicitly badged demonstration and verification scenarios.
 
 The system adheres strictly to the **Zero Fabrication & Inventory Immutability Invariant**:
 - Real provider integrations report verified status; missing credentials fail closed with honest `BLOCKED — credentials unavailable` disclosures.
 - Valhalla route geometry is never misattributed as a live traffic congestion measurement.
-- Deterministic simulation feeds are prominently tagged `SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA`.
-- Recovery recommendations enforce explicit `manualRebookingRequired: true`; existing bookings and organizer inventory (`BookingInventory/data/APS-05.db`) are never mutated or silently canceled.
+- Deterministic simulation feeds are prominently tagged:
+  $$\text{\texttt{SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA}}$$
+- Recovery recommendations enforce explicit `manual_rebooking_required: true`; existing bookings and organizer inventory (`BookingInventory/data/APS-05.db`) are never mutated or silently canceled.
 
 ---
 
-## 2. Disruption Intelligence Domain Model
-
-### 2.1 DisruptionEvent Taxonomy
-
-| Attribute | Type | Description |
-| :--- | :--- | :--- |
-| `id` | `str` | Unique incident identifier (e.g. `sim-disrupt-nh75-shiradi-ghat`). |
-| `source` | `str` | Provider adapter name (`simulation_engine`, `live_traffic_feed`). |
-| `sourceId` | `str \| None` | External upstream incident identifier. |
-| `eventType` | `DisruptionEventType` | Normalized classification: `road_closure`, `traffic_congestion`, `accident`, `road_construction`, `weather`, `transport_delay`, `service_cancellation`, `station_disruption`, `airport_disruption`, `connection_risk`, `unknown`. |
-| `severity` | `DisruptionSeverity` | `critical`, `high`, `moderate`, `low`, `unknown`. |
-| `status` | `DisruptionStatus` | `active`, `resolved`, `scheduled`, `unknown`. |
-| `title` | `str` | Human-readable title carrying simulation notice when applicable. |
-| `description` | `str` | Detailed incident summary and impact description. |
-| `affectedModes` | `list[TransportMode]` | Modes directly disrupted (`cab`, `bus`, `train`, `metro`, `flight`, `auto`, `rapido`, `walk`). |
-| `point` | `CoordinatesSchema` | WGS84 coordinate of incident centroid (`lat`, `lng`). |
-| `radiusMeters` | `float` | Spatial buffer around incident centroid (default: 1,000 m). |
-| `validFrom` / `validUntil` | `str (ISO 8601)` | Temporal validity bounds. |
-| `observedAt` / `lastVerifiedAt` | `str (ISO 8601)` | Data freshness timestamps. |
-| `provenance` | `ProvenanceSourceType` | Credibility classification (`provider_live`, `deterministic_estimate`, `simulated`, `unknown`). |
-| `confidence` | `float` | Upstream confidence score (0.0 to 1.0). |
-| `estimatedDelayMinutes` | `int` | Delay introduced by disruption (minutes). |
-
----
-
-## 3. Provider Abstraction & Credibility Boundary
+## 2. Provider Abstraction & Credibility Boundary
 
 The provider subsystem follows a modular adapter architecture managed by `DisruptionProviderRegistry`:
 
@@ -51,53 +29,77 @@ SimulatedDisruptionProvider        LiveTrafficIncidentProvider
  [provenance: "simulated"]          [provenance: "provider_live"]
 ```
 
-### Provider Availability & Credibility Guarantees:
-1. **Live Traffic Provider**:
-   - Validates server-side API keys (`TRAFFIC_INCIDENT_API_KEY`).
-   - If credentials are not configured, discovery returns `isAvailable: false` with notice `BLOCKED — credentials unavailable (commercial API key required). Simulation active.`.
-   - Never fabricates live congestion or treats static Valhalla routes as real-time speed measurements.
-2. **Deterministic Simulation Provider**:
-   - Generates repeatable, deterministic corridor scenarios for development, automated CI verification, and user demonstrations.
-   - All generated titles and payloads prominently display:
-     ```text
-     SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA
-     ```
-   - Zero database mutation: purely stateless and reproducible.
+### 2.1 Provider Implementation Status
+
+| Provider | Implementation Status | Credential Requirements | Default State | Provenance |
+| :--- | :--- | :--- | :--- | :--- |
+| `LiveTrafficIncidentProvider` | **Genuinely implemented client** (TomTom Incident Details parser, bounded 3.0s timeout, HTTP 429 rate limit handling) | Requires `TRAFFIC_INCIDENT_API_KEY` in environment | `is_available: False`<br>`BLOCKED — credentials unavailable` | `provider_live` (only upon valid API response) |
+| `SimulatedDisruptionProvider` | **Deterministic sandbox engine** (stateless, repeatable corridor incidents) | None (in-memory deterministic fixtures) | `is_available: True`<br>`Simulation active` | `simulated` (all payloads carry visible simulation badges) |
+
+### 2.2 Reliability & Security Guarantees
+1. **Server-Side Credentials**: API keys are accessed only on the backend through secure configuration settings; never exposed in client payloads.
+2. **Bounded HTTP Timeouts**: All external calls enforce strict timeouts (3.0 seconds max) and fail closed without crashing request handlers.
+3. **No Masquerading**: Failed external requests, HTTP 429 rate limits, and unconfigured credentials return empty incident lists and explicit capability disclosures. Synthetic data is never tagged `provider_live`.
 
 ---
 
-## 4. Route-to-Disruption Spatial Matching
+## 3. Route-to-Disruption Matching Engine
 
 The matching engine (`RouteDisruptionMatcher`) evaluates incidents against journey legs using pure mathematical calculations without heavy GIS dependencies:
 
-1. **Transport Mode Compatibility**: Discard incidents that do not affect the segment's mode (e.g. road congestion does not match a train or flight leg).
-2. **Temporal Window Overlap**: Discard incidents marked `resolved` or whose `validUntil` expired prior to segment execution.
+### 3.1 Spatial Tolerances
+- **Road Corridor Tolerance**: Default **2.0 km** (or incident `radius_meters / 1000.0`, whichever is greater). This tolerance accounts for GPS positioning variance and parallel access road proximity while preventing false-positive matches on unrelated highway corridors (e.g., roads $\ge 2.5$ km away).
+- **Hub Proximity Tolerance**: Default **6.0 km** around origin/destination station coordinates for non-road segments lacking polyline geometry.
+
+### 3.2 Matching Dimensions
+1. **Transport Mode Compatibility**: Incidents are mode-filtered (`cab`, `bus`, `auto`, `rapido`, `train`, `metro`, `flight`). Road accidents do not match train or flight legs.
+2. **Temporal Validity**:
+   - Resolved events (`status: "resolved"`) are immediately excluded.
+   - Expired events (`valid_until < now` or `valid_until < segment.departure_time`) are excluded.
+   - Future scheduled events whose start time (`valid_from`) is after segment arrival are excluded.
 3. **Exact Polyline Geometry Matching**:
    - Decodes segment `encoded_polyline` (precision 6 for Valhalla, 5 for Google).
-   - Computes minimum perpendicular distance between incident centroid and route line segments using equirectangular projection:
+   - Computes minimum perpendicular distance between incident point $P$ and route segment $AB$:
      $$\text{dist} = \text{point\_to\_segment\_distance\_km}(P, A, B)$$
-   - If $\text{dist} \le \text{tolerance}$ (typically 1.0–2.0 km), marks match as `exact_geometry`.
+   - Marks match as `exact_geometry` if $\text{dist} \le \text{road\_tolerance\_km}$.
 4. **Hub Endpoint Proximity Fallback**:
-   - For flight or rail segments without road polylines, checks Haversine distance to origin/destination station coordinates within a 6.0 km buffer (`hub_approximate`).
-5. **Deduplication**: Eliminates duplicate event alerts per segment.
+   - Checks Haversine distance to origin/destination coordinates within 6.0 km (`hub_approximate`).
+
+---
+
+## 4. Event Freshness & Lifecycle Behavior
+
+| Event Lifecycle State | Determination Rule | Display Behavior |
+| :--- | :--- | :--- |
+| **Current Observation** | Provider observation with `observed_at` $\le 60$ minutes ago and valid credentials | Displayed as active live incident (`provider_live`) |
+| **Stale Observation** | Live provider observation older than 60 minutes without fresh verification | Flagged with data freshness warning notice |
+| **Simulated Event** | Generated by `SimulatedDisruptionProvider` | Prominently displays `SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA` |
+| **Expired Event** | `valid_until` has elapsed in wall-clock time | Excluded from active journey impact assessments |
+| **Resolved Event** | `status == "resolved"` | Immediately purged from route matching |
+| **Unknown Status** | Missing timestamps or unparseable metadata | Safely defaulted to `unknown` with fallback handling |
+
+> **Operational Guard**: KogniSync does not perform unthrottled continuous background polling. Disruption telemetry is evaluated upon request or explicit user refresh (`POST /assess`, UI refresh CTA).
 
 ---
 
 ## 5. Pure Impact Assessment & Connection Risk
 
 The impact assessor (`JourneyImpactAssessor`) evaluates cascading consequences:
+
 1. **Segment Delay Slip**:
    $$\text{estimatedArrivalTime} = \text{originalArrivalTime} + \Delta t_{\text{delay}}$$
 2. **Transfer Buffer Erosion**:
    $$\text{availableBufferMinutes} = \frac{\text{nextDepartureMs} - \text{estimatedArrivalMs}}{60000}$$
    $$\text{bufferReductionMinutes} = \max(0, \text{requiredBufferMinutes} - \text{availableBufferMinutes})$$
 3. **Connection Risk Classification**:
-   - `safe`: $\text{availableBufferMinutes} \ge \text{requiredBufferMinutes}$.
-   - `at_risk`: $0 \le \text{availableBufferMinutes} < \text{requiredBufferMinutes}$.
-   - `critical`: $\text{availableBufferMinutes} < 0$.
-   - `missed_estimated`: Scheduled departure has elapsed or buffer shortfall exceeds connection threshold.
-4. **Progress Immutability**:
-   - Verified completed legs (`progress.completedSegmentIds`) can **never** be retroactively marked as missed or delayed. Completed status remains immutable.
+   - `safe`: $\text{availableBufferMinutes} \ge \text{requiredBufferMinutes}$ ($\ge 15$ min).
+   - `at_risk`: $5 \le \text{availableBufferMinutes} < \text{requiredBufferMinutes}$ (tight connection).
+   - `critical`: $0 \le \text{availableBufferMinutes} < 5$ (high likelihood of missed connection).
+   - `missed_estimated`: $\text{availableBufferMinutes} < 0$ or scheduled departure time has already elapsed in wall-clock time.
+4. **Semantic Integrity of `missed_estimated`**:
+   - `missed_estimated` indicates that predicted delay pushes arrival beyond scheduled departure. It **does not** imply a confirmed real-world carrier cancellation.
+5. **Completed Progress Immutability**:
+   - Segments already marked completed by the passenger (`progress.completedSegmentIds`) remain immutable and can never be retroactively marked as disrupted or missed.
 
 ---
 
@@ -123,13 +125,30 @@ Alternative Mode        Same-Mode Detour        Earlier Departure
                              │
                              ▼
           Ranked Recovery Alternatives (Delta Metrics)
-          [manualRebookingRequired: true]
+          [manual_rebooking_required: true]
 ```
 
-### Safety & Integrity Constraints:
-- **Zero Silent Mutation**: Confirmed bookings, holds, and payment records remain untouched.
-- **Explicit Label**: Every recovery card states: `Manual rebooking required. Selecting this option will not automatically alter or charge bookings.`.
-- **Hard Constraint Enforcement**: If all alternatives exceed user budget or arrival deadline, the engine emits `strategy: "no_feasible_alternative"` and explains why. Constraints are never silently relaxed.
+### 6.1 Candidate Feasibility & Attribute Provenance Matrix
+
+| Candidate Attribute | Alternative Transport Mode (Rail) | Same-Mode Highway Detour (Road) | Earlier Schedule Advance |
+| :--- | :--- | :--- | :--- |
+| **Route Geometry** | `deterministic_estimate` (schematic corridor) | `deterministic_estimate` (offset highway corridor) | `deterministic_estimate` (identical corridor) |
+| **Transport Mode** | `deterministic_estimate` (mode shift to rail) | `deterministic_estimate` (same road vehicle) | `deterministic_estimate` (same modes) |
+| **Departure Time** | `deterministic_estimate` (scheduled station time) | `deterministic_estimate` (original departure) | `deterministic_estimate` (advanced by $\Delta t + 15$m) |
+| **Arrival Time** | `deterministic_estimate` ($\text{dep} + \text{duration}$) | `deterministic_estimate` ($\text{dep} + \text{duration}$) | `deterministic_estimate` ($\text{dep} + \text{duration}$) |
+| **Duration** | `deterministic_estimate` (rail speed model) | `deterministic_estimate` ($+45$m detour model) | `deterministic_estimate` (identical duration) |
+| **Fare** | `deterministic_estimate` (rail rate model) | `deterministic_estimate` ($+₹450$ detour mileage) | `deterministic_estimate` (identical fare) |
+| **Carbon Estimate** | `deterministic_estimate` ($-65\%$ electrified rail) | `deterministic_estimate` ($+5.2$ kg detour CO₂) | `deterministic_estimate` (identical carbon) |
+| **Timetable / Schedule** | `unknown` (requires IRCTC check) | `deterministic_estimate` (on-demand cab) | `deterministic_estimate` (user-initiated) |
+| **Seat Inventory** | `unknown` (`is_availability_verified: False`) | `unknown` (on-demand booking) | `unknown` (existing booking or unheld) |
+
+### 6.2 Earlier Departure Invariant
+- **Traveler Underway Guard**: Earlier departure is **only** recommended when the first segment has not yet started. If scheduled departure has already elapsed or the passenger is underway, the engine suppresses earlier departure recommendations.
+
+### 6.3 What Recovery Recommendations Cannot Guarantee
+1. **No Guaranteed Seat Inventory**: Recovery alternatives represent mathematically feasible routing corridors. They do not hold or lock unconfirmed carrier inventory.
+2. **No Automatic Carrier Mutation**: In accordance with consumer travel protections, existing bookings and payment transactions are never automatically cancelled, modified, or re-charged.
+3. **Manual Rebooking Mandatory**: Every recommendation requires explicit user review and confirmation (`manual_rebooking_required: true`).
 
 ---
 
@@ -138,13 +157,13 @@ Alternative Mode        Same-Mode Detour        Earlier Departure
 ### Scenario 1: NH-75 Shiradi Ghat Landslide (Chennai → Bengaluru → Mangaluru → Udupi)
 - **Incident**: Mudslide blocks NH-75 carriageways between Sakleshpur and Gundya (+180 min road delay).
 - **Impact**: Road cab/bus leg delayed by 3 hours, completely eliminating transfer buffer at Mangaluru Central.
-- **Recovery Strategy 1 (Primary)**: Mode shift to electrified rail (`alternative_transport_mode` via Karwar Express / Vande Bharat). Eliminates road closure delay, reduces fare by 30%, and cuts carbon emissions by 65%.
-- **Recovery Strategy 2**: Highway detour via NH-73 Charmadi Ghat (`reroute_same_mode`), adding 45 minutes and ₹450 fuel/toll.
+- **Recovery Strategy 1 (Primary)**: Mode shift to electrified rail (`alternative_transport_mode` via Karwar Express / Vande Bharat). Eliminates road closure delay, reduces fare by ~30%, and cuts carbon emissions by ~65%. Explicitly disclosed as an estimated alternative requiring IRCTC schedule confirmation.
+- **Recovery Strategy 2**: Highway detour via NH-73 Charmadi Ghat (`reroute_same_mode`), adding 45 minutes and ₹450 fuel/toll. Explicitly disclosed as a deterministic detour estimate (`is_live_geometry: false`).
 
 ### Scenario 2: Bengaluru Silk Board Gridlock
 - **Incident**: Waterlogging and flyover gridlock on Outer Ring Road (+45 min delay).
 - **Impact**: Threatens departure of connecting KSR Bengaluru train.
-- **Recovery Strategy**: Advance initial departure by 45 minutes (`earlier_departure`), absorbing the gridlock and preserving the scheduled rail connection with zero additional fare or carbon cost.
+- **Recovery Strategy**: Advance initial departure by 45 minutes (`earlier_departure`), absorbing the gridlock and preserving the scheduled rail connection with zero additional fare or carbon cost. Disabled if journey departure has elapsed.
 
 ---
 
@@ -164,10 +183,10 @@ Alternative Mode        Same-Mode Detour        Earlier Departure
 
 ## 9. Verification Summary
 
-- **Backend Disruption Suite**: 16 passed in 10.89s (`test_disruption_intelligence.py`).
-- **Full Backend Suite**: 353 passed in 331.56s (0 regressions).
+- **Backend Disruption Suite**: 23 passed (`test_disruption_intelligence.py`).
+- **Full Backend Suite**: 360 passed, 0 failures, 0 regressions.
 - **Frontend Suites**: 11/11 passed (`runTests.mjs`, including 12 disruption tests).
-- **TypeScript & Linting**: `npx tsc -b` (0 errors), `npx oxlint` (0 errors, 0 warnings), `npx pyright` (0 errors).
-- **Production Build**: Built in 3.14s.
+- **TypeScript & Linting**: `npx tsc -b` (0 errors), `npx oxlint` (0 errors), `npx pyright` (0 errors).
+- **Production Build**: Built in 1.72s.
 - **Canonical Inventory**: `BookingInventory/data/APS-05.db` SHA-256 confirmed unchanged:
   `F9B4B3185D91649C454BC70214AF83F69BB2D4D7AB7B9C7FB5AF9B900D52B10A`.

@@ -190,6 +190,23 @@ export const DisruptionRecoveryCard: React.FC<DisruptionRecoveryCardProps> = ({
         </div>
       )}
 
+      {/* Attribute Feasibility & Provenance Status Matrix */}
+      <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-[10px] font-mono">
+        <span className="uppercase font-bold text-slate-500 mr-1">Attribute Status:</span>
+        <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 font-medium">
+          Route: {recoveredJourney.segments.some((s) => s.isLiveGeometry) ? 'Live Road Geometry' : 'Corridor Estimate'}
+        </span>
+        <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 font-medium">
+          Fare: Estimated
+        </span>
+        <span className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 font-medium">
+          Timetable: Estimated
+        </span>
+        <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-800 font-bold">
+          Inventory: Unverified (Manual Booking Required)
+        </span>
+      </div>
+
       {/* Mandatory Safety Invariant Notice */}
       <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/70 flex items-start gap-2.5 text-xs text-amber-900">
         <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
