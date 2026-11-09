@@ -57,6 +57,11 @@ def sample_live_multimodal_journey():
         coordinates=CoordinatesSchema(lat=13.0827, lng=80.2707),
     )
 
+    t0 = datetime.now(timezone.utc)
+    t1 = t0 + timedelta(minutes=45)
+    t2 = t1 + timedelta(minutes=35)
+    t3 = t2 + timedelta(minutes=260)
+
     seg_cab = JourneySegmentSchema(
         segment_id="seg-live-01-cab",
         sequence=1,
@@ -64,8 +69,8 @@ def sample_live_multimodal_journey():
         provider="SyncCab Urban",
         origin=loc_silk_board,
         destination=loc_ksr,
-        departure_time="2026-11-09T08:00:00Z",
-        arrival_time="2026-11-09T08:45:00Z",
+        departure_time=t0.isoformat(),
+        arrival_time=t1.isoformat(),
         duration_minutes=45,
         price=350.0,
         currency="INR",
@@ -89,8 +94,8 @@ def sample_live_multimodal_journey():
         provider="Indian Railways",
         origin=loc_ksr,
         destination=loc_mas,
-        departure_time="2026-11-09T09:20:00Z",
-        arrival_time="2026-11-09T13:40:00Z",
+        departure_time=t2.isoformat(),
+        arrival_time=t3.isoformat(),
         duration_minutes=260,
         price=1120.0,
         currency="INR",
@@ -111,6 +116,8 @@ def sample_live_multimodal_journey():
         title="Bengaluru to Chennai Express",
         origin=loc_silk_board,
         destination=loc_mas,
+        departure_time=t0.isoformat(),
+        arrival_time=t3.isoformat(),
         segments=[seg_cab, seg_train],
         total_duration_minutes=340,
         total_price=1470.0,
@@ -119,8 +126,6 @@ def sample_live_multimodal_journey():
         comfort_score=8.5,
         total_transfers=1,
         modes=["cab", "train"],
-        departure_time="2026-11-09T08:00:00Z",
-        arrival_time="2026-11-09T13:40:00Z",
         recommendation_category="fastest",
         is_pareto_optimal=True,
         ai_explanation=AIExplanationSchema(

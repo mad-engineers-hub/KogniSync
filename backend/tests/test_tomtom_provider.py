@@ -103,15 +103,16 @@ def test_bbox_area_and_splitting():
 
 
 def test_unconfigured_provider_capabilities():
-    provider = TomTomOrbisTrafficProvider(api_key=None)
-    assert provider.is_configured() is False
-    assert provider.is_available() is False
-    assert provider.get_connectivity_status() == "unconfigured"
+    with patch("app.core.config.settings.TOMTOM_API_KEY", None):
+        provider = TomTomOrbisTrafficProvider(api_key=None)
+        assert provider.is_configured() is False
+        assert provider.is_available() is False
+        assert provider.get_connectivity_status() == "unconfigured"
 
-    cap = provider.get_capabilities()
-    assert cap.is_available is False
-    assert "BLOCKED — credentials unavailable" in cap.status_notice
-    assert cap.provenance_source == "unknown"
+        cap = provider.get_capabilities()
+        assert cap.is_available is False
+        assert "BLOCKED — credentials unavailable" in cap.status_notice
+        assert cap.provenance_source == "unknown"
 
 
 @pytest.mark.anyio

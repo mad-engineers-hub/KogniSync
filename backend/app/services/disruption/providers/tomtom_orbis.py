@@ -29,13 +29,13 @@ from app.services.journey.schemas import CoordinatesSchema, TransportMode
 
 TOMTOM_ORBIS_BASE_URL = "https://api.tomtom.com/maps/orbis/traffic/incidents/details"
 DEFAULT_ATTRIBUTES_HEADER = (
-    "type,geometry,properties{id,iconCategory,magnitudeOfDelay,events{description,code},"
-    "startTime,endTime,from,to,length,delay,roadNumbers,timeValidity,probabilityOfOccurrence,"
-    "numberOfReports,lastReportTime}"
+    "incidents(type,geometry(type,coordinates),properties(id,iconCategory,magnitudeOfDelay,"
+    "events(description,code),from,to,lengthInMeters,delayInSeconds,roadNumbers,timeValidity,"
+    "probabilityOfOccurrence,numberOfReports,lastReportTime))"
 )
 MAX_BBOX_AREA_KM2 = 10000.0  # Documented TomTom Orbis maximum bbox area limit
 
-ICON_CATEGORY_MAP: dict[int, DisruptionEventType] = {
+ICON_CATEGORY_MAP: dict[int | str, DisruptionEventType] = {
     0: "unknown",
     1: "accident",
     2: "weather",
@@ -49,14 +49,34 @@ ICON_CATEGORY_MAP: dict[int, DisruptionEventType] = {
     10: "accident",
     11: "weather",
     14: "road_closure",
+    # Orbis v2 string enum categories
+    "unknown": "unknown",
+    "accident": "accident",
+    "fog": "weather",
+    "dangerousConditions": "weather",
+    "rain": "weather",
+    "ice": "weather",
+    "jam": "traffic_congestion",
+    "laneClosed": "road_closure",
+    "roadClosed": "road_closure",
+    "roadWorks": "road_construction",
+    "wind": "weather",
+    "flooding": "weather",
+    "brokenDownVehicle": "accident",
 }
 
-MAGNITUDE_MAP: dict[int, DisruptionSeverity] = {
+MAGNITUDE_MAP: dict[int | str, DisruptionSeverity] = {
     0: "low",
     1: "low",
     2: "moderate",
     3: "high",
     4: "critical",
+    # Orbis v2 string enum magnitudes
+    "minor": "low",
+    "moderate": "moderate",
+    "major": "high",
+    "critical": "critical",
+    "undefined": "moderate",
 }
 
 
@@ -470,7 +490,7 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
                 lng, lat = float(mid_pt[0]), float(mid_pt[1])
                 coords_pt = CoordinatesSchema(lat=lat, lng=lng)
             # Estimate radius from length or polyline span
-            length_m = props.get("length")
+            length_m = props.get("lengthInMeters") or props.get("length")
             if isinstance(length_m, (int, float)) and length_m > 0:
                 radius_meters = max(500.0, float(length_m) / 2.0)
         elif geom_type == "MultiLineString" and isinstance(raw_coords, list) and len(raw_coords) > 0:
@@ -491,6 +511,8 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
         # Magnitude of delay -> Severity
         magnitude = props.get("magnitudeOfDelay", 2)
         severity = MAGNITUDE_MAP.get(magnitude, "moderate")
+        if event_type == "road_closure" and severity in ("low", "moderate"):
+            severity = "high"
 
         # Descriptions
         events_list = props.get("events", [])
@@ -516,7 +538,7 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
             title += f" near {from_loc}"
 
         # Delay handling: ONLY use actual delay seconds supplied by response
-        delay_sec = props.get("delay")
+        delay_sec = props.get("delayInSeconds") or props.get("delay")
         if isinstance(delay_sec, (int, float)) and delay_sec > 0:
             estimated_delay_min = int(delay_sec) // 60
             delay_sec_val = int(delay_sec)

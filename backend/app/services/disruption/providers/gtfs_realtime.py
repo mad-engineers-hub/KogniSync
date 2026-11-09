@@ -9,6 +9,7 @@ and transparent capability discovery.
 If no authorized feed is configured, reports honestly as BLOCKED (never fabricates live transit data).
 """
 import ipaddress
+import json
 import socket
 import time
 import urllib.parse
@@ -18,6 +19,12 @@ import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.services.disruption.providers.base import DisruptionProvider
+from app.services.disruption.providers.gtfs_protobuf import (
+    CAUSE_MAP,
+    EFFECT_MAP,
+    SCHEDULE_RELATIONSHIP_MAP,
+    decode_gtfs_feed,
+)
 from app.services.disruption.schemas import (
     DisruptionEvent,
     DisruptionEventType,
@@ -243,13 +250,22 @@ class GTFSRealtimeProvider(DisruptionProvider):
 
             if response.status_code == 200:
                 self._record_success(latency_ms)
-                # Attempt JSON decoding (or JSON-serialized GTFS-RT)
-                try:
-                    payload = response.json()
-                    return self.parse_gtfs_payload(payload)
-                except Exception as json_err:
-                    logger.warning(f"GTFS Realtime non-JSON payload: {json_err}")
-                    return []
+                content_type = ""
+                if hasattr(response, "headers") and hasattr(response.headers, "get"):
+                    content_type = response.headers.get("content-type", "")
+
+                raw_bytes = getattr(response, "content", None)
+                if isinstance(raw_bytes, (bytes, bytearray)):
+                    return self.decode_and_parse_feed(raw_bytes, content_type=content_type)
+
+                if hasattr(response, "json") and callable(response.json):
+                    try:
+                        payload = response.json()
+                        if isinstance(payload, dict):
+                            return self.parse_gtfs_payload(payload)
+                    except Exception:
+                        pass
+                return []
             else:
                 self._record_failure(response.status_code, f"HTTP {response.status_code}")
                 return []
@@ -271,6 +287,46 @@ class GTFSRealtimeProvider(DisruptionProvider):
         self._last_failed_request = now_iso
         self._consecutive_failure_count += 1
         self._last_status_reason = f"{reason} ({code})" if code else reason
+
+    def decode_and_parse_feed(
+        self, raw_bytes: bytes, content_type: str = ""
+    ) -> list[DisruptionEvent]:
+        """
+        Decodes raw bytes from GTFS Realtime feed into standardized disruption events.
+        Seamlessly handles:
+        1. JSON-encoded GTFS-RT (application/json or payloads starting with '{' or '[')
+        2. Binary Protocol Buffers (application/x-protobuf, octet-stream, or binary payloads)
+        """
+        if not raw_bytes:
+            return []
+
+        stripped = raw_bytes.strip()
+        is_json = (
+            "json" in content_type.lower()
+            or (len(stripped) > 0 and stripped[:1] in (b"{", b"["))
+        )
+
+        if is_json:
+            try:
+                payload = json.loads(raw_bytes.decode("utf-8"))
+                if isinstance(payload, dict):
+                    return self.parse_gtfs_payload(payload)
+                elif isinstance(payload, list):
+                    return self.parse_gtfs_payload({"header": {}, "entity": payload})
+                else:
+                    logger.warning("GTFS Realtime JSON payload is neither object nor array.")
+                    return []
+            except Exception as json_err:
+                logger.warning(f"Failed to decode GTFS Realtime JSON: {json_err}")
+                return []
+
+        # Attempt Protocol Buffers decoding
+        try:
+            feed_dict = decode_gtfs_feed(raw_bytes)
+            return self.parse_gtfs_payload(feed_dict)
+        except Exception as pb_err:
+            logger.warning(f"Failed to decode GTFS Realtime Protobuf payload: {pb_err}")
+            return []
 
     def parse_gtfs_payload(self, data: dict[str, Any]) -> list[DisruptionEvent]:
         """
@@ -343,8 +399,17 @@ class GTFSRealtimeProvider(DisruptionProvider):
         header_text = self._extract_translated_string(alert.get("header_text") or alert.get("headerText"))
         desc_text = self._extract_translated_string(alert.get("description_text") or alert.get("descriptionText"))
 
-        cause = alert.get("cause", "UNKNOWN_CAUSE")
-        effect = alert.get("effect", "UNKNOWN_EFFECT")
+        cause_raw = alert.get("cause", "UNKNOWN_CAUSE")
+        if isinstance(cause_raw, int):
+            cause = CAUSE_MAP.get(cause_raw, "UNKNOWN_CAUSE")
+        else:
+            cause = str(cause_raw)
+
+        effect_raw = alert.get("effect", "UNKNOWN_EFFECT")
+        if isinstance(effect_raw, int):
+            effect = EFFECT_MAP.get(effect_raw, "UNKNOWN_EFFECT")
+        else:
+            effect = str(effect_raw)
 
         # Map effect to DisruptionEventType and severity
         if effect in ("NO_SERVICE", "SIGNIFICANT_DELAYS"):
@@ -420,7 +485,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
         )
 
         sched_rel = trip.get("schedule_relationship") or trip.get("scheduleRelationship")
-        if sched_rel == "CANCELED":
+        if sched_rel in ("CANCELED", 3):
             return DisruptionEvent(
                 id=f"gtfs-cancel-{entity.get('id', trip_id)}",
                 source="gtfs_realtime",
