@@ -201,15 +201,15 @@ def _decode_trip_descriptor(raw_bytes: bytes) -> dict[str, Any]:
         if tag == 1:
             trip["trip_id"] = _decode_string(val)
         elif tag == 2:
-            trip["route_id"] = _decode_string(val)
-        elif tag == 3:
-            trip["direction_id"] = val
-        elif tag == 4:
             trip["start_time"] = _decode_string(val)
-        elif tag == 5:
+        elif tag == 3:
             trip["start_date"] = _decode_string(val)
-        elif tag == 6:
+        elif tag == 4:
             trip["schedule_relationship"] = SCHEDULE_RELATIONSHIP_MAP.get(val, "SCHEDULED")
+        elif tag == 5:
+            trip["route_id"] = _decode_string(val)
+        elif tag == 6:
+            trip["direction_id"] = val
     return trip
 
 
@@ -231,14 +231,26 @@ def _decode_stop_time_update(raw_bytes: bytes) -> dict[str, Any]:
         if tag == 1:
             stu["stop_sequence"] = val
         elif tag == 2:
-            stu["stop_id"] = _decode_string(val)
-        elif tag == 3:
             stu["arrival"] = _decode_stop_time_event(val)
-        elif tag == 4:
+        elif tag == 3:
             stu["departure"] = _decode_stop_time_event(val)
+        elif tag == 4:
+            stu["stop_id"] = _decode_string(val)
         elif tag == 5:
             stu["schedule_relationship"] = val
     return stu
+
+
+def _decode_vehicle_descriptor(raw_bytes: bytes) -> dict[str, Any]:
+    vd: dict[str, Any] = {}
+    for tag, _, val in decode_fields(raw_bytes):
+        if tag == 1:
+            vd["id"] = _decode_string(val)
+        elif tag == 2:
+            vd["label"] = _decode_string(val)
+        elif tag == 3:
+            vd["license_plate"] = _decode_string(val)
+    return vd
 
 
 def _decode_trip_update(raw_bytes: bytes) -> dict[str, Any]:
@@ -246,8 +258,10 @@ def _decode_trip_update(raw_bytes: bytes) -> dict[str, Any]:
     for tag, _, val in decode_fields(raw_bytes):
         if tag == 1:
             tu["trip"] = _decode_trip_descriptor(val)
-        elif tag == 3:
+        elif tag == 2:
             tu["stop_time_update"].append(_decode_stop_time_update(val))
+        elif tag == 3:
+            tu["vehicle"] = _decode_vehicle_descriptor(val)
         elif tag == 4:
             tu["timestamp"] = val
         elif tag == 5:
@@ -276,18 +290,20 @@ def _decode_vehicle_position(raw_bytes: bytes) -> dict[str, Any]:
     for tag, _, val in decode_fields(raw_bytes):
         if tag == 1:
             veh["trip"] = _decode_trip_descriptor(val)
-        elif tag == 3:
+        elif tag == 2:
             veh["position"] = _decode_position(val)
-        elif tag == 4:
+        elif tag == 3:
             veh["current_stop_sequence"] = val
-        elif tag == 5:
-            veh["stop_id"] = _decode_string(val)
-        elif tag == 6:
+        elif tag == 4:
             veh["current_status"] = val
-        elif tag == 7:
+        elif tag == 5:
             veh["timestamp"] = val
-        elif tag == 8:
+        elif tag == 6:
             veh["congestion_level"] = CONGESTION_LEVEL_MAP.get(val, "UNKNOWN_CONGESTION_LEVEL")
+        elif tag == 7:
+            veh["stop_id"] = _decode_string(val)
+        elif tag == 8:
+            veh["vehicle"] = _decode_vehicle_descriptor(val)
         elif tag == 9:
             veh["occupancy_status"] = val
     return veh
@@ -443,16 +459,21 @@ def _encode_trip_descriptor(trip: dict[str, Any]) -> bytes:
     buf = bytearray()
     if "trip_id" in trip:
         buf.extend(_encode_string_field(1, str(trip["trip_id"])))
-    if "route_id" in trip:
-        buf.extend(_encode_string_field(2, str(trip["route_id"])))
-    if "direction_id" in trip:
-        buf.extend(_encode_varint_field(3, int(trip["direction_id"])))
+    if "start_time" in trip:
+        buf.extend(_encode_string_field(2, str(trip["start_time"])))
+    if "start_date" in trip:
+        buf.extend(_encode_string_field(3, str(trip["start_date"])))
 
     sched_rel = trip.get("schedule_relationship")
     if isinstance(sched_rel, str):
         sched_rel = SCHEDULE_RELATIONSHIP_REVERSE_MAP.get(sched_rel, 0)
     if isinstance(sched_rel, int):
-        buf.extend(_encode_varint_field(6, sched_rel))
+        buf.extend(_encode_varint_field(4, sched_rel))
+
+    if "route_id" in trip:
+        buf.extend(_encode_string_field(5, str(trip["route_id"])))
+    if "direction_id" in trip:
+        buf.extend(_encode_varint_field(6, int(trip["direction_id"])))
 
     return bytes(buf)
 
@@ -463,6 +484,8 @@ def _encode_stop_time_event(tag: int, ste: dict[str, Any]) -> bytes:
         buf.extend(_encode_varint_field(1, int(ste["delay"])))
     if "time" in ste:
         buf.extend(_encode_varint_field(2, int(ste["time"])))
+    if "uncertainty" in ste:
+        buf.extend(_encode_varint_field(3, int(ste["uncertainty"])))
     return _encode_bytes_field(tag, bytes(buf))
 
 
@@ -470,12 +493,25 @@ def _encode_stop_time_update(stu: dict[str, Any]) -> bytes:
     buf = bytearray()
     if "stop_sequence" in stu:
         buf.extend(_encode_varint_field(1, int(stu["stop_sequence"])))
-    if "stop_id" in stu:
-        buf.extend(_encode_string_field(2, str(stu["stop_id"])))
     if "arrival" in stu:
-        buf.extend(_encode_stop_time_event(3, stu["arrival"]))
+        buf.extend(_encode_stop_time_event(2, stu["arrival"]))
     if "departure" in stu:
-        buf.extend(_encode_stop_time_event(4, stu["departure"]))
+        buf.extend(_encode_stop_time_event(3, stu["departure"]))
+    if "stop_id" in stu:
+        buf.extend(_encode_string_field(4, str(stu["stop_id"])))
+    if "schedule_relationship" in stu:
+        buf.extend(_encode_varint_field(5, int(stu["schedule_relationship"])))
+    return bytes(buf)
+
+
+def _encode_vehicle_descriptor(vd: dict[str, Any]) -> bytes:
+    buf = bytearray()
+    if "id" in vd:
+        buf.extend(_encode_string_field(1, str(vd["id"])))
+    if "label" in vd:
+        buf.extend(_encode_string_field(2, str(vd["label"])))
+    if "license_plate" in vd:
+        buf.extend(_encode_string_field(3, str(vd["license_plate"])))
     return bytes(buf)
 
 
@@ -484,7 +520,9 @@ def _encode_trip_update(tu: dict[str, Any]) -> bytes:
     if "trip" in tu:
         buf.extend(_encode_bytes_field(1, _encode_trip_descriptor(tu["trip"])))
     for stu in tu.get("stop_time_update", []):
-        buf.extend(_encode_bytes_field(3, _encode_stop_time_update(stu)))
+        buf.extend(_encode_bytes_field(2, _encode_stop_time_update(stu)))
+    if "vehicle" in tu:
+        buf.extend(_encode_bytes_field(3, _encode_vehicle_descriptor(tu["vehicle"])))
     if "timestamp" in tu:
         buf.extend(_encode_varint_field(4, int(tu["timestamp"])))
     if "delay" in tu:
@@ -508,15 +546,26 @@ def _encode_vehicle_position(veh: dict[str, Any]) -> bytes:
     if "trip" in veh:
         buf.extend(_encode_bytes_field(1, _encode_trip_descriptor(veh["trip"])))
     if "position" in veh:
-        buf.extend(_encode_bytes_field(3, _encode_position(veh["position"])))
+        buf.extend(_encode_bytes_field(2, _encode_position(veh["position"])))
+    if "current_stop_sequence" in veh:
+        buf.extend(_encode_varint_field(3, int(veh["current_stop_sequence"])))
+    if "current_status" in veh:
+        buf.extend(_encode_varint_field(4, int(veh["current_status"])))
     if "timestamp" in veh:
-        buf.extend(_encode_varint_field(7, int(veh["timestamp"])))
+        buf.extend(_encode_varint_field(5, int(veh["timestamp"])))
 
     cong = veh.get("congestion_level")
     if isinstance(cong, str):
         cong = CONGESTION_LEVEL_REVERSE_MAP.get(cong, 0)
     if isinstance(cong, int):
-        buf.extend(_encode_varint_field(8, cong))
+        buf.extend(_encode_varint_field(6, cong))
+
+    if "stop_id" in veh:
+        buf.extend(_encode_string_field(7, str(veh["stop_id"])))
+    if "vehicle" in veh:
+        buf.extend(_encode_bytes_field(8, _encode_vehicle_descriptor(veh["vehicle"])))
+    if "occupancy_status" in veh:
+        buf.extend(_encode_varint_field(9, int(veh["occupancy_status"])))
 
     return bytes(buf)
 

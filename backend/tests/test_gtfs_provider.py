@@ -446,3 +446,332 @@ async def test_gtfs_fetch_binary_protobuf_http():
             assert events[0].id == "gtfs-alert-http-pb-01"
             assert events[0].provenance == "provider_live"
 
+
+def test_gtfs_configured_awaiting_verification_state():
+    """Milestone M3.8.3: Configured GTFS feed must report unknown connectivity before initial fetch."""
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.pb")
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        assert provider.is_configured() is True
+        assert provider.is_available() is True
+        assert provider.get_connectivity_status() == "unknown"
+
+        cap = provider.get_capabilities()
+        assert cap.is_available is True
+        assert cap.is_configured is True
+        assert cap.connectivity_status == "unknown"
+        assert cap.status_notice == "Configured — awaiting initial live connection verification."
+        assert cap.provenance_source == "unknown"
+        assert cap.last_successful_request is None
+        assert cap.consecutive_failure_count == 0
+
+
+def test_gtfs_official_schema_binary_fixtures():
+    """
+    Milestone M3.8.3: Independently constructed raw byte fixtures following the official
+    Google Transit gtfs-realtime.proto field numbers (TripDescriptor, StopTimeUpdate, VehiclePosition).
+    Verifies that the decoder conforms to the official specification without using the internal encoder.
+    """
+    import struct
+    from app.services.disruption.providers.gtfs_protobuf import (
+        _decode_trip_descriptor,
+        _decode_stop_time_update,
+        _decode_vehicle_descriptor,
+        _decode_vehicle_position,
+        _decode_trip_update,
+    )
+
+    # 1. Official TripDescriptor fixture
+    # Tag 1 (trip_id): 0x0a + len 8 + b"TRIP-100"
+    # Tag 2 (start_time): 0x12 + len 8 + b"08:00:00"
+    # Tag 3 (start_date): 0x1a + len 8 + b"20261110"
+    # Tag 4 (schedule_relationship): 0x20 + 0x03 (CANCELED = 3)
+    # Tag 5 (route_id): 0x2a + len 7 + b"ROUTE-A"
+    # Tag 6 (direction_id): 0x30 + 0x01 (1)
+    raw_trip = (
+        b"\x0a\x08TRIP-100"
+        b"\x12\x0808:00:00"
+        b"\x1a\x0820261110"
+        b"\x20\x03"
+        b"\x2a\x07ROUTE-A"
+        b"\x30\x01"
+    )
+    trip_dec = _decode_trip_descriptor(raw_trip)
+    assert trip_dec["trip_id"] == "TRIP-100"
+    assert trip_dec["start_time"] == "08:00:00"
+    assert trip_dec["start_date"] == "20261110"
+    assert trip_dec["schedule_relationship"] == "CANCELED"
+    assert trip_dec["route_id"] == "ROUTE-A"
+    assert trip_dec["direction_id"] == 1
+
+    # 2. Official StopTimeUpdate fixture
+    # Tag 1 (stop_sequence): 0x08 + 0x04
+    # Tag 2 (arrival): 0x12 + len 3 + (tag 1 delay 300: 0x08 + 0xac + 0x02)
+    # Tag 3 (departure): 0x1a + len 3 + (tag 1 delay 360: 0x08 + 0xe8 + 0x02)
+    # Tag 4 (stop_id): 0x22 + len 7 + b"STOP-55"
+    # Tag 5 (schedule_relationship): 0x28 + 0x00 (SCHEDULED = 0)
+    raw_stu = (
+        b"\x08\x04"
+        b"\x12\x03\x08\xac\x02"
+        b"\x1a\x03\x08\xe8\x02"
+        b"\x22\x07STOP-55"
+        b"\x28\x00"
+    )
+    stu_dec = _decode_stop_time_update(raw_stu)
+    assert stu_dec["stop_sequence"] == 4
+    assert stu_dec["arrival"]["delay"] == 300
+    assert stu_dec["departure"]["delay"] == 360
+    assert stu_dec["stop_id"] == "STOP-55"
+    assert stu_dec["schedule_relationship"] == 0
+
+    # 3. Official VehicleDescriptor fixture
+    # Tag 1 (id): 0x0a + len 6 + b"BUS-99"
+    # Tag 2 (label): 0x12 + len 8 + b"Fleet-99"
+    # Tag 3 (license_plate): 0x1a + len 12 + b"KA-01-A-1111"
+    raw_vd = (
+        b"\x0a\x06BUS-99"
+        b"\x12\x08Fleet-99"
+        b"\x1a\x0cKA-01-A-1111"
+    )
+    vd_dec = _decode_vehicle_descriptor(raw_vd)
+    assert vd_dec["id"] == "BUS-99"
+    assert vd_dec["label"] == "Fleet-99"
+    assert vd_dec["license_plate"] == "KA-01-A-1111"
+
+    # 4. Official VehiclePosition fixture
+    # Tag 1 (trip): 0x0a + len + raw_trip
+    # Tag 2 (position): 0x12 + len 10 + (tag 1 lat float: 0x0d + 4 bytes, tag 2 lon float: 0x15 + 4 bytes)
+    lat_bytes = struct.pack("<f", 12.9716)
+    lon_bytes = struct.pack("<f", 77.5946)
+    raw_pos = b"\x0d" + lat_bytes + b"\x15" + lon_bytes
+    # Tag 3 (current_stop_sequence): 0x18 + 0x05
+    # Tag 4 (current_status): 0x20 + 0x01 (STOPPED_AT = 1)
+    # Tag 5 (timestamp): 0x28 + 0x80\xe2\xcf\xaa\x06 (1700000000)
+    # Tag 6 (congestion_level): 0x30 + 0x04 (SEVERE_CONGESTION = 4)
+    # Tag 7 (stop_id): 0x3a + len 7 + b"STOP-MG"
+    # Tag 8 (vehicle): 0x42 + len + raw_vd
+    # Tag 9 (occupancy_status): 0x48 + 0x01
+    raw_veh = (
+        b"\x0a" + bytes([len(raw_trip)]) + raw_trip
+        + b"\x12" + bytes([len(raw_pos)]) + raw_pos
+        + b"\x18\x05"
+        + b"\x20\x01"
+        + b"\x28\x80\xe2\xcf\xaa\x06"
+        + b"\x30\x04"
+        + b"\x3a\x07STOP-MG"
+        + b"\x42" + bytes([len(raw_vd)]) + raw_vd
+        + b"\x48\x01"
+    )
+    veh_dec = _decode_vehicle_position(raw_veh)
+    assert veh_dec["trip"]["trip_id"] == "TRIP-100"
+    assert round(veh_dec["position"]["latitude"], 4) == 12.9716
+    assert round(veh_dec["position"]["longitude"], 4) == 77.5946
+    assert veh_dec["current_stop_sequence"] == 5
+    assert veh_dec["current_status"] == 1
+    assert veh_dec["timestamp"] == 1700000000
+    assert veh_dec["congestion_level"] == "SEVERE_CONGESTION"
+    assert veh_dec["stop_id"] == "STOP-MG"
+    assert veh_dec["vehicle"]["id"] == "BUS-99"
+    assert veh_dec["occupancy_status"] == 1
+
+    # 5. Official TripUpdate fixture
+    # Tag 1 (trip): 0x0a + len + raw_trip
+    # Tag 2 (stop_time_update): 0x12 + len + raw_stu
+    # Tag 3 (vehicle): 0x1a + len + raw_vd
+    # Tag 4 (timestamp): 0x20 + 0x80\xe2\xcf\xaa\x06
+    # Tag 5 (delay): 0x28 + 0xd8\x04 (600s)
+    raw_tu = (
+        b"\x0a" + bytes([len(raw_trip)]) + raw_trip
+        + b"\x12" + bytes([len(raw_stu)]) + raw_stu
+        + b"\x1a" + bytes([len(raw_vd)]) + raw_vd
+        + b"\x20\x80\xe2\xcf\xaa\x06"
+        + b"\x28\xd8\x04"
+    )
+    tu_dec = _decode_trip_update(raw_tu)
+    assert tu_dec["trip"]["trip_id"] == "TRIP-100"
+    assert len(tu_dec["stop_time_update"]) == 1
+    assert tu_dec["stop_time_update"][0]["stop_sequence"] == 4
+    assert tu_dec["vehicle"]["id"] == "BUS-99"
+    assert tu_dec["timestamp"] == 1700000000
+    assert tu_dec["delay"] == 600
+
+
+def test_gtfs_tag_mapping_regression_validation():
+    """
+    Milestone M3.8.3 Regression: Proves that the official tag mapping correctly distinguishes
+    start_time (tag 2) from route_id (tag 5), and arrival (tag 2) from stop_id (tag 4).
+    The previous pre-remediation mapping inverted these tags, which would cause official
+    feeds to have route_id='08:00:00' and start_date='ROUTE-A'.
+    """
+    from app.services.disruption.providers.gtfs_protobuf import (
+        _decode_trip_descriptor,
+        _decode_stop_time_update,
+    )
+
+    # Official protobuf bytes: tag 2 is start_time, tag 5 is route_id
+    raw_trip = b"\x0a\x07TRIP-01\x12\x0807:30:00\x1a\x0820261110\x20\x00\x2a\x08METRO-01\x30\x00"
+    trip = _decode_trip_descriptor(raw_trip)
+
+    # Correct conformance
+    assert trip["start_time"] == "07:30:00"
+    assert trip["route_id"] == "METRO-01"
+    assert trip["start_date"] == "20261110"
+
+    # StopTimeUpdate: tag 2 is arrival, tag 4 is stop_id
+    raw_stu = b"\x08\x01\x12\x03\x08\xc8\x01\x22\x06STN-01"
+    stu = _decode_stop_time_update(raw_stu)
+    assert stu["stop_sequence"] == 1
+    assert stu["arrival"]["delay"] == 200
+    assert stu["stop_id"] == "STN-01"
+
+
+@pytest.mark.anyio
+async def test_gtfs_corrupt_feed_does_not_record_false_success():
+    """Milestone M3.8.3: HTTP 200 with truncated protobuf varint must NOT record false success."""
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.pb")
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        # Truncated varint: 0x80 has MSB set indicating more bytes, but stream ends
+        corrupt_bytes = b"\x0a\x08\x0a\x032.0\x18\x80"
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.content = corrupt_bytes
+        mock_resp.headers = {"content-type": "application/x-protobuf"}
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            events = await provider.fetch_disruptions()
+
+            assert events == []
+            # Must NOT record success
+            assert provider._last_successful_request is None
+            assert provider._consecutive_failure_count == 1
+            assert provider._last_failed_request is not None
+            assert "Malformed feed payload" in provider._last_status_reason
+            assert provider.get_connectivity_status() == "unknown"
+
+
+@pytest.mark.anyio
+async def test_gtfs_truncated_length_delimited_field():
+    """Milestone M3.8.3: Length-delimited field claiming more bytes than payload must record failure."""
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.pb")
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        # Tag 1 length 64 bytes, but only 5 provided
+        corrupt_bytes = b"\x0a\x40\x0a\x032.0"
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.content = corrupt_bytes
+        mock_resp.headers = {"content-type": "application/x-protobuf"}
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            events = await provider.fetch_disruptions()
+
+            assert events == []
+            assert provider._last_successful_request is None
+            assert provider._consecutive_failure_count == 1
+
+
+@pytest.mark.anyio
+async def test_gtfs_unsupported_wire_type():
+    """Milestone M3.8.3: Payload containing unsupported wire type must record failure."""
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.pb")
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        # Wire type 7 is reserved/unsupported
+        corrupt_bytes = b"\x0f\x01\x02"
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.content = corrupt_bytes
+        mock_resp.headers = {"content-type": "application/x-protobuf"}
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            events = await provider.fetch_disruptions()
+
+            assert events == []
+            assert provider._last_successful_request is None
+            assert provider._consecutive_failure_count == 1
+
+
+@pytest.mark.anyio
+async def test_gtfs_corrupt_json_payload():
+    """Milestone M3.8.3: HTTP 200 with invalid JSON must record failure and not false success."""
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.json")
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        corrupt_json = b'{"header": {"version": "2.0"}, "entity": ['  # Truncated JSON
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.content = corrupt_json
+        mock_resp.headers = {"content-type": "application/json"}
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            events = await provider.fetch_disruptions()
+
+            assert events == []
+            assert provider._last_successful_request is None
+            assert provider._consecutive_failure_count == 1
+
+
+@pytest.mark.anyio
+async def test_gtfs_valid_empty_feed_records_success():
+    """Milestone M3.8.3: Valid empty feed (0 entities, fresh header) must record genuine success."""
+    from app.services.disruption.providers.gtfs_protobuf import encode_gtfs_feed
+
+    now_ts = int(time.time())
+    valid_empty = {
+        "header": {
+            "gtfs_realtime_version": "2.0",
+            "timestamp": now_ts - 10,
+        },
+        "entity": [],
+    }
+    raw_pb = encode_gtfs_feed(valid_empty)
+
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.pb")
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.content = raw_pb
+        mock_resp.headers = {"content-type": "application/x-protobuf"}
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            events = await provider.fetch_disruptions()
+
+            assert events == []
+            assert provider._last_successful_request is not None
+            assert provider._consecutive_failure_count == 0
+            assert provider.get_connectivity_status() == "available"
+            cap = provider.get_capabilities()
+            assert cap.connectivity_status == "available"
+            assert cap.provenance_source == "provider_live"
+
+
+@pytest.mark.anyio
+async def test_gtfs_subsequent_valid_feed_recovers_health():
+    """Milestone M3.8.3: A valid feed recovers provider health after prior failures."""
+    from app.services.disruption.providers.gtfs_protobuf import encode_gtfs_feed
+
+    now_ts = int(time.time())
+    valid_feed = {
+        "header": {"gtfs_realtime_version": "2.0", "timestamp": now_ts - 5},
+        "entity": [],
+    }
+    raw_pb = encode_gtfs_feed(valid_feed)
+
+    provider = GTFSRealtimeProvider(feed_url="https://transit.example.gov/gtfs-rt.pb")
+    provider._consecutive_failure_count = 2  # Prior failures
+    provider._last_failed_request = "2026-11-09T00:00:00Z"
+
+    with patch("app.core.config.settings.GTFS_REALTIME_ENABLED", True):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.content = raw_pb
+        mock_resp.headers = {"content-type": "application/x-protobuf"}
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_resp
+            await provider.fetch_disruptions()
+
+            assert provider._consecutive_failure_count == 0
+            assert provider.get_connectivity_status() == "available"
+

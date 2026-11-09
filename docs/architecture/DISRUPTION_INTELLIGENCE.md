@@ -36,10 +36,10 @@ To avoid ambiguity between implemented code and operational live data, KogniSync
 | Dimension | `TomTomOrbisTrafficProvider` (`live_traffic_feed`) | `GTFSRealtimeProvider` (`gtfs_realtime_feed`) | `SimulatedDisruptionProvider` (`simulation_engine`) |
 | :--- | :--- | :--- | :--- |
 | **1. Connector Implementation** | **Genuinely implemented** (Orbis v2 client, bbox splitter, GeoJSON parser, bounded timeouts) | **Genuinely implemented** (GTFS-RT consumer, trip updates, service alerts, timestamp checks) | **Fully implemented** (Deterministic scenario generator) |
-| **2. Credential Configuration** | **Unconfigured** by default (`TOMTOM_API_KEY` absent) | **Unconfigured** by default (`GTFS_REALTIME_FEED_URL` absent) | **None required** (self-contained engine) |
-| **3. Connectivity Status** | `unconfigured` (fails closed to prevent spoofing) | `unconfigured` | `available` |
-| **4. Live Response Verification** | Contract test verified via mocked Orbis v2 fixtures | Contract test verified via mocked feed fixtures | Unit and integration test verified |
-| **5. Production Operational Status** | **BLOCKED** — commercial API credentials required | **BLOCKED** — authorized regional transit feed unavailable | **ACTIVE** in sandbox / demo with mandatory simulation notices |
+| **2. Credential Configuration** | Configured via `TOMTOM_API_KEY` in environment (`unconfigured` if unset) | `unconfigured` by default (`GTFS_REALTIME_FEED_URL` unset) | **None required** (self-contained engine) |
+| **3. Connectivity Status** | `unknown` prior to initial live handshake; `available` upon verified response; `degraded` on repeated network errors | `unconfigured` (or `unknown` if configured prior to initial fetch) | `available` |
+| **4. Live Response Verification** | Live Verified (verified with 259 live incidents in Bengaluru bbox) & contract tests | Contract test verified via mocked official-schema feed fixtures | Unit and integration test verified |
+| **5. Production Operational Status** | **ACTIVE** when key is configured and live connection is verified; **BLOCKED** if credentials unavailable | **BLOCKED** — authorized regional transit feed unavailable | **ACTIVE** in sandbox / demo with mandatory simulation notices |
 
 ### 2.2 Reliability & Security Guarantees
 1. **Server-Side Credentials**: API keys are accessed only on the backend through secure configuration settings; never exposed in client payloads.

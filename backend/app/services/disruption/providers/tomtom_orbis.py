@@ -222,7 +222,7 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
             return "degraded"
         if self._last_successful_request:
             return "available"
-        return "available"
+        return "unknown"
 
     def get_capabilities(self) -> DisruptionProviderCapability:
         configured = self.is_configured()
@@ -241,6 +241,9 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
         elif status == "degraded":
             notice = f"DEGRADED — provider experienced {self._consecutive_failure_count} consecutive network failures."
             reason = self._last_status_reason or "Consecutive request failures."
+        elif not self._last_successful_request:
+            notice = "Configured — awaiting initial live connection verification."
+            reason = "API key configured; ready for initial live incident verification."
         else:
             notice = "Connected to TomTom Orbis Traffic API v2 (live road incidents)."
             reason = "Operational with valid credentials and reachable endpoints."
@@ -269,7 +272,7 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
                 "from_to_descriptions",
             ],
             supported_geographic_coverage="global",
-            provenance_source="provider_live" if available else "unknown",
+            provenance_source="provider_live" if self._last_successful_request else "unknown",
             supported_modes=["cab", "bus", "auto", "rapido"],
             status_notice=notice,
             status_reason=reason,

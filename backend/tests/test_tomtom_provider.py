@@ -327,3 +327,83 @@ def test_split_bounding_box_edge_cases():
     assert len(antimeridian_box) == 2
     assert antimeridian_box[0] == (179.0, -10.0, 180.0, 10.0)
     assert antimeridian_box[1] == (-180.0, -10.0, -179.0, 10.0)
+
+
+def test_tomtom_configured_awaiting_verification_state():
+    """Milestone M3.8.3: Configured provider must report unknown status and awaiting verification before first request."""
+    provider = TomTomOrbisTrafficProvider(api_key="valid-test-key-12345")
+    assert provider.is_configured() is True
+    assert provider.is_available() is True
+    assert provider.get_connectivity_status() == "unknown"
+
+    cap = provider.get_capabilities()
+    assert cap.is_available is True
+    assert cap.is_configured is True
+    assert cap.connectivity_status == "unknown"
+    assert cap.status_notice == "Configured — awaiting initial live connection verification."
+    assert cap.status_reason == "API key configured; ready for initial live incident verification."
+    assert cap.provenance_source == "unknown"
+    assert cap.last_successful_request is None
+    assert cap.consecutive_failure_count == 0
+
+
+@pytest.mark.anyio
+async def test_tomtom_state_transitions_and_failure_recovery():
+    """Milestone M3.8.3: Tests unknown -> available -> degraded -> recovered state transitions."""
+    provider = TomTomOrbisTrafficProvider(api_key="valid-test-key-12345", max_retries=0)
+    assert provider.get_connectivity_status() == "unknown"
+
+    # 1. Successful HTTP 200 transitions to 'available'
+    mock_resp_200 = MagicMock(spec=httpx.Response)
+    mock_resp_200.status_code = 200
+    mock_resp_200.json.return_value = {"incidents": []}
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp_200
+        await provider.fetch_disruptions(bbox=(77.5, 12.9, 77.6, 13.0))
+
+        assert provider.get_connectivity_status() == "available"
+        cap = provider.get_capabilities()
+        assert cap.connectivity_status == "available"
+        assert cap.provenance_source == "provider_live"
+        assert "Connected to TomTom Orbis Traffic API v2" in cap.status_notice
+        first_success = cap.last_successful_request
+        assert first_success is not None
+
+    # 2. Server errors trigger degraded status after 3 failures
+    mock_resp_500 = MagicMock(spec=httpx.Response)
+    mock_resp_500.status_code = 500
+    mock_resp_500.text = "Internal Server Error"
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp_500
+        # Failure 1
+        await provider.fetch_disruptions(bbox=(77.5, 12.9, 77.6, 13.0))
+        assert provider.get_connectivity_status() == "available"  # Still available until 3 failures
+        assert provider._consecutive_failure_count == 1
+        assert provider._last_successful_request == first_success
+
+        # Failure 2
+        await provider.fetch_disruptions(bbox=(77.5, 12.9, 77.6, 13.0))
+        assert provider.get_connectivity_status() == "available"
+        assert provider._consecutive_failure_count == 2
+
+        # Failure 3 -> transitions to degraded
+        await provider.fetch_disruptions(bbox=(77.5, 12.9, 77.6, 13.0))
+        assert provider._consecutive_failure_count == 3
+        assert provider.get_connectivity_status() == "degraded"
+        cap_degraded = provider.get_capabilities()
+        assert cap_degraded.connectivity_status == "degraded"
+        assert "DEGRADED" in cap_degraded.status_notice
+
+    # 3. Subsequent successful response recovers health
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp_200
+        await provider.fetch_disruptions(bbox=(77.5, 12.9, 77.6, 13.0))
+
+        assert provider._consecutive_failure_count == 0
+        assert provider.get_connectivity_status() == "available"
+        cap_recovered = provider.get_capabilities()
+        assert cap_recovered.connectivity_status == "available"
+        assert cap_recovered.consecutive_failure_count == 0
+        assert "Connected to TomTom Orbis Traffic API v2" in cap_recovered.status_notice

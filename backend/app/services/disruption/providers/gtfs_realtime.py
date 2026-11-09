@@ -173,7 +173,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
             return "degraded"
         if self._last_successful_request:
             return "available"
-        return "available"
+        return "unknown"
 
     def get_capabilities(self) -> DisruptionProviderCapability:
         configured = self.is_configured()
@@ -189,6 +189,9 @@ class GTFSRealtimeProvider(DisruptionProvider):
         elif status == "degraded":
             notice = f"DEGRADED — GTFS feed experienced {self._consecutive_failure_count} consecutive network errors."
             reason = self._last_status_reason or "Network connection errors."
+        elif not self._last_successful_request:
+            notice = "Configured — awaiting initial live connection verification."
+            reason = f"Feed endpoint configured; awaiting initial response verification from {self._feed_url}."
         else:
             notice = "Connected to authorized GTFS Realtime transit feed."
             reason = f"Active feed endpoint: {self._feed_url}"
@@ -214,7 +217,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
                 "vehicle_positions",
             ],
             supported_geographic_coverage="configured_feed_boundary",
-            provenance_source="provider_live" if available else "unknown",
+            provenance_source="provider_live" if self._last_successful_request else "unknown",
             supported_modes=["bus", "train", "metro"],
             status_notice=notice,
             status_reason=reason,
@@ -249,23 +252,28 @@ class GTFSRealtimeProvider(DisruptionProvider):
             latency_ms = (time.perf_counter() - start_t) * 1000.0
 
             if response.status_code == 200:
-                self._record_success(latency_ms)
                 content_type = ""
                 if hasattr(response, "headers") and hasattr(response.headers, "get"):
                     content_type = response.headers.get("content-type", "")
 
                 raw_bytes = getattr(response, "content", None)
-                if isinstance(raw_bytes, (bytes, bytearray)):
-                    return self.decode_and_parse_feed(raw_bytes, content_type=content_type)
+                if raw_bytes is None and hasattr(response, "text"):
+                    raw_bytes = response.text.encode("utf-8")
 
-                if hasattr(response, "json") and callable(response.json):
-                    try:
-                        payload = response.json()
-                        if isinstance(payload, dict):
-                            return self.parse_gtfs_payload(payload)
-                    except Exception:
-                        pass
-                return []
+                if not raw_bytes:
+                    self._record_failure(200, "Empty payload received from GTFS feed")
+                    return []
+
+                try:
+                    events = self.decode_and_parse_feed(
+                        raw_bytes, content_type=content_type, raise_on_error=True
+                    )
+                except ValueError as parse_err:
+                    self._record_failure(200, f"Malformed feed payload: {parse_err}")
+                    return []
+
+                self._record_success(latency_ms)
+                return events
             else:
                 self._record_failure(response.status_code, f"HTTP {response.status_code}")
                 return []
@@ -289,7 +297,10 @@ class GTFSRealtimeProvider(DisruptionProvider):
         self._last_status_reason = f"{reason} ({code})" if code else reason
 
     def decode_and_parse_feed(
-        self, raw_bytes: bytes, content_type: str = ""
+        self,
+        raw_bytes: bytes,
+        content_type: str = "",
+        raise_on_error: bool = False,
     ) -> list[DisruptionEvent]:
         """
         Decodes raw bytes from GTFS Realtime feed into standardized disruption events.
@@ -298,6 +309,8 @@ class GTFSRealtimeProvider(DisruptionProvider):
         2. Binary Protocol Buffers (application/x-protobuf, octet-stream, or binary payloads)
         """
         if not raw_bytes:
+            if raise_on_error:
+                raise ValueError("Empty payload received from GTFS feed")
             return []
 
         stripped = raw_bytes.strip()
@@ -309,24 +322,41 @@ class GTFSRealtimeProvider(DisruptionProvider):
         if is_json:
             try:
                 payload = json.loads(raw_bytes.decode("utf-8"))
-                if isinstance(payload, dict):
-                    return self.parse_gtfs_payload(payload)
-                elif isinstance(payload, list):
-                    return self.parse_gtfs_payload({"header": {}, "entity": payload})
-                else:
-                    logger.warning("GTFS Realtime JSON payload is neither object nor array.")
-                    return []
             except Exception as json_err:
                 logger.warning(f"Failed to decode GTFS Realtime JSON: {json_err}")
+                if raise_on_error:
+                    raise ValueError(f"Corrupt GTFS Realtime JSON: {json_err}") from json_err
+                return []
+
+            if isinstance(payload, dict):
+                if "header" not in payload and "entity" not in payload:
+                    if raise_on_error:
+                        raise ValueError("Invalid GTFS Realtime JSON: missing header and entity")
+                    return []
+                return self.parse_gtfs_payload(payload)
+            elif isinstance(payload, list):
+                return self.parse_gtfs_payload({"header": {}, "entity": payload})
+            else:
+                logger.warning("GTFS Realtime JSON payload is neither object nor array.")
+                if raise_on_error:
+                    raise ValueError("GTFS Realtime JSON payload is neither object nor array.")
                 return []
 
         # Attempt Protocol Buffers decoding
         try:
             feed_dict = decode_gtfs_feed(raw_bytes)
-            return self.parse_gtfs_payload(feed_dict)
         except Exception as pb_err:
             logger.warning(f"Failed to decode GTFS Realtime Protobuf payload: {pb_err}")
+            if raise_on_error:
+                raise ValueError(f"Corrupt GTFS Realtime Protobuf: {pb_err}") from pb_err
             return []
+
+        if not feed_dict.get("header") and not feed_dict.get("entity"):
+            if raise_on_error:
+                raise ValueError("Invalid GTFS Realtime Protobuf: missing header and entity")
+            return []
+
+        return self.parse_gtfs_payload(feed_dict)
 
     def parse_gtfs_payload(self, data: dict[str, Any]) -> list[DisruptionEvent]:
         """

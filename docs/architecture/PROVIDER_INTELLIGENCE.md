@@ -167,3 +167,56 @@ The user interface (`frontend/src/components/disruption/ProviderIntelligencePane
   - `ESTIMATED IMPACT — BASED ON PROVIDER INCIDENT`
   - `STALE PROVIDER OBSERVATION — VERIFY BEFORE TRAVEL`
   - `BLOCKED — credentials unavailable (commercial TOMTOM_API_KEY required)`
+
+---
+
+## 9. Milestone M3.8.3 Remediation & Protocol Conformance
+
+### 9.1 TomTom Connectivity State Machine Hardening
+Prior to Milestone M3.8.3, `TomTomOrbisTrafficProvider.get_connectivity_status()` returned `"available"` immediately whenever configured, even before any live network handshake had succeeded.
+
+In Milestone M3.8.3, the provider lifecycle enforces a verified four-phase state machine:
+1. **Unconfigured**: `TOMTOM_TRAFFIC_ENABLED=False` or `TOMTOM_API_KEY` absent $\rightarrow$ status `"unconfigured"`.
+2. **Configured, Unverified**: `TOMTOM_API_KEY` present but `_last_successful_request is None` $\rightarrow$ status `"unknown"`, notice `"Configured — awaiting initial live connection verification."`, provenance `"unknown"`. `is_available()` remains `True` so the provider is permitted to execute its initial handshake.
+3. **Operational**: Valid HTTP 200 response parsed $\rightarrow$ status `"available"`, notice `"Connected to TomTom Orbis Traffic API v2..."`, provenance `"provider_live"`.
+4. **Degraded / Rate Limited**: 3 consecutive network failures trigger `"degraded"`; HTTP 429 triggers `"rate_limited"`. A subsequent valid HTTP 200 resets `consecutive_failure_count` to zero and restores `"available"` status.
+
+### 9.2 Official GTFS-Realtime Protocol Buffers Tag Conformance
+KogniSync's zero-dependency pure-Python Protocol Buffers decoder and encoder (`gtfs_protobuf.py`) conforms strictly to official Google Transit `gtfs-realtime.proto` tag definitions:
+
+| Message | Field Name | Official Tag | Wire Type | Type |
+| :--- | :--- | :--- | :--- | :--- |
+| **TripDescriptor** | `trip_id` | **1** | WIRE_LENGTH_DELIMITED | string |
+| | `start_time` | **2** | WIRE_LENGTH_DELIMITED | string |
+| | `start_date` | **3** | WIRE_LENGTH_DELIMITED | string |
+| | `schedule_relationship` | **4** | WIRE_VARINT | enum |
+| | `route_id` | **5** | WIRE_LENGTH_DELIMITED | string |
+| | `direction_id` | **6** | WIRE_VARINT | uint32 |
+| **StopTimeUpdate** | `stop_sequence` | **1** | WIRE_VARINT | uint32 |
+| | `arrival` | **2** | WIRE_LENGTH_DELIMITED | StopTimeEvent |
+| | `departure` | **3** | WIRE_LENGTH_DELIMITED | StopTimeEvent |
+| | `stop_id` | **4** | WIRE_LENGTH_DELIMITED | string |
+| | `schedule_relationship` | **5** | WIRE_VARINT | enum |
+| **TripUpdate** | `trip` | **1** | WIRE_LENGTH_DELIMITED | TripDescriptor |
+| | `stop_time_update` | **2** | WIRE_LENGTH_DELIMITED | repeated StopTimeUpdate |
+| | `vehicle` | **3** | WIRE_LENGTH_DELIMITED | VehicleDescriptor |
+| | `timestamp` | **4** | WIRE_VARINT | uint64 |
+| | `delay` | **5** | WIRE_VARINT | int32 |
+| **VehiclePosition** | `trip` | **1** | WIRE_LENGTH_DELIMITED | TripDescriptor |
+| | `position` | **2** | WIRE_LENGTH_DELIMITED | Position |
+| | `current_stop_sequence`| **3** | WIRE_VARINT | uint32 |
+| | `current_status` | **4** | WIRE_VARINT | enum |
+| | `timestamp` | **5** | WIRE_VARINT | uint64 |
+| | `congestion_level` | **6** | WIRE_VARINT | enum |
+| | `stop_id` | **7** | WIRE_LENGTH_DELIMITED | string |
+| | `vehicle` | **8** | WIRE_LENGTH_DELIMITED | VehicleDescriptor |
+| | `occupancy_status` | **9** | WIRE_VARINT | enum |
+| **VehicleDescriptor** | `id` | **1** | WIRE_LENGTH_DELIMITED | string |
+| | `label` | **2** | WIRE_LENGTH_DELIMITED | string |
+| | `license_plate` | **3** | WIRE_LENGTH_DELIMITED | string |
+
+### 9.3 Corrupt Feed False Success Prevention
+In `GTFSRealtimeProvider.fetch_disruptions()`:
+- Payloads are decoded and validated **before** calling `_record_success()`.
+- HTTP 200 responses containing truncated varints, truncated length-delimited fields, unsupported wire types, or invalid JSON invoke `_record_failure(200, ...)` without updating `_last_successful_request` or resetting the failure counter.
+- Valid empty feeds (valid header, 0 entities) record genuine success and transition the provider to `"available"`.
