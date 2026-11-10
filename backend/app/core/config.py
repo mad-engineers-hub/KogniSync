@@ -45,16 +45,38 @@ class Settings(BaseSettings):
     VALHALLA_TIMEOUT_SECONDS: float = 5.0
     VALHALLA_ALLOW_LOCALHOST: bool = False
 
+    # TomTom Orbis Traffic API v2 Configuration (Real Road Incidents - Milestone M3.8)
+    TOMTOM_API_KEY: str | None = None
+    TRAFFIC_INCIDENT_API_KEY: str | None = None  # Backwards-compatible alias
+    TOMTOM_TRAFFIC_ENABLED: bool = True
+    TOMTOM_BASE_URL: str = "https://api.tomtom.com/maps/orbis/traffic/incidents/details"
+    TOMTOM_TIMEOUT_SECONDS: float = 3.0
+    TOMTOM_CONNECT_TIMEOUT_SECONDS: float = 1.5
+    TOMTOM_MAX_RETRIES: int = 2
+    TOMTOM_MAX_REQUESTS_PER_ASSESSMENT: int = 5
+
+    # GTFS Realtime Configuration (Milestone M3.8)
+    GTFS_REALTIME_ENABLED: bool = False
+    GTFS_REALTIME_FEED_URL: str | None = None
+    GTFS_REALTIME_API_KEY: str | None = None
+    GTFS_REALTIME_TIMEOUT_SECONDS: float = 5.0
+    GTFS_REALTIME_ALLOW_HTTP: bool = False  # Strict HTTPS enforced by default (SSRF safeguard)
+
+    # Data Freshness Thresholds (seconds) (Milestone M3.8)
+    FRESHNESS_ROAD_INCIDENT_SECONDS: int = 1800       # 30 min fresh threshold
+    FRESHNESS_SERVICE_ALERT_SECONDS: int = 3600       # 60 min fresh threshold
+    FRESHNESS_TRIP_UPDATE_SECONDS: int = 300          # 5 min fresh threshold
+    FRESHNESS_VEHICLE_POSITION_SECONDS: int = 60      # 1 min fresh threshold
+
     @model_validator(mode="after")
-    def validate_valhalla_production_config(self) -> "Settings":
-        """
-        Ensure production does not silently assume http://localhost:8002 is a reachable external Valhalla service.
-        In production:
-        1. If VALHALLA_BASE_URL points to localhost/loopback, VALHALLA_ENABLED is automatically disabled
-           unless VALHALLA_ALLOW_LOCALHOST is explicitly set to True (e.g. for sidecar container deployments).
-        2. If VALHALLA_BASE_URL points to an external routing service, VALHALLA_ENABLED remains enabled
-           unless explicitly set to False.
-        """
+    def validate_provider_configurations(self) -> "Settings":
+        # Synchronize TOMTOM_API_KEY and legacy TRAFFIC_INCIDENT_API_KEY alias
+        if not self.TOMTOM_API_KEY and self.TRAFFIC_INCIDENT_API_KEY:
+            self.TOMTOM_API_KEY = self.TRAFFIC_INCIDENT_API_KEY
+        elif self.TOMTOM_API_KEY and not self.TRAFFIC_INCIDENT_API_KEY:
+            self.TRAFFIC_INCIDENT_API_KEY = self.TOMTOM_API_KEY
+
+        # Valhalla localhost safeguard
         is_localhost = any(
             h in (self.VALHALLA_BASE_URL or "").lower()
             for h in ("localhost", "127.0.0.1", "0.0.0.0", "::1")

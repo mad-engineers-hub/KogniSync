@@ -116,9 +116,21 @@ export const DisruptionBanner: React.FC<DisruptionBannerProps> = ({
                 <span className="px-2 py-0.5 rounded-full bg-slate-900 text-amber-300 text-[10px] font-bold font-mono tracking-wider">
                   SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA
                 </span>
-              ) : (
+              ) : assessment.notice?.includes('STALE') ? (
+                <span className="px-2 py-0.5 rounded-full bg-amber-800 text-amber-100 text-[10px] font-bold font-mono">
+                  STALE PROVIDER OBSERVATION — VERIFY BEFORE TRAVEL
+                </span>
+              ) : assessment.notice?.includes('AGING') ? (
+                <span className="px-2 py-0.5 rounded-full bg-amber-600 text-white text-[10px] font-bold font-mono">
+                  AGING PROVIDER OBSERVATION — VERIFY BEFORE TRAVEL
+                </span>
+              ) : assessment.provenance === 'provider_live' ? (
                 <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold font-mono">
-                  LIVE PROVIDER FEED
+                  LIVE PROVIDER DATA — TomTom Orbis v2
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-800 text-[10px] font-bold font-mono">
+                  ESTIMATED IMPACT — BASED ON PROVIDER INCIDENT
                 </span>
               )}
             </div>

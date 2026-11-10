@@ -105,13 +105,33 @@ class JourneyRecoveryEngine:
             if preferred_arrival_before and cand_journey.arrival_time:
                 cand_arr_str = str(cand_journey.arrival_time)
                 pref_arr_str = str(preferred_arrival_before)
-                cand_time = cand_arr_str.split("T")[1][:5] if "T" in cand_arr_str else cand_arr_str[:5]
-                pref_time = pref_arr_str.split("T")[1][:5] if "T" in pref_arr_str else pref_arr_str[:5]
-                if cand_time > pref_time:
-                    is_feasible = False
-                    rejection_reasons.append(
-                        f"Arrival {cand_time} is later than preferred deadline {pref_time}."
-                    )
+                try:
+                    cand_dt = datetime.fromisoformat(cand_arr_str.replace("Z", "+00:00"))
+                    if "T" in pref_arr_str or "-" in pref_arr_str:
+                        pref_dt = datetime.fromisoformat(pref_arr_str.replace("Z", "+00:00"))
+                        if cand_dt > pref_dt:
+                            is_feasible = False
+                            rejection_reasons.append(
+                                f"Arrival {cand_dt.isoformat()} is later than preferred deadline {pref_dt.isoformat()}."
+                            )
+                    else:
+                        cand_time = cand_dt.strftime("%H:%M")
+                        pref_time = pref_arr_str[:5]
+                        journey_dep_str = str(journey.departure_time or journey.segments[0].departure_time)
+                        journey_dep_dt = datetime.fromisoformat(journey_dep_str.replace("Z", "+00:00"))
+                        if cand_dt.date() > journey_dep_dt.date() or cand_time > pref_time:
+                            is_feasible = False
+                            rejection_reasons.append(
+                                f"Arrival {cand_time} is later than preferred deadline {pref_time}."
+                            )
+                except Exception:
+                    cand_time = cand_arr_str.split("T")[1][:5] if "T" in cand_arr_str else cand_arr_str[:5]
+                    pref_time = pref_arr_str.split("T")[1][:5] if "T" in pref_arr_str else pref_arr_str[:5]
+                    if cand_time > pref_time:
+                        is_feasible = False
+                        rejection_reasons.append(
+                            f"Arrival {cand_time} is later than preferred deadline {pref_time}."
+                        )
 
             if is_feasible:
                 feasible_candidates.append((cand_journey, strategy, title, tradeoffs))

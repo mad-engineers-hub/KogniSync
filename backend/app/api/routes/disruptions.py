@@ -57,13 +57,27 @@ async def get_disruptions(
     corridor: Optional[str] = Query(None, description="Optional corridor filter (e.g. 'NH-75', 'Chennai-Bengaluru')"),
     scenario: Optional[str] = Query(None, description="Optional demonstration scenario (e.g. 'shiradi_ghat', 'silk_board')"),
     include_simulated: bool = Query(True, description="Whether to include simulated demo disruptions"),
+    bbox: Optional[str] = Query(None, description="Optional bounding box 'minLon,minLat,maxLon,maxLat'"),
 ) -> list[DisruptionEvent]:
     """Returns active disruption incidents matching filters, with explicit provenance tagging."""
+    parsed_bbox: tuple[float, float, float, float] | None = None
+    if bbox:
+        try:
+            parts = [float(p.strip()) for p in bbox.split(",")]
+            if len(parts) == 4:
+                parsed_bbox = (parts[0], parts[1], parts[2], parts[3])
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid bbox format. Expected 'minLon,minLat,maxLon,maxLat' with valid floats.",
+            )
+
     try:
         events = await disruption_service.get_active_disruptions(
             corridor=corridor,
             scenario=scenario,
             include_simulated=include_simulated,
+            bbox=parsed_bbox,
         )
         return events
     except Exception as e:

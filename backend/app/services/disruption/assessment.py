@@ -149,15 +149,29 @@ class JourneyImpactAssessor:
             provenance=provenance,
         )
 
-        notice = (
-            "SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA"
-            if is_any_simulated
-            else (
-                "Verified live provider feed"
-                if is_any_live
-                else "Deterministic corridor estimate"
-            )
-        )
+        has_aging = any(getattr(e, "data_freshness_status", None) == "aging" for e in all_matched_events)
+        has_stale = any(getattr(e, "data_freshness_status", None) == "stale" for e in all_matched_events)
+
+        if is_any_simulated:
+            notice = "SIMULATED DISRUPTION — NOT LIVE PROVIDER DATA"
+        elif has_stale:
+            notice = "STALE PROVIDER OBSERVATION — VERIFY BEFORE TRAVEL"
+        elif has_aging:
+            notice = "AGING PROVIDER OBSERVATION — VERIFY BEFORE TRAVEL"
+        elif is_any_live:
+            notice = "ESTIMATED IMPACT — BASED ON LIVE PROVIDER INCIDENT"
+        else:
+            notice = "Deterministic corridor estimate"
+
+        # Calculate max freshness age in seconds across matched events
+        max_age_seconds = 0
+        now_dt = datetime.now(timezone.utc)
+        for ev in all_matched_events:
+            ev_dt = parse_iso_datetime(ev.observed_at)
+            if ev_dt:
+                age_s = max(0, int((now_dt - ev_dt).total_seconds()))
+                if age_s > max_age_seconds:
+                    max_age_seconds = age_s
 
         return JourneyDisruptionAssessment(
             journey_id=journey.id,
@@ -170,9 +184,9 @@ class JourneyImpactAssessor:
             segment_impacts=segment_impacts,
             active_disruptions=all_matched_events,
             summary=summary,
-            evaluated_at=datetime.now(timezone.utc).isoformat(),
+            evaluated_at=now_dt.isoformat(),
             provenance=provenance,
-            data_freshness_seconds=15,
+            data_freshness_seconds=max_age_seconds if all_matched_events else 0,
             notice=notice,
         )
 

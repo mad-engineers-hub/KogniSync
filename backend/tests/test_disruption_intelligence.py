@@ -7,6 +7,7 @@ connection risk calculations, Pareto recovery recommendations, and inventory imm
 """
 import pytest
 from datetime import datetime, timezone, timedelta
+from unittest.mock import patch
 from app.services.disruption.schemas import (
     DisruptionEvent,
     DisruptedSegmentImpact,
@@ -275,10 +276,11 @@ def test_provider_capability_discovery():
     assert "cab" in cap.supported_modes
     assert "train" in cap.supported_modes
 
-    live_provider = LiveTrafficIncidentProvider(api_key=None)
-    live_cap = live_provider.get_capabilities()
-    assert live_cap.is_available is False
-    assert "BLOCKED — credentials unavailable" in live_cap.status_notice
+    with patch("app.core.config.settings.TOMTOM_API_KEY", None):
+        live_provider = LiveTrafficIncidentProvider(api_key=None)
+        live_cap = live_provider.get_capabilities()
+        assert live_cap.is_available is False
+        assert "BLOCKED — credentials unavailable" in live_cap.status_notice
 
 
 # --- 2. Route Matching Tests ---
@@ -576,40 +578,41 @@ def test_api_disruptions_assess_and_recover(sample_multimodal_journey):
     client = TestClient(app)
     journey_dict = sample_multimodal_journey.model_dump(by_alias=True)
 
-    # POST /api/v1/disruptions/assess
-    assess_payload = {
-        "journey": journey_dict,
-        "includeSimulated": True,
-        "scenario": "shiradi_ghat",
-    }
-    res_assess = client.post("/api/v1/disruptions/assess", json=assess_payload)
-    assert res_assess.status_code == 200
-    data_assess = res_assess.json()
-    assert data_assess["isDisrupted"] is True
-    assert data_assess["highestSeverity"] == "critical"
-    assert data_assess["totalEstimatedDelayMinutes"] == 180
+    with patch("app.core.config.settings.TOMTOM_TRAFFIC_ENABLED", False):
+        # POST /api/v1/disruptions/assess
+        assess_payload = {
+            "journey": journey_dict,
+            "includeSimulated": True,
+            "scenario": "shiradi_ghat",
+        }
+        res_assess = client.post("/api/v1/disruptions/assess", json=assess_payload)
+        assert res_assess.status_code == 200
+        data_assess = res_assess.json()
+        assert data_assess["isDisrupted"] is True
+        assert data_assess["highestSeverity"] == "critical"
+        assert data_assess["totalEstimatedDelayMinutes"] == 180
 
-    # POST /api/v1/disruptions/recover
-    recover_payload = {
-        "journey": journey_dict,
-        "budgetMax": 2500.0,
-        "includeSimulated": True,
-        "scenario": "shiradi_ghat",
-    }
-    res_recover = client.post("/api/v1/disruptions/recover", json=recover_payload)
-    assert res_recover.status_code == 200
-    data_recover = res_recover.json()
-    assert data_recover["feasibleAlternativesFound"] is True
-    assert len(data_recover["recommendations"]) > 0
-    assert data_recover["primaryRecommendation"]["manualRebookingRequired"] is True
+        # POST /api/v1/disruptions/recover
+        recover_payload = {
+            "journey": journey_dict,
+            "budgetMax": 2500.0,
+            "includeSimulated": True,
+            "scenario": "shiradi_ghat",
+        }
+        res_recover = client.post("/api/v1/disruptions/recover", json=recover_payload)
+        assert res_recover.status_code == 200
+        data_recover = res_recover.json()
+        assert data_recover["feasibleAlternativesFound"] is True
+        assert len(data_recover["recommendations"]) > 0
+        assert data_recover["primaryRecommendation"]["manualRebookingRequired"] is True
 
-    # POST /api/v1/journeys/{id}/assess-disruptions alias
-    res_jny_assess = client.post(
-        f"/api/v1/journeys/{sample_multimodal_journey.id}/assess-disruptions",
-        json=assess_payload,
-    )
-    assert res_jny_assess.status_code == 200
-    assert res_jny_assess.json()["isDisrupted"] is True
+        # POST /api/v1/journeys/{id}/assess-disruptions alias
+        res_jny_assess = client.post(
+            f"/api/v1/journeys/{sample_multimodal_journey.id}/assess-disruptions",
+            json=assess_payload,
+        )
+        assert res_jny_assess.status_code == 200
+        assert res_jny_assess.json()["isDisrupted"] is True
 
 
 # --- 6. M3.7.1 Targeted Feasibility, Freshness & Tolerance Tests ---
