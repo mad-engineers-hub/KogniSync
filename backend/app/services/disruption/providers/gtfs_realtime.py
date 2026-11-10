@@ -19,6 +19,9 @@ import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.services.disruption.providers.base import DisruptionProvider
+from app.services.disruption.providers.gtfs_feed_client import (
+    validate_feed_url_ssrf_safety,
+)
 from app.services.disruption.providers.gtfs_protobuf import (
     CAUSE_MAP,
     EFFECT_MAP,
@@ -36,76 +39,16 @@ from app.services.journey.schemas import CoordinatesSchema, TransportMode
 
 MAX_GTFS_FEED_AGE_SECONDS = 600  # 10 minutes maximum acceptable feed age
 
-DISALLOWED_HOSTNAMES = {
-    "localhost",
-    "metadata.google.internal",
-    "instance-data",
-}
-
-PRIVATE_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),      # Loopback
-    ipaddress.ip_network("10.0.0.0/8"),       # Private RFC 1918
-    ipaddress.ip_network("172.16.0.0/12"),    # Private RFC 1918
-    ipaddress.ip_network("192.168.0.0/16"),   # Private RFC 1918
-    ipaddress.ip_network("169.254.0.0/16"),   # Link-local / Cloud metadata (169.254.169.254)
-    ipaddress.ip_network("0.0.0.0/8"),        # Current network
-    ipaddress.ip_network("::1/128"),          # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),         # IPv6 unique local
-    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
-]
-
 
 def is_ssrf_safe_url(url: str, allow_http: bool = False) -> tuple[bool, str]:
     """
     Validates that a GTFS feed URL is SSRF-safe:
     1. Enforces HTTPS (unless allow_http=True in test environments).
     2. Disallows loopback, cloud metadata, and private IP addresses.
-    3. Resolves hostname to ensure DNS does not resolve to private/internal IPs.
+    3. Resolves hostname to ensure DNS does not resolve to private/internal IPs (DNS rebinding prevention).
     """
-    if not url:
-        return False, "Feed URL is empty"
-    try:
-        parsed = urllib.parse.urlparse(url)
-    except Exception as e:
-        return False, f"Invalid URL structure: {e}"
-
-    if parsed.scheme.lower() not in ("https", "http"):
-        return False, f"Unsupported scheme: '{parsed.scheme}'. Only HTTPS is permitted."
-    if parsed.scheme.lower() == "http" and not allow_http:
-        return False, "Insecure HTTP scheme. Official feeds must use HTTPS."
-
-    hostname = (parsed.hostname or "").lower().strip()
-    if not hostname:
-        return False, "URL hostname is missing"
-
-    if hostname in DISALLOWED_HOSTNAMES:
-        return False, f"SSRF Protection: Hostname '{hostname}' is forbidden."
-
-    # Reserved test domains (RFC 2606 / RFC 6761) permitted for testing without public DNS
-    test_domains = (".example", ".example.gov", ".example.com", ".example.org", ".test")
-    if any(hostname == t[1:] or hostname.endswith(t) for t in test_domains):
-        return True, "Safe test domain"
-
-    try:
-        direct_ip = ipaddress.ip_address(hostname)
-        for net in PRIVATE_NETWORKS:
-            if direct_ip in net:
-                return False, f"SSRF Protection: IP address '{hostname}' is within private/internal range."
-    except ValueError:
-        try:
-            addr_info = socket.getaddrinfo(hostname, None)
-            for _, _, _, _, sockaddr in addr_info:
-                ip_str = sockaddr[0]
-                resolved_ip = ipaddress.ip_address(ip_str)
-                for net in PRIVATE_NETWORKS:
-                    if resolved_ip in net:
-                        return False, f"SSRF Protection: Host '{hostname}' resolves to private/internal IP {ip_str}."
-        except socket.gaierror as dns_err:
-            return False, f"DNS resolution failed for host '{hostname}': {dns_err}"
-        except Exception:
-            return False, f"Host validation failed for '{hostname}'"
-
-    return True, "Safe"
+    is_safe, reason, _ = validate_feed_url_ssrf_safety(url, allow_http=allow_http, resolve_dns=True)
+    return is_safe, reason
 
 
 class GTFSRealtimeProvider(DisruptionProvider):
@@ -121,6 +64,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
         api_key: str | None = None,
         timeout_seconds: float | None = None,
         allow_http: bool | None = None,
+        registry: Any | None = None,
     ):
         self._feed_url = feed_url or settings.GTFS_REALTIME_FEED_URL
         self._api_key = api_key or settings.GTFS_REALTIME_API_KEY
@@ -128,6 +72,11 @@ class GTFSRealtimeProvider(DisruptionProvider):
         self._allow_http = (
             allow_http if allow_http is not None else settings.GTFS_REALTIME_ALLOW_HTTP
         )
+        if registry is not None:
+            self.registry = registry
+        else:
+            from app.services.disruption.providers.gtfs_registry import gtfs_feed_registry
+            self.registry = gtfs_feed_registry
 
         # Operational metrics
         self._last_successful_request: str | None = None
@@ -477,6 +426,21 @@ class GTFSRealtimeProvider(DisruptionProvider):
         title = header_text or f"Transit Alert: {event_type.replace('_', ' ').title()}"
         description = desc_text or f"Cause: {cause}; Effect: {effect}"
 
+        # Extract informed entities (routes, stops, trips)
+        informed = alert.get("informed_entity") or alert.get("informedEntity") or []
+        route_ids: list[str] = []
+        stop_ids: list[str] = []
+        trip_ids: list[str] = []
+        if isinstance(informed, list):
+            for inf in informed:
+                if isinstance(inf, dict):
+                    if inf.get("route_id") or inf.get("routeId"):
+                        route_ids.append(str(inf.get("route_id") or inf.get("routeId")))
+                    if inf.get("stop_id") or inf.get("stopId"):
+                        stop_ids.append(str(inf.get("stop_id") or inf.get("stopId")))
+                    if inf.get("trip_id") or inf.get("tripId"):
+                        trip_ids.append(str(inf.get("trip_id") or inf.get("tripId")))
+
         return DisruptionEvent(
             id=f"gtfs-alert-{entity_id}",
             source="gtfs_realtime",
@@ -497,6 +461,9 @@ class GTFSRealtimeProvider(DisruptionProvider):
             provenance="provider_live",
             confidence=0.95,
             estimated_delay_minutes=20 if severity in ("high", "critical") else 5,
+            route_ids=list(set(route_ids)),
+            stop_ids=list(set(stop_ids)),
+            trip_ids=list(set(trip_ids)),
         )
 
     def _parse_trip_update_entity(
@@ -535,18 +502,29 @@ class GTFSRealtimeProvider(DisruptionProvider):
                 provenance="provider_live",
                 confidence=0.99,
                 estimated_delay_minutes=60,
+                route_ids=[route_id] if route_id else [],
+                trip_ids=[trip_id] if trip_id else [],
             )
 
         # Stop time updates
         stop_updates = tu.get("stop_time_update") or tu.get("stopTimeUpdate") or []
         max_delay_sec = 0
+        stop_ids: list[str] = []
         if isinstance(stop_updates, list):
             for stu in stop_updates:
+                sid = stu.get("stop_id") or stu.get("stopId")
+                if sid:
+                    stop_ids.append(str(sid))
                 arr = stu.get("arrival", {})
                 dep = stu.get("departure", {})
                 d = arr.get("delay") or dep.get("delay")
                 if isinstance(d, (int, float)) and d > max_delay_sec:
                     max_delay_sec = int(d)
+
+        # Top-level delay field (GTFS-RT protobuf TripUpdate field 5)
+        tu_delay = tu.get("delay")
+        if isinstance(tu_delay, (int, float)) and int(tu_delay) > max_delay_sec:
+            max_delay_sec = int(tu_delay)
 
         # Only create event if delay is meaningful (>= 5 minutes)
         if max_delay_sec < 300:
@@ -575,6 +553,9 @@ class GTFSRealtimeProvider(DisruptionProvider):
             confidence=0.95,
             estimated_delay_minutes=delay_minutes,
             delay_seconds=max_delay_sec,
+            route_ids=[route_id] if route_id else [],
+            stop_ids=list(set(stop_ids)),
+            trip_ids=[trip_id] if trip_id else [],
         )
 
     def _parse_vehicle_entity(
@@ -631,6 +612,8 @@ class GTFSRealtimeProvider(DisruptionProvider):
             provenance="provider_live",
             confidence=0.95,
             estimated_delay_minutes=15 if severity == "critical" else 8,
+            route_ids=[route_id] if route_id else [],
+            trip_ids=[trip_id] if trip_id else [],
         )
 
     def _extract_translated_string(self, obj: Any) -> str:

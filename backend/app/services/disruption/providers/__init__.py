@@ -6,6 +6,11 @@ from app.services.disruption.providers.simulation import SimulatedDisruptionProv
 from app.services.disruption.providers.live_traffic import LiveTrafficIncidentProvider
 from app.services.disruption.providers.tomtom_orbis import TomTomOrbisTrafficProvider
 from app.services.disruption.providers.gtfs_realtime import GTFSRealtimeProvider
+from app.services.disruption.providers.gtfs_feed_client import SecureGTFSFeedClient
+from app.services.disruption.providers.gtfs_registry import (
+    GTFSFeedRegistry,
+    gtfs_feed_registry,
+)
 from app.services.disruption.providers.manager import (
     DisruptionProviderRegistry,
     disruption_registry,
@@ -17,6 +22,9 @@ __all__ = [
     "LiveTrafficIncidentProvider",
     "TomTomOrbisTrafficProvider",
     "GTFSRealtimeProvider",
+    "SecureGTFSFeedClient",
+    "GTFSFeedRegistry",
+    "gtfs_feed_registry",
     "DisruptionProviderRegistry",
     "disruption_registry",
 ]

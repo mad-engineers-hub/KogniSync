@@ -14,9 +14,12 @@ from app.services.disruption.schemas import (
     DisruptionProviderCapability,
     DisruptionRecoverRequest,
     DisruptionRecoveryResponse,
+    GTFSFeedListResponse,
+    GTFSFeedStatus,
     JourneyDisruptionAssessment,
 )
 from app.services.disruption.service import disruption_service
+from app.services.disruption.providers.gtfs_registry import gtfs_feed_registry
 
 router = APIRouter(prefix="/api/v1/disruptions", tags=["Disruption Intelligence"])
 
@@ -46,6 +49,35 @@ async def get_disruption_health():
 async def get_disruption_providers() -> list[DisruptionProviderCapability]:
     """Returns capabilities, supported transport modes, and availability status of all disruption adapters."""
     return disruption_service.get_provider_capabilities()
+
+
+@router.get(
+    "/providers/feeds",
+    response_model=GTFSFeedListResponse,
+    summary="Inspect sanitized operational status of all registered GTFS Realtime feeds",
+)
+async def get_registered_gtfs_feeds() -> GTFSFeedListResponse:
+    """
+    Returns sanitized operational status and diagnostics for registered public-transit GTFS feeds.
+    Strictly masks server-side tokens and sensitive endpoint query parameters.
+    """
+    statuses = gtfs_feed_registry.get_feed_statuses()
+    operational_count = sum(1 for s in statuses if s.connectivity_status == "available")
+    configured_count = sum(1 for s in statuses if s.enabled and s.connectivity_status != "unconfigured")
+
+    has_live = operational_count > 0
+    notice = (
+        f"Verified {operational_count} operational transit feed(s)."
+        if has_live
+        else "No live GTFS Realtime feeds are currently verified and operational."
+    )
+
+    return GTFSFeedListResponse(
+        feeds=statuses,
+        total_configured=configured_count,
+        total_operational=operational_count,
+        notice=notice,
+    )
 
 
 @router.get(

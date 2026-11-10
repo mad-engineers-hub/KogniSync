@@ -220,3 +220,36 @@ In `GTFSRealtimeProvider.fetch_disruptions()`:
 - Payloads are decoded and validated **before** calling `_record_success()`.
 - HTTP 200 responses containing truncated varints, truncated length-delimited fields, unsupported wire types, or invalid JSON invoke `_record_failure(200, ...)` without updating `_last_successful_request` or resetting the failure counter.
 - Valid empty feeds (valid header, 0 entities) record genuine success and transition the provider to `"available"`.
+
+---
+
+## 10. Milestone M3.9: Authorized GTFS-RT Multi-Feed Registry & Ingestion Engine
+
+Milestone M3.9 advances KogniSync's public transit intelligence layer from single-feed parsing into a resilient, production-ready, multi-feed GTFS Realtime registry with enterprise-grade SSRF defenses and lifecycle management.
+
+### 10.1 Regional Transit Feed Landscape & Truthful Onboarding Posture
+- **Authoritative Transit Source for Bengaluru / Karnataka**: Investigated official open data platforms across Karnataka (BMTC, BMRCL, KSRTC). Real-time telemetry is curated under the **India Urban Data Exchange (IUDX - IISc Bengaluru & Smart Cities Mission)** at `https://opendata.benscl.com/` and `https://catalog.iudx.org.in/`.
+- **Authorization & Access Gate**: Ingestion requires consumer registration, transit operator vetting, and JWT bearer token issuance from the IUDX Auth Server (`/auth/v1/token`).
+- **Truthful Status Invariant**: When no authorized live credentials are provided in the runtime environment (`.env`), feeds report `unconfigured` or `pending_credentials`. The system never manufactures transit incidents or falsely claims live status.
+
+### 10.2 Defense-in-Depth SSRF & Ingestion Security Architecture
+Implemented in `backend/app/services/disruption/providers/gtfs_feed_client.py`:
+1. **Private & Loopback IP Blacklisting**: Prohibits requests resolving to RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback (`127.0.0.0/8`, `::1`), link-local, multicast, and cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`).
+2. **Pre-Handshake DNS Rebinding Verification**: Resolves domain names via `socket.getaddrinfo()` prior to connection establishment; rejects any domain that resolves to a prohibited internal IP address.
+3. **Safe Redirect Enforcement**: Redirects are not blindly followed. The client validates each intermediate and final redirect destination against SSRF rules before making the next hop.
+4. **Strict URL Sanitization**: Function `sanitize_feed_url` strips sensitive query parameters (`key`, `token`, `secret`, `auth`, `password`) replacing them with `[REDACTED]` in all logs and API responses.
+5. **Resource Bounding & Rate Limiting**:
+   - `GTFS_MAX_RESPONSE_BYTES = 5,242,880` (5 MB hard streaming limit).
+   - Adaptive exponential backoff with full jitter and `Retry-After` header extraction (HTTP 429 / 503).
+   - In-flight request deduplication via `asyncio.Lock` per feed ID, preventing cache-stampede load on external transit servers.
+
+### 10.3 Feed Registry Lifecycle & Grace Period Engine
+Implemented in `backend/app/services/disruption/providers/gtfs_registry.py`:
+- **State Machine**: Feeds progress predictably through `unconfigured` $\to$ `configured` $\to$ `unknown` $\to$ `available` $\leftrightarrow$ `degraded` / `rate_limited` / `blocked` / `stale` / `disabled`.
+- **Entity Lifecycle**: Tracks entities across polling intervals (`NEW` $\to$ `ACTIVE` $\to$ `ABSENT` $\to$ `RESOLVED`).
+- **Absence Grace Period (`GTFS_ABSENCE_GRACE_PERIOD_SECONDS = 300s`)**: Temporary disappearance of an active service alert or trip delay in a single polling response is held in grace state for up to 5 minutes to prevent disruption flickering caused by transient network drops or feed rebalancing.
+
+### 10.4 Multi-Feed Diagnostic API & Frontend Visibility
+- **Endpoint**: `GET /api/v1/disruptions/providers/feeds` returns `GTFSFeedListResponse` with sanitized endpoints, authorization types, entity counts, latency, and status badges.
+- **UI Component**: `frontend/src/components/disruption/ProviderIntelligencePanel.tsx` renders a dedicated GTFS Realtime Feed Registry diagnostic card showing real-time operator connectivity.
+

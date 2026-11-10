@@ -55,12 +55,18 @@ class Settings(BaseSettings):
     TOMTOM_MAX_RETRIES: int = 2
     TOMTOM_MAX_REQUESTS_PER_ASSESSMENT: int = 5
 
-    # GTFS Realtime Configuration (Milestone M3.8)
+    # GTFS Realtime Configuration (Milestone M3.8 & M3.9)
     GTFS_REALTIME_ENABLED: bool = False
     GTFS_REALTIME_FEED_URL: str | None = None
     GTFS_REALTIME_API_KEY: str | None = None
     GTFS_REALTIME_TIMEOUT_SECONDS: float = 5.0
     GTFS_REALTIME_ALLOW_HTTP: bool = False  # Strict HTTPS enforced by default (SSRF safeguard)
+    GTFS_FEEDS_CONFIG_JSON: str | None = None  # Multi-feed configuration JSON string
+    GTFS_MAX_RESPONSE_BYTES: int = 5242880     # 5MB bounded payload limit
+    GTFS_MAX_RETRIES: int = 2
+    GTFS_BACKOFF_BASE_SECONDS: float = 0.5
+    GTFS_CIRCUIT_BREAKER_FAILURES: int = 3
+    GTFS_ABSENCE_GRACE_PERIOD_SECONDS: int = 300  # 5 min grace before resolving temporary absence
 
     # Data Freshness Thresholds (seconds) (Milestone M3.8)
     FRESHNESS_ROAD_INCIDENT_SECONDS: int = 1800       # 30 min fresh threshold

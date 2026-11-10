@@ -7,8 +7,8 @@
  * (TomTom Orbis Traffic v2, GTFS Realtime, Simulation Engine).
  */
 import React, { useState, useEffect } from 'react';
-import { getDisruptionProviders } from '../../api/disruptions';
-import { DisruptionProviderCapability } from '../../types/disruption';
+import { getDisruptionProviders, getGTFSFeeds } from '../../api/disruptions';
+import { DisruptionProviderCapability, GTFSFeedStatus } from '../../types/disruption';
 
 interface ProviderIntelligencePanelProps {
   onRefresh?: () => void;
@@ -20,6 +20,7 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
   className = '',
 }) => {
   const [providers, setProviders] = useState<DisruptionProviderCapability[]>([]);
+  const [gtfsFeeds, setGtfsFeeds] = useState<GTFSFeedStatus[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -29,8 +30,12 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
   const fetchCapabilities = async () => {
     try {
       setError(null);
-      const caps = await getDisruptionProviders();
+      const [caps, feedsRes] = await Promise.all([
+        getDisruptionProviders(),
+        getGTFSFeeds(),
+      ]);
       setProviders(caps);
+      setGtfsFeeds(feedsRes.feeds || []);
       setLastRefreshedAt(new Date());
     } catch (err: any) {
       setError(err?.message || 'Failed to fetch provider health data.');
@@ -236,6 +241,79 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
               </div>
             ))}
           </div>
+
+          {/* GTFS Realtime Feed Registry (Milestone M3.9) */}
+          {gtfsFeeds.length > 0 && (
+            <div className="space-y-2 mt-2 pt-2 border-t border-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800 text-xs font-mono uppercase">
+                  GTFS Realtime Feeds ({gtfsFeeds.length})
+                </span>
+                <span className="text-[10px] font-mono text-slate-500">
+                  {gtfsFeeds.filter((f) => f.connectivityStatus === 'available').length} Operational
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {gtfsFeeds.map((feed) => (
+                  <div
+                    key={feed.feedId}
+                    className="p-2.5 bg-white rounded border border-slate-200 shadow-2xs space-y-1.5"
+                    data-testid={`gtfs-feed-card-${feed.feedId}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <span className="font-semibold text-slate-900 text-xs">{feed.displayName}</span>
+                        <span className="ml-2 text-[10px] font-mono text-slate-500">({feed.operatorName})</span>
+                      </div>
+                      <div className="flex items-center space-x-1.5">
+                        <span
+                          className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-semibold uppercase ${
+                            feed.authorizationStatus === 'authorized'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : feed.authorizationStatus === 'pending_credentials'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                              : 'bg-rose-100 text-rose-800 border border-rose-300'
+                          }`}
+                        >
+                          {feed.authorizationStatus.replace('_', ' ')}
+                        </span>
+                        <span
+                          className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-semibold uppercase ${
+                            feed.connectivityStatus === 'available'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : feed.connectivityStatus === 'rate_limited'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                              : feed.connectivityStatus === 'degraded'
+                              ? 'bg-orange-100 text-orange-800 border border-orange-300'
+                              : 'bg-slate-100 text-slate-700 border border-slate-300'
+                          }`}
+                        >
+                          {feed.connectivityStatus}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] font-mono text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                      Endpoint: {feed.feedUrlSanitized}
+                    </div>
+
+                    <div className="text-[10px] text-slate-600 leading-tight">
+                      {feed.statusNotice}
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-500">
+                      <span>Coverage: {feed.geographicCoverage}</span>
+                      <span>Entities: {feed.entityTypes?.join(', ') || 'alerts, trip_updates'}</span>
+                      {feed.lastResponseLatencyMs !== undefined && feed.lastResponseLatencyMs !== null && (
+                        <span>Latency: {feed.lastResponseLatencyMs}ms</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* User-facing Truth Notice Box */}
           <div className="p-2.5 rounded bg-blue-50 border border-blue-200 text-blue-900 text-[11px] leading-relaxed">

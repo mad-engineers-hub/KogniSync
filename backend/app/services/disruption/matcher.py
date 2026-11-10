@@ -7,7 +7,7 @@ between disruption events and journey route segments without external heavy GIS 
 """
 import math
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Any, Sequence
 from app.core.logging import logger
 from app.services.disruption.schemas import DisruptionEvent
 from app.services.journey.schemas import JourneySegmentSchema
@@ -73,11 +73,15 @@ class MatchedSegmentDisruption:
         match_type: str,
         min_distance_km: float,
         explanation: str,
+        confidence: float | None = None,
+        correlation_metadata: dict[str, Any] | None = None,
     ):
         self.event = event
         self.match_type = match_type
         self.min_distance_km = min_distance_km
         self.explanation = explanation
+        self.confidence = confidence if confidence is not None else getattr(event, "confidence", 1.0)
+        self.correlation_metadata = correlation_metadata
 
 
 class RouteDisruptionMatcher:
@@ -148,6 +152,61 @@ class RouteDisruptionMatcher:
         # 2. Temporal Validity Guard
         if not self.is_temporally_valid(event, segment):
             return None
+
+        # 2A. Direct Route ID Matching (GTFS-RT route descriptor or alert informed entity)
+        if event.route_ids:
+            seg_vehicle = (segment.vehicle_number or "").lower().strip()
+            seg_name = (segment.vehicle_name or "").lower().strip()
+            seg_provider = (segment.provider or "").lower().strip()
+            for r_id in event.route_ids:
+                r_clean = r_id.lower().strip()
+                if (
+                    r_clean in seg_vehicle
+                    or r_clean in seg_name
+                    or r_clean in seg_provider
+                    or seg_vehicle == r_clean
+                ):
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="route_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.98,
+                        explanation=f"Exact route match on route '{r_id}': {event.title}",
+                        correlation_metadata={
+                            "matched_route_id": r_id,
+                            "match_method": "route_id_exact",
+                            "confidence": 0.98,
+                            "provenance": event.provenance,
+                        },
+                    )
+
+        # 2B. Direct Stop ID / Transit Station Matching
+        if event.stop_ids:
+            orig_hub = (getattr(segment.origin, "hub_id", None) or getattr(segment.origin, "id", None) or getattr(segment.origin, "code", None) or "").lower().strip()
+            dest_hub = (getattr(segment.destination, "hub_id", None) or getattr(segment.destination, "id", None) or getattr(segment.destination, "code", None) or "").lower().strip()
+            orig_name = (segment.origin.name or "").lower().strip()
+            dest_name = (segment.destination.name or "").lower().strip()
+            for s_id in event.stop_ids:
+                s_clean = s_id.lower().strip()
+                if s_clean in (orig_hub, dest_hub) or s_clean in orig_name or s_clean in dest_name:
+                    matched_station = (
+                        segment.origin.name
+                        if (s_clean in orig_hub or s_clean in orig_name)
+                        else segment.destination.name
+                    )
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="stop_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.95,
+                        explanation=f"Direct transit stop match at {matched_station} ({s_id}): {event.title}",
+                        correlation_metadata={
+                            "matched_stop_id": s_id,
+                            "match_method": "stop_id_exact",
+                            "confidence": 0.95,
+                            "provenance": event.provenance,
+                        },
+                    )
 
         # 3. Spatial Matching
         event_point = event.point
@@ -243,6 +302,25 @@ class RouteDisruptionMatcher:
             segment.destination.coordinates.lat, segment.destination.coordinates.lng,
         )
         if corridor_dist <= effective_tolerance:
+            if segment.mode == "bus" and event.source != "gtfs_realtime":
+                return MatchedSegmentDisruption(
+                    event=event,
+                    match_type="multimodal_corridor_correlation",
+                    min_distance_km=round(corridor_dist, 2),
+                    confidence=0.90,
+                    explanation=(
+                        f"Multimodal Corridor Correlation: Road disruption on transit route corridor within {corridor_dist:.1f} km "
+                        f"({event.title})"
+                    ),
+                    correlation_metadata={
+                        "corridor_road_event": event.id,
+                        "transit_mode": segment.mode,
+                        "transit_route": segment.vehicle_name,
+                        "match_method": "multimodal_corridor_correlation",
+                        "confidence": 0.90,
+                        "provenance": event.provenance,
+                    },
+                )
             return MatchedSegmentDisruption(
                 event=event,
                 match_type="spatial_corridor",
