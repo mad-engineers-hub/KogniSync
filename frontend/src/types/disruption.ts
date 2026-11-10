@@ -66,7 +66,20 @@ export interface DisruptionEvent {
   roadNumbers?: string[];
   dataFreshnessStatus?: 'fresh' | 'aging' | 'stale' | 'expired' | 'unknown';
   fetchedAt?: string | null;
+  routeIds?: string[];
+  stopIds?: string[];
+  tripIds?: string[];
+  corridorName?: string | null;
+  correlationMetadata?: Record<string, any> | null;
 }
+
+export type DisruptionMatchType =
+  | 'exact_geometry'
+  | 'spatial_corridor'
+  | 'hub_approximate'
+  | 'route_id_exact'
+  | 'stop_id_exact'
+  | 'multimodal_corridor_correlation';
 
 export interface DisruptedSegmentImpact {
   segmentId: string;
@@ -78,7 +91,7 @@ export interface DisruptedSegmentImpact {
   originalArrivalTime: string;
   estimatedArrivalTime: string;
   matchingEvents: DisruptionEvent[];
-  matchType: 'exact_geometry' | 'spatial_corridor' | 'hub_approximate';
+  matchType: DisruptionMatchType;
   transferBufferReductionMinutes: number;
   subsequentTransferRisk: ConnectionRiskLevel;
   explanation: string;
@@ -173,4 +186,50 @@ export interface DisruptionRecoverRequest {
   preferredArrivalBefore?: string | null;
   includeSimulated?: boolean;
   scenario?: string | null;
+}
+
+export type FeedAuthorizationStatus =
+  | 'authorized'
+  | 'pending_credentials'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'exempt_open_access';
+
+export type FeedConnectivityStatus =
+  | 'unconfigured'
+  | 'configured'
+  | 'unknown'
+  | 'available'
+  | 'degraded'
+  | 'rate_limited'
+  | 'blocked'
+  | 'stale'
+  | 'disabled';
+
+export interface GTFSFeedStatus {
+  feedId: string;
+  operatorName: string;
+  displayName: string;
+  geographicCoverage: string;
+  feedUrlSanitized: string;
+  entityTypes: string[];
+  enabled: boolean;
+  authorizationStatus: FeedAuthorizationStatus;
+  connectivityStatus: FeedConnectivityStatus;
+  freshnessStatus: string;
+  lastSuccessfulFetch?: string | null;
+  lastVerifiedTimestamp?: string | null;
+  lastFeedHeaderTimestamp?: number | null;
+  lastErrorClassification?: string | null;
+  lastResponseLatencyMs?: number | null;
+  consecutiveFailureCount: number;
+  entityCounts: Record<string, number>;
+  statusNotice: string;
+}
+
+export interface GTFSFeedListResponse {
+  feeds: GTFSFeedStatus[];
+  totalConfigured: number;
+  totalOperational: number;
+  notice: string;
 }

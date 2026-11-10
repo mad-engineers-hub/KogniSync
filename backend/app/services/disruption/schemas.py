@@ -123,6 +123,31 @@ class DisruptionEvent(BaseModel):
         validation_alias=AliasChoices("road_numbers", "roadNumbers"),
         serialization_alias="roadNumbers",
     )
+    route_ids: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("route_ids", "routeIds"),
+        serialization_alias="routeIds",
+    )
+    stop_ids: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("stop_ids", "stopIds"),
+        serialization_alias="stopIds",
+    )
+    trip_ids: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("trip_ids", "tripIds"),
+        serialization_alias="tripIds",
+    )
+    corridor_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("corridor_name", "corridorName"),
+        serialization_alias="corridorName",
+    )
+    correlation_metadata: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("correlation_metadata", "correlationMetadata"),
+        serialization_alias="correlationMetadata",
+    )
     fetched_at: str | None = Field(
         default=None,
         validation_alias=AliasChoices("fetched_at", "fetchedAt"),
@@ -171,7 +196,14 @@ class DisruptedSegmentImpact(BaseModel):
         validation_alias=AliasChoices("matching_events", "matchingEvents"),
         serialization_alias="matchingEvents",
     )
-    match_type: Literal["exact_geometry", "spatial_corridor", "hub_approximate"] = Field(
+    match_type: Literal[
+        "exact_geometry",
+        "spatial_corridor",
+        "hub_approximate",
+        "route_id_exact",
+        "stop_id_exact",
+        "multimodal_corridor_correlation",
+    ] = Field(
         default="spatial_corridor",
         validation_alias=AliasChoices("match_type", "matchType"),
         serialization_alias="matchType",
@@ -481,4 +513,202 @@ class DisruptionProviderCapability(BaseModel):
         validation_alias=AliasChoices("status_reason", "statusReason"),
         serialization_alias="statusReason",
     )
+
+
+# ============================================================================
+# GTFS Realtime Feed Registry Schemas (Milestone M3.9)
+# ============================================================================
+
+FeedAuthorizationStatus = Literal[
+    "authorized",
+    "pending_credentials",
+    "unauthorized",
+    "forbidden",
+    "exempt_open_access",
+]
+
+FeedConnectivityStatus = Literal[
+    "unconfigured",
+    "configured",
+    "unknown",
+    "available",
+    "degraded",
+    "rate_limited",
+    "blocked",
+    "stale",
+    "disabled",
+]
+
+GTFSEntityType = Literal["trip_updates", "service_alerts", "vehicle_positions"]
+AuthType = Literal["none", "bearer_token", "api_key_header", "api_key_query"]
+
+
+class GTFSFeedConfig(BaseModel):
+    """Configuration definition for an authorized GTFS Realtime transit feed."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    feed_id: str = Field(
+        validation_alias=AliasChoices("feed_id", "feedId"),
+        serialization_alias="feedId",
+    )
+    operator_name: str = Field(
+        validation_alias=AliasChoices("operator_name", "operatorName"),
+        serialization_alias="operatorName",
+    )
+    display_name: str = Field(
+        validation_alias=AliasChoices("display_name", "displayName"),
+        serialization_alias="displayName",
+    )
+    geographic_coverage: str = Field(
+        default="Regional",
+        validation_alias=AliasChoices("geographic_coverage", "geographicCoverage"),
+        serialization_alias="geographicCoverage",
+    )
+    feed_url: str = Field(
+        validation_alias=AliasChoices("feed_url", "feedUrl"),
+        serialization_alias="feedUrl",
+    )
+    auth_type: AuthType = Field(
+        default="none",
+        validation_alias=AliasChoices("auth_type", "authType"),
+        serialization_alias="authType",
+    )
+    auth_header_name: str = Field(
+        default="Authorization",
+        validation_alias=AliasChoices("auth_header_name", "authHeaderName"),
+        serialization_alias="authHeaderName",
+    )
+    auth_token_env_var: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("auth_token_env_var", "authTokenEnvVar"),
+        serialization_alias="authTokenEnvVar",
+    )
+    entity_types: list[GTFSEntityType] = Field(
+        default_factory=lambda: ["service_alerts", "trip_updates"],
+        validation_alias=AliasChoices("entity_types", "entityTypes"),
+        serialization_alias="entityTypes",
+    )
+    polling_interval_seconds: int = Field(
+        default=60,
+        validation_alias=AliasChoices("polling_interval_seconds", "pollingIntervalSeconds"),
+        serialization_alias="pollingIntervalSeconds",
+    )
+    request_timeout_seconds: float = Field(
+        default=5.0,
+        validation_alias=AliasChoices("request_timeout_seconds", "requestTimeoutSeconds"),
+        serialization_alias="requestTimeoutSeconds",
+    )
+    enabled: bool = True
+    allow_http: bool = False
+
+
+class GTFSFeedStatus(BaseModel):
+    """Sanitized operational and diagnostic status of a registered GTFS Realtime feed."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    feed_id: str = Field(
+        validation_alias=AliasChoices("feed_id", "feedId"),
+        serialization_alias="feedId",
+    )
+    operator_name: str = Field(
+        validation_alias=AliasChoices("operator_name", "operatorName"),
+        serialization_alias="operatorName",
+    )
+    display_name: str = Field(
+        validation_alias=AliasChoices("display_name", "displayName"),
+        serialization_alias="displayName",
+    )
+    geographic_coverage: str = Field(
+        default="Regional",
+        validation_alias=AliasChoices("geographic_coverage", "geographicCoverage"),
+        serialization_alias="geographicCoverage",
+    )
+    feed_url_sanitized: str = Field(
+        validation_alias=AliasChoices("feed_url_sanitized", "feedUrlSanitized"),
+        serialization_alias="feedUrlSanitized",
+    )
+    entity_types: list[GTFSEntityType] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("entity_types", "entityTypes"),
+        serialization_alias="entityTypes",
+    )
+    enabled: bool = True
+    authorization_status: FeedAuthorizationStatus = Field(
+        default="pending_credentials",
+        validation_alias=AliasChoices("authorization_status", "authorizationStatus"),
+        serialization_alias="authorizationStatus",
+    )
+    connectivity_status: FeedConnectivityStatus = Field(
+        default="unconfigured",
+        validation_alias=AliasChoices("connectivity_status", "connectivityStatus"),
+        serialization_alias="connectivityStatus",
+    )
+    freshness_status: str = Field(
+        default="unknown",
+        validation_alias=AliasChoices("freshness_status", "freshnessStatus"),
+        serialization_alias="freshnessStatus",
+    )
+    last_successful_fetch: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_successful_fetch", "lastSuccessfulFetch"),
+        serialization_alias="lastSuccessfulFetch",
+    )
+    last_verified_timestamp: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_verified_timestamp", "lastVerifiedTimestamp"),
+        serialization_alias="lastVerifiedTimestamp",
+    )
+    last_feed_header_timestamp: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_feed_header_timestamp", "lastFeedHeaderTimestamp"),
+        serialization_alias="lastFeedHeaderTimestamp",
+    )
+    last_error_classification: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_error_classification", "lastErrorClassification"),
+        serialization_alias="lastErrorClassification",
+    )
+    last_response_latency_ms: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_response_latency_ms", "lastResponseLatencyMs"),
+        serialization_alias="lastResponseLatencyMs",
+    )
+    consecutive_failure_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("consecutive_failure_count", "consecutiveFailureCount"),
+        serialization_alias="consecutiveFailureCount",
+    )
+    entity_counts: dict[str, int] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("entity_counts", "entityCounts"),
+        serialization_alias="entityCounts",
+    )
+    status_notice: str = Field(
+        default="",
+        validation_alias=AliasChoices("status_notice", "statusNotice"),
+        serialization_alias="statusNotice",
+    )
+
+
+class GTFSFeedListResponse(BaseModel):
+    """API response model for registered GTFS feeds."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    feeds: list[GTFSFeedStatus] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("feeds", "feeds"),
+        serialization_alias="feeds",
+    )
+    total_configured: int = Field(
+        default=0,
+        validation_alias=AliasChoices("total_configured", "totalConfigured"),
+        serialization_alias="totalConfigured",
+    )
+    total_operational: int = Field(
+        default=0,
+        validation_alias=AliasChoices("total_operational", "totalOperational"),
+        serialization_alias="totalOperational",
+    )
+    notice: str = ""
+
 

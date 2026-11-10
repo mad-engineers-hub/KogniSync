@@ -57,19 +57,30 @@ The matching engine (`RouteDisruptionMatcher`) evaluates incidents against journ
   - *Tolerance Boundary Verification*: The boundary is strictly verified by unit tests: an incident at offset $\approx 1.77\text{ km}$ ($0.016^\circ$ latitude offset) matches cleanly because $1.77 \le 2.0\text{ km}$, while an incident at $\approx 2.43\text{ km}$ ($0.022^\circ$ latitude offset) is rejected because $2.43 > 2.0\text{ km}$. Earlier reports mentioning "1.8 km" referenced the test fixture coordinate offset, while the operational source of truth in code and tests is **2.0 km**.
 - **Hub Proximity Tolerance**: Default **6.0 km** around origin/destination station coordinates for non-road segments lacking polyline geometry.
 
-### 3.2 Matching Dimensions
-1. **Transport Mode Compatibility**: Incidents are mode-filtered (`cab`, `bus`, `auto`, `rapido`, `train`, `metro`, `flight`). Road accidents do not match train or flight legs.
+### 3.2 Matching Dimensions & Multimodal Taxonomy (Milestone M3.9)
+1. **Transport Mode Compatibility**: Incidents are mode-filtered (`cab`, `bus`, `auto`, `rapido`, `train`, `metro`, `flight`). Road accidents do not match train or flight legs unless correlated via shared multimodal corridors.
 2. **Temporal Validity**:
    - Resolved events (`status: "resolved"`) are immediately excluded.
    - Expired events (`valid_until < now` or `valid_until < segment.departure_time`) are excluded.
    - Future scheduled events whose start time (`valid_from`) is after segment arrival are excluded.
-3. **Exact Polyline Geometry Matching**:
+3. **Exact Route ID Match (`route_id_exact`)**:
+   - Compares GTFS `route_ids` directly against segment `vehicle_number`, `vehicle_name`, or `provider`.
+   - Highest-priority match for transit service alerts and trip updates (confidence: 0.98, distance: 0.0 km).
+4. **Direct Stop ID / Transit Station Match (`stop_id_exact`)**:
+   - Matches GTFS `stop_ids` against origin/destination station identifiers (`hub_id`, station `id`, or `code`).
+   - Identifies platform closures, terminal maintenance, and station facility disruptions (confidence: 0.95, distance: 0.0 km).
+5. **Exact Polyline Geometry Matching (`exact_geometry`)**:
    - Decodes segment `encoded_polyline` (precision 6 for Valhalla, 5 for Google).
    - Computes minimum perpendicular distance between incident point $P$ and route segment $AB$:
      $$\text{dist} = \text{point\_to\_segment\_distance\_km}(P, A, B)$$
    - Marks match as `exact_geometry` if $\text{dist} \le \text{road\_tolerance\_km}$.
-4. **Hub Endpoint Proximity Fallback**:
-   - Checks Haversine distance to origin/destination coordinates within 6.0 km (`hub_approximate`).
+6. **Multimodal Shared Corridor Correlation (`multimodal_corridor_correlation`)**:
+   - Synchronizes road incidents (e.g. TomTom Orbis) with public transit lines operating on shared highway corridors.
+   - Triggers when a road disruption occurs along a transit segment's corridor (`point_to_segment_distance_km \le \text{effective\_tolerance}`), capturing road closures that disrupt bus services even when bus lines lack exact geometry polylines.
+7. **Hub Endpoint Proximity Fallback (`hub_approximate`)**:
+   - Checks Haversine distance to origin/destination coordinates within 6.0 km.
+8. **Straight-Line Spatial Corridor (`spatial_corridor`)**:
+   - Fallback geometric distance between origin and destination coordinates for road segments lacking polyline data.
 
 ---
 

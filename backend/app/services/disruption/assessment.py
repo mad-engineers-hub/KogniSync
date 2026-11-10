@@ -258,11 +258,18 @@ class JourneyImpactAssessor:
         )
 
         match_types = [m.match_type for m in matches]
-        dominant_match_type = (
-            "exact_geometry"
-            if "exact_geometry" in match_types
-            else ("hub_approximate" if "hub_approximate" in match_types else "spatial_corridor")
-        )
+        if "route_id_exact" in match_types:
+            dominant_match_type = "route_id_exact"
+        elif "stop_id_exact" in match_types:
+            dominant_match_type = "stop_id_exact"
+        elif "multimodal_corridor_correlation" in match_types:
+            dominant_match_type = "multimodal_corridor_correlation"
+        elif "exact_geometry" in match_types:
+            dominant_match_type = "exact_geometry"
+        elif "hub_approximate" in match_types:
+            dominant_match_type = "hub_approximate"
+        else:
+            dominant_match_type = "spatial_corridor"
 
         explanations = [m.explanation for m in matches]
         explanation_text = " | ".join(explanations)

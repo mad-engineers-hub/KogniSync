@@ -11,9 +11,41 @@ import {
   DisruptionProviderCapability,
   DisruptionRecoverRequest,
   DisruptionRecoveryResponse,
+  GTFSFeedListResponse,
+  GTFSFeedStatus,
   JourneyDisruptionAssessment,
 } from '../types/disruption';
 import { Journey } from '../types/journey';
+
+export async function getGTFSFeeds(): Promise<GTFSFeedListResponse> {
+  try {
+    return await apiClient<GTFSFeedListResponse>('/api/v1/disruptions/providers/feeds');
+  } catch (err) {
+    console.warn('[getGTFSFeeds] Backend offline; returning fallback feed list:', err);
+    return {
+      feeds: [
+        {
+          feedId: 'bmtc_iudx_alerts',
+          operatorName: 'BMTC',
+          displayName: 'Bengaluru Metropolitan Transport Corporation (IUDX)',
+          geographicCoverage: 'Bengaluru Metropolitan Area',
+          feedUrlSanitized: 'https://opendata.benscl.com/gtfs-rt/alerts',
+          entityTypes: ['service_alerts', 'trip_updates'],
+          enabled: false,
+          authorizationStatus: 'pending_credentials',
+          connectivityStatus: 'unconfigured',
+          freshnessStatus: 'unknown',
+          consecutiveFailureCount: 0,
+          entityCounts: {},
+          statusNotice: 'Awaiting authorized credentials in environment variable BMTC_IUDX_AUTH_TOKEN.',
+        },
+      ],
+      totalConfigured: 0,
+      totalOperational: 0,
+      notice: 'No live GTFS Realtime feeds are currently verified and operational.',
+    };
+  }
+}
 
 export async function getDisruptionProviders(): Promise<DisruptionProviderCapability[]> {
   try {
