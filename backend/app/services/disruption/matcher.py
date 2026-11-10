@@ -1,13 +1,18 @@
 """
 backend/app/services/disruption/matcher.py
 
-Deterministic Route-to-Disruption Matching Engine (Milestone M3.7).
-Calculates spatial proximity, temporal validity, and transport mode compatibility
-between disruption events and journey route segments without external heavy GIS dependencies.
+Deterministic Route-to-Disruption Matching Engine (Milestones M3.7, M3.9, & M3.9.1).
+Calculates spatial proximity, temporal validity, mode compatibility, and exact transit
+identifier matches (route and stop codes) between disruption events and journey route segments.
+Enforces exact and discrete token matching on route/stop IDs to prevent accidental substring collisions.
 """
+from __future__ import annotations
+
 import math
+import re
 from datetime import datetime, timezone
 from typing import Any, Sequence
+
 from app.core.logging import logger
 from app.services.disruption.schemas import DisruptionEvent
 from app.services.journey.schemas import JourneySegmentSchema
@@ -40,7 +45,6 @@ def point_to_segment_distance_km(
     Computes minimum distance from point P to line segment AB using equirectangular projection approximation.
     Sufficiently accurate for local road distance checks (< 50 km).
     """
-    # Convert lat/lng deltas to local cartesian coordinates (km)
     mid_lat_rad = math.radians((a_lat + b_lat) / 2.0)
     cos_lat = math.cos(mid_lat_rad)
 
@@ -66,6 +70,40 @@ def point_to_segment_distance_km(
     return math.hypot(px - proj_x, py - proj_y)
 
 
+def normalize_transit_identifier(val: str | None) -> str:
+    """
+    Normalizes a route or stop identifier deterministically:
+    - Strips leading and trailing whitespace.
+    - Converts to lowercase.
+    - Normalizes internal multiple whitespaces to single spaces.
+    - Preserves meaningful identifier characters including hyphens (-) and underscores (_).
+    - Returns empty string for None or whitespace-only input.
+    """
+    if not val:
+        return ""
+    cleaned = val.strip().lower()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+def tokenize_transit_text(text: str | None) -> list[str]:
+    """
+    Splits descriptive transit text into discrete normalized tokens.
+    Uses delimiters such as whitespace, parentheses, brackets, commas, semicolons, and forward slashes.
+    CRITICAL: Preserves hyphens and underscores within tokens so that identifiers like
+    '500-D', 'V-335E', 'BMTC_KBS', and 'hub-chennai-central' remain intact.
+    """
+    if not text:
+        return []
+    raw_tokens = re.split(r'[\s\(\)\[\]\{\},;:/\'"]+', text)
+    tokens: list[str] = []
+    for t in raw_tokens:
+        norm = normalize_transit_identifier(t)
+        if norm:
+            tokens.append(norm)
+    return tokens
+
+
 class MatchedSegmentDisruption:
     def __init__(
         self,
@@ -89,7 +127,8 @@ class RouteDisruptionMatcher:
     Matches disruption events against journey segments based on:
     1. Mode compatibility.
     2. Temporal overlap / active status.
-    3. Route geometry proximity (exact polyline if available, hub coordinates fallback).
+    3. Exact canonical & tokenized Route and Stop ID matching (no broad substring matching).
+    4. Route geometry proximity (exact polyline if available, hub coordinates fallback).
     """
 
     def __init__(
@@ -154,18 +193,21 @@ class RouteDisruptionMatcher:
             return None
 
         # 2A. Direct Route ID Matching (GTFS-RT route descriptor or alert informed entity)
+        # Prevents substring collisions: route '1' will NOT match 'Bus 15' or 'Route 50'
+        # Arbitrary operator/provider descriptions are excluded from route matches
         if event.route_ids:
-            seg_vehicle = (segment.vehicle_number or "").lower().strip()
-            seg_name = (segment.vehicle_name or "").lower().strip()
-            seg_provider = (segment.provider or "").lower().strip()
+            seg_vehicle_norm = normalize_transit_identifier(segment.vehicle_number)
+            seg_name_tokens = tokenize_transit_text(segment.vehicle_name)
+            seg_name_norm = normalize_transit_identifier(segment.vehicle_name)
+
             for r_id in event.route_ids:
-                r_clean = r_id.lower().strip()
-                if (
-                    r_clean in seg_vehicle
-                    or r_clean in seg_name
-                    or r_clean in seg_provider
-                    or seg_vehicle == r_clean
-                ):
+                r_norm = normalize_transit_identifier(r_id)
+                if not r_norm:
+                    continue
+
+                # Exact canonical equality against segment vehicle_number
+                if seg_vehicle_norm and r_norm == seg_vehicle_norm:
+                    logger.debug(f"Matcher: exact route_id match '{r_id}' on vehicle_number")
                     return MatchedSegmentDisruption(
                         event=event,
                         match_type="route_id_exact",
@@ -175,35 +217,135 @@ class RouteDisruptionMatcher:
                         correlation_metadata={
                             "matched_route_id": r_id,
                             "match_method": "route_id_exact",
+                            "match_precision": "exact",
                             "confidence": 0.98,
                             "provenance": event.provenance,
                         },
                     )
 
-        # 2B. Direct Stop ID / Transit Station Matching
-        if event.stop_ids:
-            orig_hub = (getattr(segment.origin, "hub_id", None) or getattr(segment.origin, "id", None) or getattr(segment.origin, "code", None) or "").lower().strip()
-            dest_hub = (getattr(segment.destination, "hub_id", None) or getattr(segment.destination, "id", None) or getattr(segment.destination, "code", None) or "").lower().strip()
-            orig_name = (segment.origin.name or "").lower().strip()
-            dest_name = (segment.destination.name or "").lower().strip()
-            for s_id in event.stop_ids:
-                s_clean = s_id.lower().strip()
-                if s_clean in (orig_hub, dest_hub) or s_clean in orig_name or s_clean in dest_name:
-                    matched_station = (
-                        segment.origin.name
-                        if (s_clean in orig_hub or s_clean in orig_name)
-                        else segment.destination.name
+                # Exact equality against full normalized vehicle_name
+                if seg_name_norm and r_norm == seg_name_norm:
+                    logger.debug(f"Matcher: exact route_id match '{r_id}' on full vehicle_name")
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="route_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.98,
+                        explanation=f"Exact route match on route '{r_id}': {event.title}",
+                        correlation_metadata={
+                            "matched_route_id": r_id,
+                            "match_method": "route_id_exact",
+                            "match_precision": "exact",
+                            "confidence": 0.98,
+                            "provenance": event.provenance,
+                        },
                     )
+
+                # Discrete token equality against vehicle_name tokens (e.g. '500-D' in 'Vajra Bus (Route 500-D)')
+                if r_norm in seg_name_tokens:
+                    logger.debug(f"Matcher: tokenized route_id match '{r_id}' in vehicle_name tokens")
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="route_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.96,
+                        explanation=f"Exact route match on route '{r_id}': {event.title}",
+                        correlation_metadata={
+                            "matched_route_id": r_id,
+                            "match_method": "route_id_token",
+                            "match_precision": "token",
+                            "confidence": 0.96,
+                            "provenance": event.provenance,
+                        },
+                    )
+
+        # 2B. Direct Stop ID / Transit Station Matching
+        # Prevents substring collisions: stop '12' will NOT match 'Platform 120'
+        if event.stop_ids:
+            orig_code = normalize_transit_identifier(getattr(segment.origin, "code", None))
+            orig_id = normalize_transit_identifier(getattr(segment.origin, "id", None))
+            orig_hub = normalize_transit_identifier(getattr(segment.origin, "hub_id", None))
+            orig_name_norm = normalize_transit_identifier(segment.origin.name)
+            orig_tokens = tokenize_transit_text(segment.origin.name)
+
+            dest_code = normalize_transit_identifier(getattr(segment.destination, "code", None))
+            dest_id = normalize_transit_identifier(getattr(segment.destination, "id", None))
+            dest_hub = normalize_transit_identifier(getattr(segment.destination, "hub_id", None))
+            dest_name_norm = normalize_transit_identifier(segment.destination.name)
+            dest_tokens = tokenize_transit_text(segment.destination.name)
+
+            for s_id in event.stop_ids:
+                s_norm = normalize_transit_identifier(s_id)
+                if not s_norm:
+                    continue
+
+                # 1. Exact canonical stop equality on origin station identifiers
+                if s_norm in (orig_code, orig_id, orig_hub) or s_norm == orig_name_norm:
+                    logger.debug(f"Matcher: exact stop_id match '{s_id}' on origin station")
                     return MatchedSegmentDisruption(
                         event=event,
                         match_type="stop_id_exact",
                         min_distance_km=0.0,
                         confidence=0.95,
-                        explanation=f"Direct transit stop match at {matched_station} ({s_id}): {event.title}",
+                        explanation=f"Direct transit stop match at {segment.origin.name} ({s_id}): {event.title}",
                         correlation_metadata={
                             "matched_stop_id": s_id,
                             "match_method": "stop_id_exact",
+                            "match_precision": "exact",
                             "confidence": 0.95,
+                            "provenance": event.provenance,
+                        },
+                    )
+
+                # 2. Exact canonical stop equality on destination station identifiers
+                if s_norm in (dest_code, dest_id, dest_hub) or s_norm == dest_name_norm:
+                    logger.debug(f"Matcher: exact stop_id match '{s_id}' on destination station")
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="stop_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.95,
+                        explanation=f"Direct transit stop match at {segment.destination.name} ({s_id}): {event.title}",
+                        correlation_metadata={
+                            "matched_stop_id": s_id,
+                            "match_method": "stop_id_exact",
+                            "match_precision": "exact",
+                            "confidence": 0.95,
+                            "provenance": event.provenance,
+                        },
+                    )
+
+                # 3. Discrete token equality against station name tokens
+                if s_norm in orig_tokens:
+                    logger.debug(f"Matcher: tokenized stop_id match '{s_id}' in origin station tokens")
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="stop_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.92,
+                        explanation=f"Direct transit stop match at {segment.origin.name} ({s_id}): {event.title}",
+                        correlation_metadata={
+                            "matched_stop_id": s_id,
+                            "match_method": "stop_id_token",
+                            "match_precision": "token",
+                            "confidence": 0.92,
+                            "provenance": event.provenance,
+                        },
+                    )
+
+                if s_norm in dest_tokens:
+                    logger.debug(f"Matcher: tokenized stop_id match '{s_id}' in destination station tokens")
+                    return MatchedSegmentDisruption(
+                        event=event,
+                        match_type="stop_id_exact",
+                        min_distance_km=0.0,
+                        confidence=0.92,
+                        explanation=f"Direct transit stop match at {segment.destination.name} ({s_id}): {event.title}",
+                        correlation_metadata={
+                            "matched_stop_id": s_id,
+                            "match_method": "stop_id_token",
+                            "match_precision": "token",
+                            "confidence": 0.92,
                             "provenance": event.provenance,
                         },
                     )
@@ -245,7 +387,6 @@ class RouteDisruptionMatcher:
 
                 if coords and len(coords) >= 2:
                     min_dist = float("inf")
-                    # Sample every step or segment
                     step = 1 if len(coords) < 200 else 2
                     for i in range(0, len(coords) - 1, step):
                         c1 = coords[i]
@@ -257,7 +398,7 @@ class RouteDisruptionMatcher:
                         )
                         if dist < min_dist:
                             min_dist = dist
-                            if min_dist <= 0.1:  # extremely close, break early
+                            if min_dist <= 0.1:
                                 break
 
                     if min_dist <= effective_tolerance:
@@ -362,4 +503,3 @@ class RouteDisruptionMatcher:
 
 
 route_disruption_matcher = RouteDisruptionMatcher()
-
