@@ -553,27 +553,42 @@ def test_multimodal_exact_matching_and_manual_rebooking_recovery():
         assert rec.manual_rebooking_required is True
 
 
-def test_api_feeds_and_poll_endpoints_sanitized():
-    """Verify API GET /providers/feeds, POST /providers/feeds/poll, and GET /health contracts."""
-    res_poll = api_client.post("/api/v1/disruptions/providers/feeds/poll?force=false")
-    assert res_poll.status_code == 200
-    body = res_poll.json()
-    assert "feeds" in body
-    assert "totalOperational" in body
-    assert "notice" in body
+def test_api_feeds_and_poll_endpoints_sanitized(monkeypatch):
+    """Verify API GET /providers/feeds, secured POST /providers/feeds/poll, and GET /health contracts."""
+    from app.api.routes.disruptions import poll_rate_limiter
+    from app.core.config import settings
 
-    for feed in body["feeds"]:
-        assert "authToken" not in feed
-        assert "apiKey" not in feed
-        assert "authTokenEnvVar" not in feed
-        assert "connectionAttempts" in feed
-        assert "availabilityTransitions" in feed
+    poll_rate_limiter.reset()
+    try:
+        # Anonymous poll trigger must fail closed with 401
+        anon_res = api_client.post("/api/v1/disruptions/providers/feeds/poll?force=false")
+        assert anon_res.status_code == 401
 
-    res_health = api_client.get("/api/v1/disruptions/health")
-    assert res_health.status_code == 200
-    health_data = res_health.json()
-    assert "gtfs_feeds_registered" in health_data
-    assert "live_transit_connected" in health_data
+        monkeypatch.setattr(settings, "INTERNAL_API_KEY", "m4-test-internal-key")
+        res_poll = api_client.post(
+            "/api/v1/disruptions/providers/feeds/poll?force=false",
+            headers={"X-Internal-Key": "m4-test-internal-key"},
+        )
+        assert res_poll.status_code == 200
+        body = res_poll.json()
+        assert "feeds" in body
+        assert "totalOperational" in body
+        assert "notice" in body
+
+        for feed in body["feeds"]:
+            assert "authToken" not in feed
+            assert "apiKey" not in feed
+            assert "authTokenEnvVar" not in feed
+            assert "connectionAttempts" in feed
+            assert "availabilityTransitions" in feed
+
+        res_health = api_client.get("/api/v1/disruptions/health")
+        assert res_health.status_code == 200
+        health_data = res_health.json()
+        assert "gtfs_feeds_registered" in health_data
+        assert "live_transit_connected" in health_data
+    finally:
+        poll_rate_limiter.reset()
 
 
 # ============================================================================

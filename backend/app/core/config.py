@@ -10,6 +10,10 @@ class Settings(BaseSettings):
 
     # Internal Security & Operational API Key
     INTERNAL_API_KEY: str | None = None
+    TRANSIT_POLL_ELEVATED_KEY: str | None = None
+    TRANSIT_POLL_RATE_LIMIT_MAX_REQUESTS: int = 10
+    TRANSIT_POLL_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    TRANSIT_FORCE_POLL_MIN_INTERVAL_SECONDS: float = 5.0
 
     # JWT Authentication Configuration
     JWT_SECRET_KEY: str | None = None

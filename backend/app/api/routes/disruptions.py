@@ -5,9 +5,14 @@ Real-Time Journey Disruption Intelligence and Recovery endpoints (Milestone M3.7
 Provides provider discovery, active disruption querying, deterministic impact assessment,
 and Pareto-ranked recovery recommendations.
 """
+from collections import defaultdict, deque
+import threading
+import time
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from app.core.config import settings
 from app.core.logging import logger
+from app.core.security import TransitPollPrincipal, verify_transit_poll_access
 from app.services.disruption.schemas import (
     DisruptionAssessRequest,
     DisruptionEvent,
@@ -93,6 +98,64 @@ async def get_registered_gtfs_feeds() -> GTFSFeedListResponse:
     return _build_gtfs_feed_list_response()
 
 
+class PollRateLimiter:
+    """Thread-safe sliding-window rate limiter & force-poll abuse guard for operational polling."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._requests_by_principal: dict[str, deque[float]] = defaultdict(deque)
+        self._global_requests: deque[float] = deque()
+        self._last_force_poll_at: float | None = None
+
+    def reset(self) -> None:
+        with self._lock:
+            self._requests_by_principal.clear()
+            self._global_requests.clear()
+            self._last_force_poll_at = None
+
+    def check_and_record(self, principal_id: str, force: bool = False) -> None:
+        now = time.monotonic()
+        window = max(1, int(settings.TRANSIT_POLL_RATE_LIMIT_WINDOW_SECONDS))
+        max_requests = max(1, int(settings.TRANSIT_POLL_RATE_LIMIT_MAX_REQUESTS))
+        force_min_interval = max(0.0, float(settings.TRANSIT_FORCE_POLL_MIN_INTERVAL_SECONDS))
+
+        with self._lock:
+            if force and self._last_force_poll_at is not None:
+                elapsed_since_force = now - self._last_force_poll_at
+                if elapsed_since_force < force_min_interval:
+                    retry_after = max(1, int(force_min_interval - elapsed_since_force + 0.999))
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Too many forced transit feed poll requests; cooldown floor active.",
+                        headers={"Retry-After": str(retry_after)},
+                    )
+
+            cutoff = now - window
+            bucket = self._requests_by_principal[principal_id]
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            while self._global_requests and self._global_requests[0] <= cutoff:
+                self._global_requests.popleft()
+
+            # Apply per-caller limit plus bounded global ceiling (2x per-caller ceiling)
+            if len(bucket) >= max_requests or len(self._global_requests) >= (max_requests * 2):
+                oldest = bucket[0] if bucket else self._global_requests[0]
+                retry_after = max(1, int(window - (now - oldest) + 0.999))
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many transit feed poll requests; rate limit exceeded.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            bucket.append(now)
+            self._global_requests.append(now)
+            if force:
+                self._last_force_poll_at = now
+
+
+poll_rate_limiter = PollRateLimiter()
+
+
 @router.post(
     "/providers/feeds/poll",
     response_model=GTFSFeedListResponse,
@@ -100,11 +163,19 @@ async def get_registered_gtfs_feeds() -> GTFSFeedListResponse:
 )
 async def poll_registered_gtfs_feeds(
     force: bool = Query(False, description="Bypass per-feed polling cooldown interval when true"),
+    principal: TransitPollPrincipal = Depends(verify_transit_poll_access),
 ) -> GTFSFeedListResponse:
     """
-    Executes a poll across all enabled authorized transit feeds using IP-pinned SSRF transport.
-    Feeds without agency credentials remain disabled/unconfigured cleanly without fabrication.
+    Executes an operationally authorized poll across enabled transit feeds using IP-pinned SSRF transport.
+    Requires server-side operational credentials, elevated privilege for `force=true`,
+    and enforces strict sliding-window rate limiting to prevent upstream provider abuse.
     """
+    if force and not principal.can_force:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: elevated operational privilege required for force polling",
+        )
+    poll_rate_limiter.check_and_record(principal.principal_id, force=force)
     await gtfs_feed_registry.poll_all_enabled_feeds(force=force)
     return _build_gtfs_feed_list_response()
 
