@@ -13,7 +13,33 @@ import {
   CheckCircle2,
   RefreshCw,
 } from 'lucide-react';
-import { JourneyDisruptionAssessment } from '../../types/disruption';
+import { DisruptionEvent, JourneyDisruptionAssessment } from '../../types/disruption';
+
+function deriveLiveProviderLabel(assessment: JourneyDisruptionAssessment): string {
+  const liveEvents = (assessment.activeDisruptions || []).filter(
+    (e) => e.provenance === 'provider_live'
+  );
+  const sources = new Set(liveEvents.map((e) => e.source));
+  const hasGtfs = sources.has('gtfs_realtime');
+  const hasTomTom = sources.has('tomtom_orbis') || sources.has('tomtom');
+  if (hasGtfs && hasTomTom) {
+    return 'LIVE PROVIDER DATA — TomTom Orbis v2 + GTFS-RT / IUDX';
+  }
+  if (hasGtfs) {
+    return 'LIVE PROVIDER DATA — Authorized Transit Feed (GTFS-RT / IUDX)';
+  }
+  if (hasTomTom) {
+    return 'LIVE PROVIDER DATA — TomTom Orbis v2';
+  }
+  return 'LIVE PROVIDER DATA';
+}
+
+function formatEventTimestamp(iso?: string | null): string {
+  if (!iso) return 'Unknown timestamp';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 interface DisruptionBannerProps {
   assessment: JourneyDisruptionAssessment | null;
@@ -126,7 +152,7 @@ export const DisruptionBanner: React.FC<DisruptionBannerProps> = ({
                 </span>
               ) : assessment.provenance === 'provider_live' ? (
                 <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold font-mono">
-                  LIVE PROVIDER DATA — TomTom Orbis v2
+                  {deriveLiveProviderLabel(assessment)}
                 </span>
               ) : (
                 <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-800 text-[10px] font-bold font-mono">
@@ -175,6 +201,48 @@ export const DisruptionBanner: React.FC<DisruptionBannerProps> = ({
       <p className="text-xs sm:text-sm text-slate-800 leading-relaxed font-medium">
         {assessment.summary}
       </p>
+
+      {/* Active Event Attribution (Source, Timestamp, Freshness) */}
+      {assessment.activeDisruptions && assessment.activeDisruptions.length > 0 && (
+        <div className="pt-2 border-t border-slate-200/70 space-y-1.5">
+          <div className="flex items-center justify-between text-[10px] font-mono font-bold text-slate-600 uppercase">
+            <span>Verified Disruption Events ({assessment.activeDisruptions.length})</span>
+            {assessment.criticalConnectionRiskCount > 0 && (
+              <span className="text-rose-700">
+                {assessment.criticalConnectionRiskCount} Critical Transfer Risk
+                {assessment.criticalConnectionRiskCount > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {assessment.activeDisruptions.slice(0, 4).map((ev: DisruptionEvent) => (
+              <div
+                key={ev.id}
+                className="px-2.5 py-1.5 rounded-lg bg-white/90 border border-slate-200 text-[11px] flex flex-col gap-0.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-900 truncate">{ev.title}</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-bold uppercase shrink-0 ${
+                      ev.provenance === 'provider_live'
+                        ? 'bg-blue-100 text-blue-800'
+                        : ev.provenance === 'simulated'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {ev.provenance === 'provider_live' ? ev.source : ev.provenance}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-500">
+                  <span>Obs: {formatEventTimestamp(ev.observedAt)}</span>
+                  <span>Freshness: {ev.dataFreshnessStatus || 'unknown'}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Disrupted legs breakdown badges */}
       {assessment.segmentImpacts && assessment.segmentImpacts.length > 0 && (

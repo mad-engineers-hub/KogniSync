@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     TOMTOM_MAX_RETRIES: int = 2
     TOMTOM_MAX_REQUESTS_PER_ASSESSMENT: int = 5
 
-    # GTFS Realtime Configuration (Milestone M3.8 & M3.9)
+    # GTFS Realtime & Live Transit Feed Configuration (Milestones M3.8, M3.9, M4.0)
     GTFS_REALTIME_ENABLED: bool = False
     GTFS_REALTIME_FEED_URL: str | None = None
     GTFS_REALTIME_API_KEY: str | None = None
@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     GTFS_BACKOFF_BASE_SECONDS: float = 0.5
     GTFS_CIRCUIT_BREAKER_FAILURES: int = 3
     GTFS_ABSENCE_GRACE_PERIOD_SECONDS: int = 300  # 5 min grace before resolving temporary absence
+    GTFS_MIN_DELAY_SECONDS: int = 300             # 5 min minimum TripUpdate delay threshold
+    GTFS_MAX_ENTITY_AGE_SECONDS: int = 600        # 10 min maximum header/entity timestamp age
+    GTFS_VEHICLE_MAX_AGE_SECONDS: int = 180       # 3 min maximum vehicle telemetry timestamp age
+
+    # Verified Regional Transit Agency Credentials (Loaded strictly server-side; never logged)
+    BMTC_IUDX_AUTH_TOKEN: str | None = None
+    IUDX_AUTH_TOKEN: str | None = None
+    DELHI_OTD_API_KEY: str | None = None
 
     # Data Freshness Thresholds (seconds) (Milestone M3.8)
     FRESHNESS_ROAD_INCIDENT_SECONDS: int = 1800       # 30 min fresh threshold

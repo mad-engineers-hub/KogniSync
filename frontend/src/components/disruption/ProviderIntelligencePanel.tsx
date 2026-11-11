@@ -7,7 +7,7 @@
  * (TomTom Orbis Traffic v2, GTFS Realtime, Simulation Engine).
  */
 import React, { useState, useEffect } from 'react';
-import { getDisruptionProviders, getGTFSFeeds } from '../../api/disruptions';
+import { getDisruptionProviders, getGTFSFeeds, pollGTFSFeeds } from '../../api/disruptions';
 import { DisruptionProviderCapability, GTFSFeedStatus } from '../../types/disruption';
 
 interface ProviderIntelligencePanelProps {
@@ -51,6 +51,11 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
+    try {
+      await pollGTFSFeeds(false);
+    } catch {
+      // Fallback handled cleanly by fetchCapabilities
+    }
     await fetchCapabilities();
     if (onRefresh) onRefresh();
   };
@@ -302,11 +307,44 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
                       {feed.statusNotice}
                     </div>
 
-                    <div className="flex flex-wrap gap-2 text-[10px] font-mono text-slate-500">
+                    {feed.liveBlockerReason && (
+                      <div className="text-[10px] font-mono text-amber-800 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                        Blocker: {feed.liveBlockerReason}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono text-slate-500">
                       <span>Coverage: {feed.geographicCoverage}</span>
+                      <span>
+                        Format: {feed.providerFormat === 'iudx_ngsi_ld' ? 'IUDX NGSI-LD' : 'GTFS-RT'}
+                      </span>
+                      <span>Freshness: {feed.freshnessStatus}</span>
+                      <span>
+                        Updated:{' '}
+                        {feed.lastSuccessfulFetch
+                          ? new Date(feed.lastSuccessfulFetch).toLocaleTimeString()
+                          : 'Never verified'}
+                      </span>
                       <span>Entities: {feed.entityTypes?.join(', ') || 'alerts, trip_updates'}</span>
+                      {(feed.entityCounts?.alerts !== undefined ||
+                        feed.entityCounts?.trip_updates !== undefined ||
+                        feed.entityCounts?.vehicle_positions !== undefined) && (
+                        <span>
+                          Telemetry: {feed.entityCounts?.alerts || 0}A /{' '}
+                          {feed.entityCounts?.trip_updates || 0}TU /{' '}
+                          {feed.entityCounts?.vehicle_positions || 0}VP
+                        </span>
+                      )}
+                      {feed.acceptedEventCount !== undefined && (
+                        <span>
+                          Accepted/Rejected: {feed.acceptedEventCount}/{feed.rejectedEventCount || 0}
+                        </span>
+                      )}
                       {feed.lastResponseLatencyMs !== undefined && feed.lastResponseLatencyMs !== null && (
                         <span>Latency: {feed.lastResponseLatencyMs}ms</span>
+                      )}
+                      {feed.lastErrorClassification && (
+                        <span className="text-rose-700">Error: {feed.lastErrorClassification}</span>
                       )}
                     </div>
                   </div>

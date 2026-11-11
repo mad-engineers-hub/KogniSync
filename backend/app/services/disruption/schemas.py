@@ -541,6 +541,23 @@ FeedConnectivityStatus = Literal[
 
 GTFSEntityType = Literal["trip_updates", "service_alerts", "vehicle_positions"]
 AuthType = Literal["none", "bearer_token", "api_key_header", "api_key_query"]
+FeedProviderFormat = Literal["auto", "gtfs_rt", "iudx_ngsi_ld"]
+
+
+class FeedAvailabilityTransition(BaseModel):
+    """Sanitized record of a feed connectivity state transition (Milestone M4.0)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    timestamp: str
+    from_status: str = Field(
+        validation_alias=AliasChoices("from_status", "fromStatus"),
+        serialization_alias="fromStatus",
+    )
+    to_status: str = Field(
+        validation_alias=AliasChoices("to_status", "toStatus"),
+        serialization_alias="toStatus",
+    )
+    reason: str = ""
 
 
 class GTFSFeedConfig(BaseModel):
@@ -582,6 +599,21 @@ class GTFSFeedConfig(BaseModel):
         default=None,
         validation_alias=AliasChoices("auth_token_env_var", "authTokenEnvVar"),
         serialization_alias="authTokenEnvVar",
+    )
+    auth_query_param_name: str = Field(
+        default="key",
+        validation_alias=AliasChoices("auth_query_param_name", "authQueryParamName"),
+        serialization_alias="authQueryParamName",
+    )
+    provider_format: FeedProviderFormat = Field(
+        default="auto",
+        validation_alias=AliasChoices("provider_format", "providerFormat"),
+        serialization_alias="providerFormat",
+    )
+    documentation_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("documentation_url", "documentationUrl"),
+        serialization_alias="documentationUrl",
     )
     entity_types: list[GTFSEntityType] = Field(
         default_factory=lambda: ["service_alerts", "trip_updates"],
@@ -682,6 +714,81 @@ class GTFSFeedStatus(BaseModel):
         default_factory=dict,
         validation_alias=AliasChoices("entity_counts", "entityCounts"),
         serialization_alias="entityCounts",
+    )
+    auth_type: AuthType = Field(
+        default="none",
+        validation_alias=AliasChoices("auth_type", "authType"),
+        serialization_alias="authType",
+    )
+    provider_format: FeedProviderFormat = Field(
+        default="auto",
+        validation_alias=AliasChoices("provider_format", "providerFormat"),
+        serialization_alias="providerFormat",
+    )
+    last_attempted_fetch: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("last_attempted_fetch", "lastAttemptedFetch"),
+        serialization_alias="lastAttemptedFetch",
+    )
+    connection_attempts: int = Field(
+        default=0,
+        validation_alias=AliasChoices("connection_attempts", "connectionAttempts"),
+        serialization_alias="connectionAttempts",
+    )
+    auth_failures: int = Field(
+        default=0,
+        validation_alias=AliasChoices("auth_failures", "authFailures"),
+        serialization_alias="authFailures",
+    )
+    retrieval_failures: int = Field(
+        default=0,
+        validation_alias=AliasChoices("retrieval_failures", "retrievalFailures"),
+        serialization_alias="retrievalFailures",
+    )
+    decode_failures: int = Field(
+        default=0,
+        validation_alias=AliasChoices("decode_failures", "decodeFailures"),
+        serialization_alias="decodeFailures",
+    )
+    stale_rejections: int = Field(
+        default=0,
+        validation_alias=AliasChoices("stale_rejections", "staleRejections"),
+        serialization_alias="staleRejections",
+    )
+    accepted_event_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("accepted_event_count", "acceptedEventCount"),
+        serialization_alias="acceptedEventCount",
+    )
+    rejected_event_count: int = Field(
+        default=0,
+        validation_alias=AliasChoices("rejected_event_count", "rejectedEventCount"),
+        serialization_alias="rejectedEventCount",
+    )
+    rejected_reasons: dict[str, int] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("rejected_reasons", "rejectedReasons"),
+        serialization_alias="rejectedReasons",
+    )
+    availability_transitions: list[FeedAvailabilityTransition] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("availability_transitions", "availabilityTransitions"),
+        serialization_alias="availabilityTransitions",
+    )
+    polling_interval_seconds: int = Field(
+        default=60,
+        validation_alias=AliasChoices("polling_interval_seconds", "pollingIntervalSeconds"),
+        serialization_alias="pollingIntervalSeconds",
+    )
+    documentation_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("documentation_url", "documentationUrl"),
+        serialization_alias="documentationUrl",
+    )
+    live_blocker_reason: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("live_blocker_reason", "liveBlockerReason"),
+        serialization_alias="liveBlockerReason",
     )
     status_notice: str = Field(
         default="",

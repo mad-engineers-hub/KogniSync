@@ -30,12 +30,17 @@ router = APIRouter(prefix="/api/v1/disruptions", tags=["Disruption Intelligence"
 )
 async def get_disruption_health():
     capabilities = disruption_service.get_provider_capabilities()
+    feed_statuses = gtfs_feed_registry.get_feed_statuses()
     has_live = any(c.is_available and c.provenance_source == "provider_live" for c in capabilities)
+    has_live_transit = any(s.connectivity_status == "available" for s in feed_statuses)
     return {
         "status": "healthy",
         "service": "Real-Time Disruption Intelligence & Recovery Service",
         "providers_registered": len(capabilities),
         "live_provider_connected": has_live,
+        "live_transit_connected": has_live_transit,
+        "gtfs_feeds_registered": len(feed_statuses),
+        "gtfs_feeds_operational": sum(1 for s in feed_statuses if s.connectivity_status == "available"),
         "simulation_active": any(c.name == "simulation_engine" for c in capabilities),
         "liveVerificationStatus": "PASS" if has_live else "BLOCKED — credentials unavailable",
     }
@@ -51,26 +56,21 @@ async def get_disruption_providers() -> list[DisruptionProviderCapability]:
     return disruption_service.get_provider_capabilities()
 
 
-@router.get(
-    "/providers/feeds",
-    response_model=GTFSFeedListResponse,
-    summary="Inspect sanitized operational status of all registered GTFS Realtime feeds",
-)
-async def get_registered_gtfs_feeds() -> GTFSFeedListResponse:
-    """
-    Returns sanitized operational status and diagnostics for registered public-transit GTFS feeds.
-    Strictly masks server-side tokens and sensitive endpoint query parameters.
-    """
+def _build_gtfs_feed_list_response() -> GTFSFeedListResponse:
     statuses = gtfs_feed_registry.get_feed_statuses()
     operational_count = sum(1 for s in statuses if s.connectivity_status == "available")
     configured_count = sum(1 for s in statuses if s.enabled and s.connectivity_status != "unconfigured")
+    pending_count = sum(1 for s in statuses if s.authorization_status == "pending_credentials")
 
-    has_live = operational_count > 0
-    notice = (
-        f"Verified {operational_count} operational transit feed(s)."
-        if has_live
-        else "No live GTFS Realtime feeds are currently verified and operational."
-    )
+    if operational_count > 0:
+        notice = f"Verified {operational_count} operational transit feed(s)."
+    elif pending_count > 0:
+        notice = (
+            f"No live GTFS Realtime feeds are currently verified and operational "
+            f"({pending_count} registered feed(s) awaiting agency credentials)."
+        )
+    else:
+        notice = "No live GTFS Realtime feeds are currently verified and operational."
 
     return GTFSFeedListResponse(
         feeds=statuses,
@@ -78,6 +78,35 @@ async def get_registered_gtfs_feeds() -> GTFSFeedListResponse:
         total_operational=operational_count,
         notice=notice,
     )
+
+
+@router.get(
+    "/providers/feeds",
+    response_model=GTFSFeedListResponse,
+    summary="Inspect sanitized operational status of all registered GTFS Realtime feeds",
+)
+async def get_registered_gtfs_feeds() -> GTFSFeedListResponse:
+    """
+    Returns sanitized operational status and diagnostics for registered public-transit GTFS/IUDX feeds.
+    Strictly masks server-side tokens and sensitive endpoint query parameters.
+    """
+    return _build_gtfs_feed_list_response()
+
+
+@router.post(
+    "/providers/feeds/poll",
+    response_model=GTFSFeedListResponse,
+    summary="Trigger controlled polling cycle for enabled authorized transit feeds",
+)
+async def poll_registered_gtfs_feeds(
+    force: bool = Query(False, description="Bypass per-feed polling cooldown interval when true"),
+) -> GTFSFeedListResponse:
+    """
+    Executes a poll across all enabled authorized transit feeds using IP-pinned SSRF transport.
+    Feeds without agency credentials remain disabled/unconfigured cleanly without fabrication.
+    """
+    await gtfs_feed_registry.poll_all_enabled_feeds(force=force)
+    return _build_gtfs_feed_list_response()
 
 
 @router.get(
