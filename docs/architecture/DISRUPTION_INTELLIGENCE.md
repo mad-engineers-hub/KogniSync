@@ -35,11 +35,11 @@ To avoid ambiguity between implemented code and operational live data, KogniSync
 
 | Dimension | `TomTomOrbisTrafficProvider` (`live_traffic_feed`) | `GTFSRealtimeProvider` (`gtfs_realtime_feed`) | `SimulatedDisruptionProvider` (`simulation_engine`) |
 | :--- | :--- | :--- | :--- |
-| **1. Connector Implementation** | **Genuinely implemented** (Orbis v2 client, bbox splitter, GeoJSON parser, bounded timeouts) | **Genuinely implemented** (GTFS-RT consumer, trip updates, service alerts, timestamp checks) | **Fully implemented** (Deterministic scenario generator) |
-| **2. Credential Configuration** | Configured via `TOMTOM_API_KEY` in environment (`unconfigured` if unset) | `unconfigured` by default (`GTFS_REALTIME_FEED_URL` unset) | **None required** (self-contained engine) |
-| **3. Connectivity Status** | `unknown` prior to initial live handshake; `available` upon verified response; `degraded` on repeated network errors | `unconfigured` (or `unknown` if configured prior to initial fetch) | `available` |
-| **4. Live Response Verification** | Live Verified (verified with 259 live incidents in Bengaluru bbox) & contract tests | Contract test verified via mocked official-schema feed fixtures | Unit and integration test verified |
-| **5. Production Operational Status** | **ACTIVE** when key is configured and live connection is verified; **BLOCKED** if credentials unavailable | **BLOCKED** — authorized regional transit feed unavailable | **ACTIVE** in sandbox / demo with mandatory simulation notices |
+| **1. Connector Implementation** | **Genuinely implemented** (Orbis v2 client, bbox splitter, GeoJSON parser, bounded timeouts) | **Genuinely implemented** (M4.0 unified `GTFSFeedRegistry` + IP-pinned `SecureGTFSFeedClient`, IUDX NGSI-LD adapter, pure-Python Protobuf decoder, query/header auth) | **Fully implemented** (Deterministic scenario generator) |
+| **2. Credential Configuration** | Configured via `TOMTOM_API_KEY` in environment (`unconfigured` if unset) | Configured via `BMTC_IUDX_AUTH_TOKEN`, `DELHI_OTD_API_KEY`, `GTFS_FEEDS_CONFIG_JSON`, or `GTFS_REALTIME_FEED_URL` (`pending_credentials` if unset) | **None required** (self-contained engine) |
+| **3. Connectivity Status** | `unknown` prior to initial live handshake; `available` upon verified response; `degraded` on repeated network errors | `disabled` / `unconfigured` without tokens; `unknown` / `configured` prior to verification; `available` upon verified live feed | `available` |
+| **4. Live Response Verification** | Live Verified (verified with live Bengaluru Orbis v2 responses) & contract tests | Hand-crafted `.pb` binary fixtures + IUDX NGSI-LD fixtures verified; live endpoints verified fail-closed (HTTP 401 without agency tokens) | Unit and integration test verified |
+| **5. Production Operational Status** | **ACTIVE** when key is configured and live connection is verified; **BLOCKED** if credentials unavailable | **BLOCKED — pending credentials** (BMTC IUDX JWT / Delhi OTD API key required); switches to **ACTIVE** cleanly when authorized tokens exist | **ACTIVE** in sandbox / demo with mandatory simulation notices |
 
 ### 2.2 Reliability & Security Guarantees
 1. **Server-Side Credentials**: API keys are accessed only on the backend through secure configuration settings; never exposed in client payloads.
@@ -198,8 +198,10 @@ To ensure audit accuracy and avoid conflating database records with live reality
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/v1/disruptions/health` | Operational health and provider registration status. |
+| `GET` | `/api/v1/disruptions/health` | Operational health and provider/feed registration status. |
 | `GET` | `/api/v1/disruptions/providers` | Capability discovery and live credential status. |
+| `GET` | `/api/v1/disruptions/providers/feeds` | Sanitized operational status, transitions, and telemetry per transit feed (M4.0). |
+| `POST` | `/api/v1/disruptions/providers/feeds/poll` | Trigger controlled polling cycle respecting `pollingIntervalSeconds` cooldown (M4.0). |
 | `GET` | `/api/v1/disruptions` | Query active disruptions (filters: `corridor`, `scenario`, `include_simulated`). |
 | `POST` | `/api/v1/disruptions/assess` | Deterministic impact assessment for provided journey. |
 | `POST` | `/api/v1/disruptions/recover` | Pareto-ranked multimodal recovery recommendations. |

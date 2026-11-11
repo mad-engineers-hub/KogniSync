@@ -353,10 +353,10 @@ class SecureGTFSFeedClient:
         backoff_base_seconds: float | None = None,
         allow_http: bool | None = None,
     ):
-        self.timeout_seconds = timeout_seconds or settings.GTFS_REALTIME_TIMEOUT_SECONDS
-        self.max_response_bytes = max_response_bytes or settings.GTFS_MAX_RESPONSE_BYTES
-        self.max_retries = max_retries or settings.GTFS_MAX_RETRIES
-        self.backoff_base_seconds = backoff_base_seconds or settings.GTFS_BACKOFF_BASE_SECONDS
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.GTFS_REALTIME_TIMEOUT_SECONDS
+        self.max_response_bytes = max_response_bytes if max_response_bytes is not None else settings.GTFS_MAX_RESPONSE_BYTES
+        self.max_retries = max_retries if max_retries is not None else settings.GTFS_MAX_RETRIES
+        self.backoff_base_seconds = backoff_base_seconds if backoff_base_seconds is not None else settings.GTFS_BACKOFF_BASE_SECONDS
         self.allow_http = (
             allow_http if allow_http is not None else settings.GTFS_REALTIME_ALLOW_HTTP
         )
@@ -375,22 +375,26 @@ class SecureGTFSFeedClient:
         feed_url: str,
         headers: dict[str, str] | None = None,
         auth_header: tuple[str, str] | None = None,
+        auth_query_param: tuple[str, str] | None = None,
+        allow_http: bool | None = None,
     ) -> GTFSFeedFetchResult:
         """
         Executes a secure, bounded, deduplicated GTFS Realtime fetch with retries.
         Pins socket connection to validated IP address to eliminate DNS TOCTOU.
-        Never logs credentials or sensitive headers.
+        Never logs credentials, sensitive query parameters, or authorization headers.
         """
+        effective_allow_http = self.allow_http if allow_http is None else allow_http
         feed_lock = await self._get_feed_lock(feed_id)
         async with feed_lock:
             # Build sanitized request headers
             req_headers: dict[str, str] = {
                 "Accept": "application/x-protobuf, application/octet-stream, application/json",
-                "User-Agent": "KogniSync-DisruptionIntelligence/3.9",
+                "User-Agent": "KogniSync-DisruptionIntelligence/4.0",
             }
+            sensitive_hdrs = {"authorization", "x-api-key", "token", "x-auth-token", "apikey"}
             if headers:
                 for k, v in headers.items():
-                    if k.lower() not in ("authorization", "x-api-key"):
+                    if k.lower() not in sensitive_hdrs:
                         req_headers[k] = v
             if auth_header:
                 req_headers[auth_header[0]] = auth_header[1]
@@ -402,13 +406,15 @@ class SecureGTFSFeedClient:
             while attempt <= self.max_retries:
                 start_time = time.perf_counter()
                 current_url = feed_url
+                hop_headers = dict(req_headers)
+                hop_query_param = auth_query_param
                 redirect_count = 0
 
                 try:
                     while redirect_count <= max_redirect_hops:
                         # 1. SSRF and DNS Pre-flight validation
                         is_safe, reason, resolved_ips = validate_feed_url_ssrf_safety(
-                            current_url, allow_http=self.allow_http, resolve_dns=True
+                            current_url, allow_http=effective_allow_http, resolve_dns=True
                         )
                         if not is_safe:
                             logger.warning(
@@ -431,8 +437,24 @@ class SecureGTFSFeedClient:
                             verify=True,
                         )
 
+                        request_url = current_url
+                        if hop_query_param:
+                            parsed_req = urllib.parse.urlsplit(current_url)
+                            q_items = urllib.parse.parse_qsl(parsed_req.query, keep_blank_values=True)
+                            q_items = [(k, v) for k, v in q_items if k != hop_query_param[0]]
+                            q_items.append((hop_query_param[0], hop_query_param[1]))
+                            request_url = urllib.parse.urlunsplit(
+                                (
+                                    parsed_req.scheme,
+                                    parsed_req.netloc,
+                                    parsed_req.path,
+                                    urllib.parse.urlencode(q_items),
+                                    parsed_req.fragment,
+                                )
+                            )
+
                         logger.debug(
-                            f"GTFSFeedClient: fetching feed '{feed_id}' via pinned IP {pinned_ip} (host: {target_host})"
+                            f"GTFSFeedClient: fetching feed '{feed_id}' via pinned IP {pinned_ip} (host: {target_host}, url: {sanitize_feed_url(request_url)})"
                         )
 
                         async with httpx.AsyncClient(
@@ -440,9 +462,9 @@ class SecureGTFSFeedClient:
                             timeout=self.timeout_seconds,
                             follow_redirects=False,
                         ) as client:
-                            response = await client.get(current_url, headers=req_headers)
+                            response = await client.get(request_url, headers=hop_headers)
 
-                        # 3. Handle redirects safely with manual hop validation
+                        # 3. Handle redirects safely with manual hop validation and cross-origin credential stripping
                         if response.status_code in (301, 302, 303, 307, 308):
                             redirect_url = response.headers.get("location")
                             if not redirect_url:
@@ -453,8 +475,20 @@ class SecureGTFSFeedClient:
                                     f"Too many redirect hops ({redirect_count} > {max_redirect_hops})"
                                 )
                             target_redirect = urllib.parse.urljoin(current_url, redirect_url)
+                            redir_parsed = urllib.parse.urlparse(target_redirect)
+                            if (
+                                redir_parsed.scheme.lower() != parsed.scheme.lower()
+                                or redir_parsed.netloc.lower() != parsed.netloc.lower()
+                            ):
+                                strip_keys = set(sensitive_hdrs)
+                                if auth_header:
+                                    strip_keys.add(auth_header[0].lower())
+                                hop_headers = {
+                                    k: v for k, v in hop_headers.items() if k.lower() not in strip_keys
+                                }
+                                hop_query_param = None
                             logger.info(
-                                f"GTFSFeedClient: following validated redirect hop {redirect_count}/{max_redirect_hops} for '{feed_id}'"
+                                f"GTFSFeedClient: following validated redirect hop {redirect_count}/{max_redirect_hops} for '{feed_id}' to {sanitize_feed_url(target_redirect)}"
                             )
                             current_url = target_redirect
                             continue
@@ -465,14 +499,15 @@ class SecureGTFSFeedClient:
                     latency_ms = (time.perf_counter() - start_time) * 1000.0
 
                     # 4. Check Content-Length header against bounded limit
-                    content_length = response.headers.get("content-length")
-                    if content_length and content_length.isdigit():
+                    content_length = response.headers.get("content-length") if hasattr(response, "headers") else None
+                    if isinstance(content_length, str) and content_length.isdigit():
                         if int(content_length) > self.max_response_bytes:
                             raise GTFSFeedPayloadTooLargeError(
                                 f"Feed payload exceeds maximum permitted size: {content_length} bytes > {self.max_response_bytes} bytes"
                             )
 
-                    content_bytes = response.content or b""
+                    raw_content = getattr(response, "content", None)
+                    content_bytes = bytes(raw_content) if isinstance(raw_content, (bytes, bytearray)) else b""
                     if len(content_bytes) > self.max_response_bytes:
                         raise GTFSFeedPayloadTooLargeError(
                             f"Feed body exceeds maximum permitted size: {len(content_bytes)} bytes > {self.max_response_bytes} bytes"
