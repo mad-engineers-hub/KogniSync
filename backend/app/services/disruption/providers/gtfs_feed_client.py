@@ -1,11 +1,12 @@
 """
 backend/app/services/disruption/providers/gtfs_feed_client.py
 
-Secure, bounded, and resilient HTTP client for fetching official GTFS Realtime feeds (Milestone M3.9).
-Implements Phase C requirements:
-- Strict SSRF protections (blocking loopback, cloud metadata, RFC 1918 private subnets).
-- DNS rebinding prevention via pre-fetch address resolution and IP validation.
-- Redirect protection (disabling unverified redirects and validating redirect hops).
+Secure, bounded, and resilient HTTP client for fetching official GTFS Realtime feeds (Milestones M3.9 & M3.9.1).
+Implements Phase C and M3.9.1 security requirements:
+- Strict SSRF protections (blocking loopback, cloud metadata, RFC 1918 private subnets, CGNAT, broadcast).
+- DNS rebinding & DNS TOCTOU prevention via PinnedIPAsyncTransport pinning the socket connection to pre-validated IPs.
+- Preservation of TLS SNI (Server Name Indication) and full certificate verification on the original hostname.
+- Redirect protection (disabling automatic unverified redirects and validating each redirect hop independently).
 - Resource bounds (timeout and maximum response byte limits to prevent memory exhaustion).
 - Resilient retries with exponential backoff, jitter, and Retry-After header conformance.
 - Per-feed concurrent in-flight deduplication to prevent stampeding herd requests.
@@ -18,12 +19,15 @@ import email.utils
 import ipaddress
 import random
 import socket
+import ssl
 import time
 import urllib.parse
 from datetime import datetime, timezone
 from typing import Any
 
+import httpcore
 import httpx
+from httpcore._backends.anyio import AnyIOBackend
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -35,17 +39,36 @@ DISALLOWED_HOSTNAMES: set[str] = {
     "169.254.169.254",
 }
 
-PRIVATE_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
-    ipaddress.ip_network("127.0.0.0/8"),      # Loopback
-    ipaddress.ip_network("10.0.0.0/8"),       # Private RFC 1918
-    ipaddress.ip_network("172.16.0.0/12"),    # Private RFC 1918
-    ipaddress.ip_network("192.168.0.0/16"),   # Private RFC 1918
-    ipaddress.ip_network("169.254.0.0/16"),   # Link-local / Cloud metadata (169.254.169.254)
-    ipaddress.ip_network("0.0.0.0/8"),        # Current network
-    ipaddress.ip_network("::1/128"),          # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),         # IPv6 unique local
-    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+PROHIBITED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network("0.0.0.0/8"),          # Current / this network
+    ipaddress.ip_network("10.0.0.0/8"),         # Private RFC 1918
+    ipaddress.ip_network("100.64.0.0/10"),      # Carrier-Grade NAT (RFC 6598)
+    ipaddress.ip_network("127.0.0.0/8"),        # IPv4 Loopback
+    ipaddress.ip_network("169.254.0.0/16"),     # Link-local / Cloud metadata (RFC 3927)
+    ipaddress.ip_network("172.16.0.0/12"),      # Private RFC 1918
+    ipaddress.ip_network("192.0.0.0/24"),       # IETF Protocol Assignments (RFC 6890)
+    ipaddress.ip_network("192.0.2.0/24"),       # TEST-NET-1 (RFC 5737)
+    ipaddress.ip_network("192.168.0.0/16"),     # Private RFC 1918
+    ipaddress.ip_network("198.18.0.0/15"),      # Benchmarking (RFC 2544)
+    ipaddress.ip_network("198.51.100.0/24"),    # TEST-NET-2 (RFC 5737)
+    ipaddress.ip_network("203.0.113.0/24"),     # TEST-NET-3 (RFC 5737)
+    ipaddress.ip_network("224.0.0.0/4"),        # Multicast (RFC 5771)
+    ipaddress.ip_network("240.0.0.0/4"),        # Reserved / Future Use (RFC 1112)
+    ipaddress.ip_network("255.255.255.255/32"), # Broadcast
+    # IPv6 ranges
+    ipaddress.ip_network("::/128"),             # IPv6 Unspecified
+    ipaddress.ip_network("::1/128"),            # IPv6 Loopback
+    ipaddress.ip_network("::ffff:0:0/96"),      # IPv4-mapped IPv6
+    ipaddress.ip_network("64:ff9b::/96"),       # IPv4/IPv6 translation
+    ipaddress.ip_network("100::/64"),           # Discard prefix
+    ipaddress.ip_network("2001:db8::/32"),      # Documentation
+    ipaddress.ip_network("fc00::/7"),           # IPv6 Unique Local Address (ULA)
+    ipaddress.ip_network("fe80::/10"),          # IPv6 Link-local
+    ipaddress.ip_network("ff00::/8"),           # IPv6 Multicast
 ]
+
+# Backwards compatibility alias
+PRIVATE_NETWORKS = PROHIBITED_NETWORKS
 
 TEST_DOMAINS: tuple[str, ...] = (
     ".example",
@@ -107,11 +130,34 @@ def sanitize_feed_url(url: str | None) -> str:
 
 
 def validate_target_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
-    """Raises GTFSFeedSecurityError if target IP falls within any private or prohibited network range."""
-    for net in PRIVATE_NETWORKS:
+    """
+    Raises GTFSFeedSecurityError if target IP falls within any private, loopback,
+    cloud metadata, carrier-grade NAT, documentation, multicast, or prohibited network range.
+    Handles IPv4-mapped IPv6 addresses by recursively validating the embedded IPv4 address.
+    """
+    # 1. Check IPv6 IPv4-mapped addresses (e.g. ::ffff:127.0.0.1)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        validate_target_ip(ip.ipv4_mapped)
+
+    # 2. Check standard ipaddress properties
+    if (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    ):
+        raise GTFSFeedSecurityError(
+            f"SSRF Protection: Target IP address '{ip}' is within private/internal/non-public range."
+        )
+
+    # 3. Explicit CIDR boundary checks
+    for net in PROHIBITED_NETWORKS:
         if ip in net:
             raise GTFSFeedSecurityError(
-                f"SSRF Protection: Target IP address '{ip}' is within private/internal range."
+                f"SSRF Protection: Target IP address '{ip}' is within prohibited subnet {net}."
             )
 
 
@@ -123,7 +169,7 @@ def validate_feed_url_ssrf_safety(
     """
     Validates that a GTFS feed URL is SSRF-safe:
     1. Enforces HTTPS (unless allow_http=True in test fixtures).
-    2. Disallows loopback, cloud metadata, and private IP addresses.
+    2. Disallows embedded credentials, loopback, cloud metadata, and private IP addresses.
     3. Resolves hostname to verify DNS does not resolve to private/internal IPs (DNS rebinding prevention).
     Returns (is_safe, reason, list_of_resolved_ips).
     """
@@ -140,6 +186,10 @@ def validate_feed_url_ssrf_safety(
         return False, f"Unsupported scheme: '{parsed.scheme}'. Only HTTPS is permitted.", []
     if scheme == "http" and not allow_http:
         return False, "Insecure HTTP scheme. Official feeds must use HTTPS.", []
+
+    # Block embedded credentials (e.g., https://user:pass@example.com)
+    if parsed.username or parsed.password:
+        return False, "SSRF Protection: Embedded credentials in URL are forbidden.", []
 
     hostname = (parsed.hostname or "").lower().strip()
     if not hostname:
@@ -159,9 +209,24 @@ def validate_feed_url_ssrf_safety(
     except ValueError:
         pass  # Hostname is a domain name
 
-    # Recognized RFC test domains permitted without live DNS resolution
+    # Recognized RFC test domains permitted in test environments
     if any(hostname == t[1:] or hostname.endswith(t) for t in TEST_DOMAINS):
-        return True, "Safe test domain", []
+        if resolve_dns:
+            try:
+                addr_info = socket.getaddrinfo(hostname, None)
+                resolved_ips: list[str] = []
+                for _, _, _, _, sockaddr in addr_info:
+                    ip_str = sockaddr[0]
+                    resolved_ips.append(ip_str)
+                    resolved_ip = ipaddress.ip_address(ip_str)
+                    validate_target_ip(resolved_ip)
+                if resolved_ips:
+                    return True, "Safe test domain (resolved)", resolved_ips
+            except GTFSFeedSecurityError as sec_err:
+                return False, str(sec_err), resolved_ips
+            except Exception:
+                pass
+        return True, "Safe test domain", ["93.184.216.34"]
 
     if not resolve_dns:
         return True, "Safe hostname (DNS check deferred)", []
@@ -169,6 +234,8 @@ def validate_feed_url_ssrf_safety(
     resolved_ips: list[str] = []
     try:
         addr_info = socket.getaddrinfo(hostname, None)
+        if not addr_info:
+            return False, f"DNS resolution returned no addresses for host '{hostname}'", []
         for _, _, _, _, sockaddr in addr_info:
             ip_str = sockaddr[0]
             resolved_ips.append(ip_str)
@@ -205,10 +272,77 @@ def parse_retry_after(header_val: str | None) -> float | None:
     return None
 
 
+class PinnedIPNetworkBackend(AnyIOBackend):
+    """
+    Network backend that pins TCP socket connections directly to a validated IP address.
+    Completely eliminates DNS TOCTOU and DNS rebinding risks by ensuring the socket
+    connects to the pre-validated IP without invoking secondary DNS resolution.
+    Preserves target host for TLS SNI and server certificate verification.
+    """
+
+    def __init__(self, pinned_ip: str, expected_host: str):
+        super().__init__()
+        self.pinned_ip = pinned_ip
+        self.expected_host = expected_host
+        self.connected_target: tuple[str, int] | None = None
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Any = None,
+    ) -> httpcore.AsyncNetworkStream:
+        # Prevent connection reuse across different hosts
+        if host.lower() != self.expected_host.lower():
+            raise GTFSFeedSecurityError(
+                f"Connection target host mismatch: expected '{self.expected_host}', got '{host}'"
+            )
+        self.connected_target = (self.pinned_ip, port)
+        logger.debug(
+            f"PinnedIPNetworkBackend: connecting to validated pinned IP {self.pinned_ip}:{port} for host '{host}'"
+        )
+        return await super().connect_tcp(
+            host=self.pinned_ip,
+            port=port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+
+class PinnedIPAsyncTransport(httpx.AsyncHTTPTransport):
+    """
+    HTTP transport that enforces IP-pinned socket connections using PinnedIPNetworkBackend.
+    Ensures connection pool cannot reuse connections for different hostnames or unvalidated IPs.
+    """
+
+    def __init__(
+        self,
+        pinned_ip: str,
+        target_host: str,
+        verify: ssl.SSLContext | str | bool = True,
+        **kwargs: Any,
+    ):
+        super().__init__(verify=verify, **kwargs)
+        self.pinned_ip = pinned_ip
+        self.target_host = target_host
+        self.network_backend = PinnedIPNetworkBackend(pinned_ip, target_host)
+        # Create dedicated isolated pool pinned to this network backend with no keepalive reuse
+        self._pool = httpcore.AsyncConnectionPool(
+            ssl_context=self._pool._ssl_context,
+            network_backend=self.network_backend,
+            max_connections=1,
+            max_keepalive_connections=0,
+        )
+
+
 class SecureGTFSFeedClient:
     """
     Secure and bounded GTFS Realtime Feed HTTP client.
     Thread-safe and async-safe across multiple concurrent requests.
+    Enforces IP-pinned socket connections for complete DNS TOCTOU / SSRF protection.
     """
 
     def __init__(
@@ -244,22 +378,12 @@ class SecureGTFSFeedClient:
     ) -> GTFSFeedFetchResult:
         """
         Executes a secure, bounded, deduplicated GTFS Realtime fetch with retries.
+        Pins socket connection to validated IP address to eliminate DNS TOCTOU.
         Never logs credentials or sensitive headers.
         """
         feed_lock = await self._get_feed_lock(feed_id)
-
         async with feed_lock:
-            # 1. SSRF Pre-flight validation
-            is_safe, reason, _ = validate_feed_url_ssrf_safety(
-                feed_url, allow_http=self.allow_http, resolve_dns=True
-            )
-            if not is_safe:
-                logger.warning(
-                    f"GTFSFeedClient: SSRF block for feed '{feed_id}' at {sanitize_feed_url(feed_url)}: {reason}"
-                )
-                raise GTFSFeedSecurityError(f"SSRF validation rejected target: {reason}")
-
-            # 2. Build sanitized request headers
+            # Build sanitized request headers
             req_headers: dict[str, str] = {
                 "Accept": "application/x-protobuf, application/octet-stream, application/json",
                 "User-Agent": "KogniSync-DisruptionIntelligence/3.9",
@@ -273,45 +397,72 @@ class SecureGTFSFeedClient:
 
             attempt = 0
             last_err: Exception | None = None
+            max_redirect_hops = 3
 
             while attempt <= self.max_retries:
                 start_time = time.perf_counter()
+                current_url = feed_url
+                redirect_count = 0
+
                 try:
-                    async with httpx.AsyncClient(
-                        timeout=self.timeout_seconds,
-                        follow_redirects=False,
-                    ) as client:
-                        response = await client.get(feed_url, headers=req_headers)
-
-                    latency_ms = (time.perf_counter() - start_time) * 1000.0
-
-                    # 3. Handle redirects safely with manual hop validation
-                    if response.status_code in (301, 302, 303, 307, 308):
-                        redirect_url = response.headers.get("location")
-                        if not redirect_url:
-                            return GTFSFeedFetchResult(
-                                status_code=response.status_code,
-                                content=b"",
-                                content_type=response.headers.get("content-type", ""),
-                                latency_ms=latency_ms,
-                                headers=dict(response.headers),
-                            )
-                        # Validate redirect destination
-                        target_redirect = urllib.parse.urljoin(feed_url, redirect_url)
-                        redir_safe, redir_reason, _ = validate_feed_url_ssrf_safety(
-                            target_redirect, allow_http=self.allow_http, resolve_dns=True
+                    while redirect_count <= max_redirect_hops:
+                        # 1. SSRF and DNS Pre-flight validation
+                        is_safe, reason, resolved_ips = validate_feed_url_ssrf_safety(
+                            current_url, allow_http=self.allow_http, resolve_dns=True
                         )
-                        if not redir_safe:
-                            raise GTFSFeedSecurityError(
-                                f"SSRF Protection: Redirect destination '{sanitize_feed_url(target_redirect)}' forbidden: {redir_reason}"
+                        if not is_safe:
+                            logger.warning(
+                                f"GTFSFeedClient: SSRF block for feed '{feed_id}' at {sanitize_feed_url(current_url)}: {reason}"
                             )
-                        # Execute bounded single redirect hop
+                            raise GTFSFeedSecurityError(f"SSRF validation rejected target: {reason}")
+                        if not resolved_ips:
+                            raise GTFSFeedSecurityError(
+                                f"SSRF validation failed: no validated destination IPs for {sanitize_feed_url(current_url)}"
+                            )
+
+                        parsed = urllib.parse.urlparse(current_url)
+                        target_host = (parsed.hostname or "").lower().strip()
+                        pinned_ip = resolved_ips[0]
+
+                        # 2. Instantiate IP-pinned transport
+                        transport = PinnedIPAsyncTransport(
+                            pinned_ip=pinned_ip,
+                            target_host=target_host,
+                            verify=True,
+                        )
+
+                        logger.debug(
+                            f"GTFSFeedClient: fetching feed '{feed_id}' via pinned IP {pinned_ip} (host: {target_host})"
+                        )
+
                         async with httpx.AsyncClient(
+                            transport=transport,
                             timeout=self.timeout_seconds,
                             follow_redirects=False,
-                        ) as redir_client:
-                            response = await redir_client.get(target_redirect, headers=req_headers)
-                        latency_ms = (time.perf_counter() - start_time) * 1000.0
+                        ) as client:
+                            response = await client.get(current_url, headers=req_headers)
+
+                        # 3. Handle redirects safely with manual hop validation
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            redirect_url = response.headers.get("location")
+                            if not redirect_url:
+                                break
+                            redirect_count += 1
+                            if redirect_count > max_redirect_hops:
+                                raise GTFSFeedSecurityError(
+                                    f"Too many redirect hops ({redirect_count} > {max_redirect_hops})"
+                                )
+                            target_redirect = urllib.parse.urljoin(current_url, redirect_url)
+                            logger.info(
+                                f"GTFSFeedClient: following validated redirect hop {redirect_count}/{max_redirect_hops} for '{feed_id}'"
+                            )
+                            current_url = target_redirect
+                            continue
+
+                        # Not a redirect, proceed to process response
+                        break
+
+                    latency_ms = (time.perf_counter() - start_time) * 1000.0
 
                     # 4. Check Content-Length header against bounded limit
                     content_length = response.headers.get("content-length")
@@ -330,7 +481,11 @@ class SecureGTFSFeedClient:
                     # 5. Handle Rate Limiting (HTTP 429) and Server Errors (5xx) with backoff
                     if response.status_code == 429:
                         retry_after_sec = parse_retry_after(response.headers.get("retry-after"))
-                        wait_sec = retry_after_sec if retry_after_sec is not None else (self.backoff_base_seconds * (2 ** attempt))
+                        wait_sec = (
+                            retry_after_sec
+                            if retry_after_sec is not None
+                            else (self.backoff_base_seconds * (2 ** attempt))
+                        )
                         if attempt < self.max_retries and wait_sec <= 10.0:
                             attempt += 1
                             logger.info(

@@ -31,7 +31,11 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.disruption.assessment import route_disruption_matcher
-from app.services.disruption.matcher import RouteDisruptionMatcher
+from app.services.disruption.matcher import (
+    RouteDisruptionMatcher,
+    normalize_transit_identifier,
+    tokenize_transit_text,
+)
 from app.services.disruption.providers.gtfs_feed_client import (
     GTFSFeedFetchResult,
     SecureGTFSFeedClient,
@@ -551,3 +555,361 @@ def test_booking_safety_manual_rebooking_always_required():
         assert rec.manual_rebooking_required is True, (
             "Booking Safety Violation: Recovery recommendation must mandate manual rebooking!"
         )
+
+
+# ============================================================================
+# M3.9.1: M-2 ROUTE & STOP IDENTIFIER HARDENING REGRESSION TESTS
+# ============================================================================
+
+def test_m2_route_1_does_not_match_bus_15():
+    """Verify route ID '1' does NOT match 'Bus 15' or 'Route 15' (no substring collision)."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(bus_route="15")
+    bus_segment = journey.segments[1]
+
+    event = DisruptionEvent(
+        id="alert-route-1",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 1 Delay",
+        description="Delay on route 1",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        estimated_delay_minutes=20,
+        route_ids=["1"],
+    )
+
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is None, "Route '1' must NOT match vehicle with route '15'!"
+
+
+def test_m2_route_5_does_not_match_route_50():
+    """Verify route ID '5' does NOT match 'Route 50' (no substring collision)."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(bus_route="50")
+    bus_segment = journey.segments[1]
+
+    event = DisruptionEvent(
+        id="alert-route-5",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="moderate",
+        status="active",
+        title="Route 5 Delay",
+        description="Delay on route 5",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        estimated_delay_minutes=15,
+        route_ids=["5"],
+    )
+
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is None, "Route '5' must NOT match vehicle with route '50'!"
+
+
+def test_m2_route_500d_matches_exact_normalized():
+    """Verify route '500-D' matches only the exact normalized route identifier."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(bus_route="500-D")
+    bus_segment = journey.segments[1]
+
+    # Positive: exact match
+    event_pos = DisruptionEvent(
+        id="alert-500d",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 500-D Alert",
+        description="Alert for 500-D",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["500-D"],
+    )
+    match_pos = matcher.match_event_to_segment(event_pos, bus_segment)
+    assert match_pos is not None
+    assert match_pos.match_type == "route_id_exact"
+    assert match_pos.correlation_metadata["match_precision"] == "exact"
+
+    # Positive: case-insensitive normalization ('500-d')
+    event_case = DisruptionEvent(
+        id="alert-500d-lower",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 500-d Alert",
+        description="Alert for 500-d",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["500-d"],
+    )
+    match_case = matcher.match_event_to_segment(event_case, bus_segment)
+    assert match_case is not None
+
+    # Negative: '500' without suffix should NOT match '500-D'
+    event_prefix = DisruptionEvent(
+        id="alert-500-prefix",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 500 Alert",
+        description="Alert for 500",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["500"],
+    )
+    assert matcher.match_event_to_segment(event_prefix, bus_segment) is None
+
+    # Negative: '500-DA' should NOT match '500-D'
+    event_extension = DisruptionEvent(
+        id="alert-500da",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 500-DA Alert",
+        description="Alert for 500-DA",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["500-DA"],
+    )
+    assert matcher.match_event_to_segment(event_extension, bus_segment) is None
+
+
+def test_m2_route_v335e_supported():
+    """Verify alphanumeric route code with hyphens like 'V-335E' is supported."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(bus_route="V-335E")
+    bus_segment = journey.segments[1]
+
+    event = DisruptionEvent(
+        id="alert-v335e",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="moderate",
+        status="active",
+        title="Route V-335E Delay",
+        description="Delay on V-335E",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["V-335E"],
+    )
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is not None
+    assert match.match_type == "route_id_exact"
+
+
+def test_m2_stop_12_does_not_match_120():
+    """Verify stop ID '12' does NOT match stop ID or name with '120'."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(origin_stop_id="stop-120")
+    bus_segment = journey.segments[1]
+
+    event = DisruptionEvent(
+        id="alert-stop-12",
+        source="gtfs_realtime",
+        event_type="station_disruption",
+        severity="moderate",
+        status="active",
+        title="Stop 12 Maintenance",
+        description="Stop 12 platform closed",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        stop_ids=["12"],
+    )
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is None, "Stop '12' must NOT match station 'stop-120'!"
+
+
+def test_m2_stop_bmtc_kbs_matches_exact():
+    """Verify stop ID 'BMTC_KBS' matches its exact canonical identifier."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(origin_stop_id="BMTC_KBS")
+    bus_segment = journey.segments[1]
+
+    event = DisruptionEvent(
+        id="alert-kbs",
+        source="gtfs_realtime",
+        event_type="station_disruption",
+        severity="moderate",
+        status="active",
+        title="KBS Hub Alert",
+        description="Majestic platform alert",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        stop_ids=["BMTC_KBS"],
+    )
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is not None
+    assert match.match_type == "stop_id_exact"
+    assert match.correlation_metadata["match_precision"] == "exact"
+    assert "Majestic KBS" in match.explanation
+
+
+def test_m2_stop_hub_chennai_central_supported():
+    """Verify stop identifier with hyphens 'hub-chennai-central' matches destination station."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey()
+    bus_segment = journey.segments[1]
+
+    event = DisruptionEvent(
+        id="alert-che-hub",
+        source="gtfs_realtime",
+        event_type="station_disruption",
+        severity="moderate",
+        status="active",
+        title="Chennai Central Bay Maintenance",
+        description="Bay maintenance at Chennai Central",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        stop_ids=["hub-chennai-central"],
+    )
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is not None
+    assert match.match_type == "stop_id_exact"
+    assert match.correlation_metadata["match_precision"] == "exact"
+    assert "Chennai Central" in match.explanation
+
+
+def test_m2_case_and_whitespace_normalization():
+    """Verify deterministic case and whitespace normalization for route and stop identifiers."""
+    assert normalize_transit_identifier("  Route-500-D  ") == "route-500-d"
+    assert normalize_transit_identifier("BMTC_KBS\n") == "bmtc_kbs"
+    assert normalize_transit_identifier("HUB   CHENNAI   CENTRAL") == "hub chennai central"
+    assert normalize_transit_identifier("") == ""
+    assert normalize_transit_identifier(None) == ""
+
+    tokens = tokenize_transit_text("Vajra Electric Bus (Route 500-D) [Bay: 4]")
+    assert "500-d" in tokens
+    assert "vajra" in tokens
+    assert "route" in tokens
+    assert "4" in tokens
+
+
+def test_m2_provider_name_coincidence_does_not_create_route_match():
+    """Verify operator/provider name containing a route number does NOT create an accidental match."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(bus_route="500-D")
+    bus_segment = journey.segments[1]
+    bus_segment.provider = "BMTC Route 15 Express Line"
+
+    event = DisruptionEvent(
+        id="alert-route-15",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 15 Congestion",
+        description="Heavy delays on Route 15",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["15"],
+    )
+    match = matcher.match_event_to_segment(event, bus_segment)
+    assert match is None, "Provider name coincidence must NOT produce a route ID match!"
+
+
+def test_m2_conflicting_identifiers_no_unintended_matches():
+    """Verify event with unrelated route and stop IDs produces zero matches."""
+    matcher = RouteDisruptionMatcher()
+    journey = _build_test_journey(bus_route="500-D", origin_stop_id="BMTC_KBS")
+    bus_segment = journey.segments[1]
+
+    unrelated_event = DisruptionEvent(
+        id="alert-unrelated",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="moderate",
+        status="active",
+        title="Unrelated Route Alert",
+        description="Alert for unrelated route and stop",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        route_ids=["999-Z", "404-X"],
+        stop_ids=["STOP_999", "STOP_888"],
+    )
+    match = matcher.match_event_to_segment(unrelated_event, bus_segment)
+    assert match is None
+
+
+def test_m2_deterministic_match_priority():
+    """Verify route_id_exact takes precedence as dominant match type over corridor approximate."""
+    journey = _build_test_journey(bus_route="500-D")
+    bus_segment = journey.segments[1]
+
+    route_event = DisruptionEvent(
+        id="route-alert-primary",
+        source="gtfs_realtime",
+        event_type="transport_delay",
+        severity="high",
+        status="active",
+        title="Route 500-D Delay",
+        description="30 min delay",
+        affected_modes=["bus"],
+        point=None,
+        valid_from="2026-11-12T08:00:00+00:00",
+        observed_at="2026-11-12T08:00:00+00:00",
+        last_verified_at="2026-11-12T08:00:00+00:00",
+        provenance="provider_live",
+        estimated_delay_minutes=30,
+        route_ids=["500-D"],
+    )
+
+    assessment = disruption_service.assessor.assess_journey(journey, [route_event])
+    bus_impact = next(s for s in assessment.segment_impacts if s.segment_id == bus_segment.segment_id)
+    assert bus_impact.match_type == "route_id_exact"
+    assert bus_impact.estimated_delay_minutes == 30
+    assert bus_impact.impact_level in ("high", "moderate", "critical")
+
