@@ -80,6 +80,13 @@ CAUSE_REVERSE_MAP = {v: k for k, v in CAUSE_MAP.items()}
 EFFECT_REVERSE_MAP = {v: k for k, v in EFFECT_MAP.items()}
 SCHEDULE_RELATIONSHIP_REVERSE_MAP = {v: k for k, v in SCHEDULE_RELATIONSHIP_MAP.items()}
 CONGESTION_LEVEL_REVERSE_MAP = {v: k for k, v in CONGESTION_LEVEL_MAP.items()}
+SEVERITY_LEVEL_MAP: dict[int, str] = {
+    1: "UNKNOWN_SEVERITY",
+    2: "INFO",
+    3: "WARNING",
+    4: "SEVERE",
+}
+SEVERITY_LEVEL_REVERSE_MAP = {v: k for k, v in SEVERITY_LEVEL_MAP.items()}
 
 
 def decode_varint(data: bytes, pos: int) -> tuple[int, int]:
@@ -309,22 +316,69 @@ def _decode_vehicle_position(raw_bytes: bytes) -> dict[str, Any]:
     return veh
 
 
+def _decode_entity_selector(raw_bytes: bytes) -> dict[str, Any]:
+    """Decodes official gtfs-realtime.proto EntitySelector message (tags 1..6)."""
+    es: dict[str, Any] = {}
+    for tag, wire_type, val in decode_fields(raw_bytes):
+        if tag == 1 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["agency_id"] = _decode_string(val)
+        elif tag == 2 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["route_id"] = _decode_string(val)
+        elif tag == 3 and wire_type == WIRE_VARINT:
+            es["route_type"] = decode_signed_varint32(val)
+        elif tag == 4 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["trip"] = _decode_trip_descriptor(val)
+        elif tag == 5 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["stop_id"] = _decode_string(val)
+        elif tag == 6 and wire_type == WIRE_VARINT:
+            es["direction_id"] = val
+    return es
+
+
 def _decode_alert(raw_bytes: bytes) -> dict[str, Any]:
-    alert: dict[str, Any] = {"active_period": []}
-    for tag, _, val in decode_fields(raw_bytes):
-        if tag == 1:
+    """
+    Decodes GTFS Realtime Alert message adhering to official gtfs-realtime.proto tags:
+    - active_period = 1 (bytes TimeRange)
+    - informed_entity = 5 (bytes EntitySelector)
+    - cause = 6 (varint Cause)
+    - effect = 7 (varint Effect)
+    - url = 8 (bytes TranslatedString)
+    - header_text = 10 (bytes TranslatedString)
+    - description_text = 11 (bytes TranslatedString)
+    - severity_level = 14 (varint SeverityLevel)
+    Discriminates by (tag, wire_type) so legacy internal fixtures remain compatible without
+    colliding with official gtfs-realtime.proto payloads.
+    """
+    alert: dict[str, Any] = {"active_period": [], "informed_entity": []}
+    for tag, wire_type, val in decode_fields(raw_bytes):
+        if tag == 1 and wire_type == WIRE_LENGTH_DELIMITED:
             alert["active_period"].append(_decode_time_range(val))
-        elif tag == 3:
+        elif tag == 5 and wire_type == WIRE_LENGTH_DELIMITED:
+            alert["informed_entity"].append(_decode_entity_selector(val))
+        elif tag == 6 and wire_type == WIRE_VARINT:
             alert["cause"] = CAUSE_MAP.get(val, "UNKNOWN_CAUSE")
-        elif tag == 4:
+        elif tag == 7 and wire_type == WIRE_VARINT:
             alert["effect"] = EFFECT_MAP.get(val, "UNKNOWN_EFFECT")
-        elif tag == 6:
+        elif tag == 8 and wire_type == WIRE_LENGTH_DELIMITED:
+            alert["url"] = _decode_translated_string(val)
+        elif tag == 10 and wire_type == WIRE_LENGTH_DELIMITED:
             alert["header_text"] = _decode_translated_string(val)
-        elif tag == 7:
+        elif tag == 11 and wire_type == WIRE_LENGTH_DELIMITED:
             alert["description_text"] = _decode_translated_string(val)
-        elif tag == 10:
+        elif tag == 14 and wire_type == WIRE_VARINT:
+            alert["severity_level"] = SEVERITY_LEVEL_MAP.get(val, val)
+        # Backwards-compatible wire-type-guarded legacy internal tags
+        elif tag == 3 and wire_type == WIRE_VARINT and "cause" not in alert:
+            alert["cause"] = CAUSE_MAP.get(val, "UNKNOWN_CAUSE")
+        elif tag == 4 and wire_type == WIRE_VARINT and "effect" not in alert:
+            alert["effect"] = EFFECT_MAP.get(val, "UNKNOWN_EFFECT")
+        elif tag == 6 and wire_type == WIRE_LENGTH_DELIMITED and "header_text" not in alert:
+            alert["header_text"] = _decode_translated_string(val)
+        elif tag == 7 and wire_type == WIRE_LENGTH_DELIMITED and "description_text" not in alert:
+            alert["description_text"] = _decode_translated_string(val)
+        elif tag == 10 and wire_type == WIRE_VARINT and "severity_level" not in alert:
             alert["severity_level"] = val
-        elif tag == 11:
+        elif tag == 11 and wire_type == WIRE_VARINT:
             alert["timestamp"] = val
     return alert
 
@@ -427,30 +481,58 @@ def _encode_time_range(tr: dict[str, int]) -> bytes:
     return bytes(buf)
 
 
+def _encode_entity_selector(es: dict[str, Any]) -> bytes:
+    """Encodes an EntitySelector per official gtfs-realtime.proto field numbers (tags 1..6)."""
+    buf = bytearray()
+    if es.get("agency_id") is not None:
+        buf.extend(_encode_string_field(1, str(es["agency_id"])))
+    if es.get("route_id") is not None:
+        buf.extend(_encode_string_field(2, str(es["route_id"])))
+    if es.get("route_type") is not None:
+        buf.extend(_encode_varint_field(3, int(es["route_type"])))
+    if isinstance(es.get("trip"), dict):
+        buf.extend(_encode_bytes_field(4, _encode_trip_descriptor(es["trip"])))
+    if es.get("stop_id") is not None:
+        buf.extend(_encode_string_field(5, str(es["stop_id"])))
+    if es.get("direction_id") is not None:
+        buf.extend(_encode_varint_field(6, int(es["direction_id"])))
+    return bytes(buf)
+
+
 def _encode_alert(alert: dict[str, Any]) -> bytes:
+    """Encodes an Alert message strictly using official gtfs-realtime.proto field tags."""
     buf = bytearray()
     for ap in alert.get("active_period", []):
         buf.extend(_encode_bytes_field(1, _encode_time_range(ap)))
+
+    for inf in alert.get("informed_entity", []):
+        if isinstance(inf, dict):
+            buf.extend(_encode_bytes_field(5, _encode_entity_selector(inf)))
 
     cause_val = alert.get("cause")
     if isinstance(cause_val, str):
         cause_val = CAUSE_REVERSE_MAP.get(cause_val, 1)
     if isinstance(cause_val, int):
-        buf.extend(_encode_varint_field(3, cause_val))
+        buf.extend(_encode_varint_field(6, cause_val))
 
     effect_val = alert.get("effect")
     if isinstance(effect_val, str):
         effect_val = EFFECT_REVERSE_MAP.get(effect_val, 8)
     if isinstance(effect_val, int):
-        buf.extend(_encode_varint_field(4, effect_val))
+        buf.extend(_encode_varint_field(7, effect_val))
 
+    if "url" in alert and isinstance(alert["url"], dict):
+        buf.extend(_encode_translated_string(8, alert["url"]))
     if "header_text" in alert and isinstance(alert["header_text"], dict):
-        buf.extend(_encode_translated_string(6, alert["header_text"]))
+        buf.extend(_encode_translated_string(10, alert["header_text"]))
     if "description_text" in alert and isinstance(alert["description_text"], dict):
-        buf.extend(_encode_translated_string(7, alert["description_text"]))
+        buf.extend(_encode_translated_string(11, alert["description_text"]))
 
-    if "timestamp" in alert:
-        buf.extend(_encode_varint_field(11, int(alert["timestamp"])))
+    sev_val = alert.get("severity_level")
+    if isinstance(sev_val, str):
+        sev_val = SEVERITY_LEVEL_REVERSE_MAP.get(sev_val, 1)
+    if isinstance(sev_val, int):
+        buf.extend(_encode_varint_field(14, sev_val))
 
     return bytes(buf)
 

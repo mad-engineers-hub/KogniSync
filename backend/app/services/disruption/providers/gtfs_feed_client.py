@@ -30,7 +30,10 @@ import httpx
 from httpcore._backends.anyio import AnyIOBackend
 
 from app.core.config import settings
-from app.core.logging import logger
+from app.core.logging import harden_http_client_logging, logger, sanitize_sensitive_log_text
+
+# Enforce safe transport logger levels & filters even outside FastAPI lifespan initialization
+harden_http_client_logging()
 
 DISALLOWED_HOSTNAMES: set[str] = {
     "localhost",
@@ -107,26 +110,50 @@ class GTFSFeedFetchResult:
         self.from_dedup_cache = from_dedup_cache
 
 
+SENSITIVE_QUERY_PARAM_TERMS: tuple[str, ...] = (
+    "key",
+    "token",
+    "secret",
+    "auth",
+    "pwd",
+    "password",
+    "credential",
+    "signature",
+    "sig",
+)
+
+
 def sanitize_feed_url(url: str | None) -> str:
-    """Removes sensitive query parameters (e.g. key, token, secret) from URL for safe logging/display."""
+    """Removes sensitive query parameters and userinfo credentials from URL for safe logging/display."""
     if not url:
         return ""
     try:
         parsed = urllib.parse.urlsplit(url)
+        netloc = parsed.netloc
+        if "@" in netloc:
+            _, host_part = netloc.rsplit("@", 1)
+            netloc = f"[REDACTED]@{host_part}"
+
         if not parsed.query:
-            return url
+            return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, "", parsed.fragment))
+
         params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
         sanitized_params = []
         for k, v in params:
             k_lower = k.lower()
-            if any(s in k_lower for s in ("key", "token", "secret", "auth", "pwd", "password")):
+            if any(s in k_lower for s in SENSITIVE_QUERY_PARAM_TERMS):
                 sanitized_params.append((k, "[REDACTED]"))
             else:
                 sanitized_params.append((k, v))
         new_query = urllib.parse.urlencode(sanitized_params)
-        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+        return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, new_query, parsed.fragment))
     except Exception:
         return "[INVALID_URL]"
+
+
+def sanitize_diagnostic_message(text: str | None) -> str:
+    """Redacts URL credentials and auth tokens from upstream error or diagnostic text."""
+    return sanitize_sensitive_log_text(text)
 
 
 def validate_target_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:

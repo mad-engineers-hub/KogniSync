@@ -557,20 +557,47 @@ class GTFSRealtimeProvider(DisruptionProvider):
         title = header_text or f"Transit Alert: {event_type.replace('_', ' ').title()}"
         description = desc_text or f"Cause: {cause}; Effect: {effect}"
 
-        # Extract informed entities (routes, stops, trips)
+        # Extract informed entities (routes, stops, trips, agencies, route_types, directions)
         informed = alert.get("informed_entity") or alert.get("informedEntity") or []
         route_ids: list[str] = []
         stop_ids: list[str] = []
         trip_ids: list[str] = []
+        agency_ids: list[str] = []
+        route_types: list[int] = []
+        direction_ids: list[int] = []
         if isinstance(informed, list):
             for inf in informed:
-                if isinstance(inf, dict):
-                    if inf.get("route_id") or inf.get("routeId"):
-                        route_ids.append(str(inf.get("route_id") or inf.get("routeId")))
-                    if inf.get("stop_id") or inf.get("stopId"):
-                        stop_ids.append(str(inf.get("stop_id") or inf.get("stopId")))
-                    if inf.get("trip_id") or inf.get("tripId"):
-                        trip_ids.append(str(inf.get("trip_id") or inf.get("tripId")))
+                if not isinstance(inf, dict):
+                    continue
+                if inf.get("route_id") or inf.get("routeId"):
+                    route_ids.append(str(inf.get("route_id") or inf.get("routeId")))
+                if inf.get("stop_id") or inf.get("stopId"):
+                    stop_ids.append(str(inf.get("stop_id") or inf.get("stopId")))
+                if inf.get("agency_id") or inf.get("agencyId"):
+                    agency_ids.append(str(inf.get("agency_id") or inf.get("agencyId")))
+                if inf.get("route_type") is not None:
+                    try:
+                        route_types.append(int(inf["route_type"]))
+                    except (TypeError, ValueError):
+                        pass
+                if inf.get("direction_id") is not None:
+                    try:
+                        direction_ids.append(int(inf["direction_id"]))
+                    except (TypeError, ValueError):
+                        pass
+                trip_obj = inf.get("trip")
+                if isinstance(trip_obj, dict):
+                    if trip_obj.get("trip_id") or trip_obj.get("tripId"):
+                        trip_ids.append(str(trip_obj.get("trip_id") or trip_obj.get("tripId")))
+                    if trip_obj.get("route_id") or trip_obj.get("routeId"):
+                        route_ids.append(str(trip_obj.get("route_id") or trip_obj.get("routeId")))
+                    if trip_obj.get("direction_id") is not None:
+                        try:
+                            direction_ids.append(int(trip_obj["direction_id"]))
+                        except (TypeError, ValueError):
+                            pass
+                if inf.get("trip_id") or inf.get("tripId"):
+                    trip_ids.append(str(inf.get("trip_id") or inf.get("tripId")))
 
         return DisruptionEvent(
             id=f"gtfs-alert-{entity_id}",
@@ -592,9 +619,14 @@ class GTFSRealtimeProvider(DisruptionProvider):
             provenance="provider_live",
             confidence=0.95,
             estimated_delay_minutes=20 if severity in ("high", "critical") else 5,
-            route_ids=list(set(route_ids)),
-            stop_ids=list(set(stop_ids)),
-            trip_ids=list(set(trip_ids)),
+            route_ids=sorted(set(route_ids)),
+            stop_ids=sorted(set(stop_ids)),
+            trip_ids=sorted(set(trip_ids)),
+            correlation_metadata={
+                **({"agencyIds": sorted(set(agency_ids))} if agency_ids else {}),
+                **({"routeTypes": sorted(set(route_types))} if route_types else {}),
+                **({"directionIds": sorted(set(direction_ids))} if direction_ids else {}),
+            },
         )
 
     def _parse_trip_update_entity(

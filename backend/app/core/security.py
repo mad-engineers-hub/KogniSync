@@ -9,9 +9,12 @@ Guarantees:
 4. Fails closed in production if JWT_SECRET_KEY is missing.
 5. Consistent 401 Unauthorized responses with WWW-Authenticate header.
 """
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
+import hashlib
 import logging
+import secrets
 import jwt
 from fastapi import Header, HTTPException, status
 from app.core.config import settings
@@ -162,4 +165,100 @@ async def get_current_user_id(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return str(user_id)
+
+
+@dataclass(frozen=True)
+class TransitPollPrincipal:
+    """Verified operational caller identity and transit-polling capability set."""
+
+    principal_id: str
+    can_poll: bool
+    can_force: bool
+
+
+def _extract_jwt_privileges(payload: Dict[str, Any]) -> tuple[bool, bool]:
+    role = str(payload.get("role") or "").strip().lower()
+    raw_scopes = payload.get("scopes") if payload.get("scopes") is not None else payload.get("scope", "")
+    if isinstance(raw_scopes, str):
+        scopes = {s.strip().lower() for s in raw_scopes.replace(",", " ").split() if s.strip()}
+    elif isinstance(raw_scopes, (list, tuple, set)):
+        scopes = {str(s).strip().lower() for s in raw_scopes if str(s).strip()}
+    else:
+        scopes = set()
+
+    can_force = role in ("admin", "superadmin") or bool(scopes & {"transit:force_poll", "admin"})
+    can_poll = can_force or role in ("operator", "ops") or bool(scopes & {"transit:poll", "ops:poll"})
+    return can_poll, can_force
+
+
+async def verify_transit_poll_access(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+    x_elevated_key: Optional[str] = Header(None, alias="X-Elevated-Key"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> TransitPollPrincipal:
+    """
+    Fails closed across ALL environments unless valid operational credentials
+    (`X-Internal-Key` or an operational Bearer JWT) are supplied.
+    Force polling (`force=true`) additionally requires elevated privilege (`X-Elevated-Key`
+    or admin/`transit:force_poll` JWT claims).
+    """
+    if not x_internal_key and not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: operational credentials required for transit feed polling",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    can_force = False
+    principal_id: str | None = None
+
+    if x_internal_key is not None:
+        if not settings.INTERNAL_API_KEY or not secrets.compare_digest(
+            x_internal_key, settings.INTERNAL_API_KEY
+        ):
+            logger.warning("Transit poll access denied: invalid or unconfigured X-Internal-Key")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: invalid or unconfigured operational credentials",
+            )
+        key_digest = hashlib.sha256(x_internal_key.encode("utf-8")).hexdigest()[:12]
+        principal_id = f"internal:{key_digest}"
+        if (
+            x_elevated_key is not None
+            and settings.TRANSIT_POLL_ELEVATED_KEY
+            and secrets.compare_digest(x_elevated_key, settings.TRANSIT_POLL_ELEVATED_KEY)
+        ):
+            can_force = True
+
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication scheme; Bearer token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        payload = decode_access_token(token.strip())
+        jwt_can_poll, jwt_can_force = _extract_jwt_privileges(payload)
+        if principal_id is None and not jwt_can_poll:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: operational transit polling role or scope required",
+            )
+        can_force = can_force or jwt_can_force
+        if principal_id is None:
+            principal_id = f"jwt:{payload.get('sub')}"
+
+    if x_elevated_key is not None and not can_force:
+        logger.warning("Transit poll elevated privilege denied: invalid or unconfigured X-Elevated-Key")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: invalid or unconfigured elevated polling credentials",
+        )
+
+    return TransitPollPrincipal(
+        principal_id=principal_id or "unknown",
+        can_poll=True,
+        can_force=can_force,
+    )
 

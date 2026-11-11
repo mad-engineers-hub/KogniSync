@@ -13,6 +13,7 @@ import json
 import math
 import os
 import time
+import weakref
 from datetime import datetime, timezone
 from typing import Any
 
@@ -23,6 +24,7 @@ from app.services.disruption.providers.gtfs_feed_client import (
     GTFSFeedFetchResult,
     GTFSFeedSecurityError,
     SecureGTFSFeedClient,
+    sanitize_diagnostic_message,
     sanitize_feed_url,
 )
 from app.services.disruption.providers.gtfs_protobuf import (
@@ -91,12 +93,28 @@ class GTFSFeedRegistry:
         self._consecutive_successes: dict[str, int] = {}
         self._last_poll_epoch: dict[str, float] = {}
         self._cached_events: dict[str, list[DisruptionEvent]] = {}
+        self._feed_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
+            weakref.WeakKeyDictionary()
+        )
 
         if initial_configs is not None:
             for cfg in initial_configs:
                 self.register_feed(cfg)
         else:
             self._load_environment_configs()
+
+    def _get_feed_lock(self, feed_id: str) -> asyncio.Lock:
+        """Returns a per-feed asyncio lock scoped to the active event loop without leak risk."""
+        loop = asyncio.get_running_loop()
+        loop_locks = self._feed_locks.get(loop)
+        if loop_locks is None:
+            loop_locks = {}
+            self._feed_locks[loop] = loop_locks
+        lock = loop_locks.get(feed_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            loop_locks[feed_id] = lock
+        return lock
 
     def _resolve_feed_token(self, config: GTFSFeedConfig) -> str | None:
         """Resolves credentials for a feed without mutating configs or exposing secrets."""
@@ -284,58 +302,85 @@ class GTFSFeedRegistry:
     def get_enabled_feed_ids(self) -> list[str]:
         return [fid for fid, cfg in self._configs.items() if cfg.enabled]
 
+    @staticmethod
+    def _filter_unexpired_events(events: list[DisruptionEvent], now_ts: int | None = None) -> list[DisruptionEvent]:
+        """Re-evaluates event expiration and freshness so stale/expired cached events are never served."""
+        check_ts = int(time.time()) if now_ts is None else now_ts
+        valid: list[DisruptionEvent] = []
+        for ev in events:
+            if ev.valid_until:
+                vu_ts = parse_timestamp_to_epoch(ev.valid_until)
+                if vu_ts is not None and vu_ts < check_ts:
+                    continue
+            data_type = (
+                "vehicle_position"
+                if ev.event_type == "traffic_congestion"
+                else ("trip_update" if ev.event_type in ("transport_delay", "service_cancellation") else "service_alert")
+            )
+            report = freshness_engine.evaluate_event_freshness(ev, data_type=data_type)
+            if not report.is_expired and report.status != "stale":
+                valid.append(ev)
+        return valid
+
+    async def _poll_single_feed(self, feed_id: str, force: bool = False) -> list[DisruptionEvent]:
+        """Serializes cooldown check, fetch, and registry state mutation per feed_id."""
+        lock = self._get_feed_lock(feed_id)
+        async with lock:
+            cfg = self._configs.get(feed_id)
+            if not cfg or not cfg.enabled:
+                return []
+
+            now_mono = time.monotonic()
+            last_poll = self._last_poll_epoch.get(feed_id)
+            within_cooldown = (
+                not force
+                and last_poll is not None
+                and (now_mono - last_poll) < max(1, cfg.polling_interval_seconds)
+                and feed_id in self._cached_events
+            )
+            if within_cooldown:
+                filtered = self._filter_unexpired_events(self._cached_events[feed_id])
+                self._cached_events[feed_id] = filtered
+                return list(filtered)
+
+            return await self._fetch_feed_events_locked(feed_id)
+
     async def poll_all_enabled_feeds(self, force: bool = False) -> list[DisruptionEvent]:
         """
         Polls all enabled authorized feeds while respecting per-feed polling intervals.
-        When within polling interval cooldown (and force=False), reuses cached events
-        after re-evaluating freshness rules so stale cached events are never exposed.
+        Per-feed locks prevent concurrent check-then-act fetches while unrelated feeds poll concurrently.
         """
         enabled_ids = self.get_enabled_feed_ids()
         if not enabled_ids:
             return []
 
-        now_mono = time.monotonic()
+        results = await asyncio.gather(
+            *(self._poll_single_feed(fid, force=force) for fid in enabled_ids),
+            return_exceptions=True,
+        )
         aggregated: list[DisruptionEvent] = []
-        fetch_tasks: list[tuple[str, Any]] = []
-
-        for fid in enabled_ids:
-            cfg = self._configs[fid]
-            last_poll = self._last_poll_epoch.get(fid)
-            within_cooldown = (
-                not force
-                and last_poll is not None
-                and (now_mono - last_poll) < max(1, cfg.polling_interval_seconds)
-                and fid in self._cached_events
-            )
-            if within_cooldown:
-                for ev in self._cached_events[fid]:
-                    data_type = (
-                        "vehicle_position"
-                        if ev.event_type == "traffic_congestion"
-                        else ("trip_update" if ev.event_type in ("transport_delay", "service_cancellation") else "service_alert")
-                    )
-                    report = freshness_engine.evaluate_event_freshness(ev, data_type=data_type)
-                    if not report.is_expired and report.status != "stale":
-                        aggregated.append(ev)
+        for idx, res in enumerate(results):
+            fid = enabled_ids[idx]
+            if isinstance(res, list):
+                aggregated.extend(res)
             else:
-                fetch_tasks.append((fid, self.fetch_feed_events(fid)))
-
-        if fetch_tasks:
-            results = await asyncio.gather(*(t[1] for t in fetch_tasks), return_exceptions=True)
-            for idx, res in enumerate(results):
-                fid = fetch_tasks[idx][0]
-                if isinstance(res, list):
-                    aggregated.extend(res)
-                else:
-                    logger.warning(f"GTFSFeedRegistry: polling error on feed '{fid}': {res}")
+                logger.warning(
+                    f"GTFSFeedRegistry: polling error on feed '{fid}': {sanitize_diagnostic_message(str(res))}"
+                )
 
         return aggregated
 
     async def fetch_feed_events(self, feed_id: str) -> list[DisruptionEvent]:
         """
         Fetches, decodes, validates, deduplicates, and manages lifecycle of events for a feed.
+        Acquires per-feed lock so concurrent polls cannot corrupt registry state or counters.
         Enforces IP-pinned SSRF protection and strictly never fabricates live transit data.
         """
+        lock = self._get_feed_lock(feed_id)
+        async with lock:
+            return await self._fetch_feed_events_locked(feed_id)
+
+    async def _fetch_feed_events_locked(self, feed_id: str) -> list[DisruptionEvent]:
         config = self._configs.get(feed_id)
         if not config:
             logger.warning(f"GTFSFeedRegistry: unknown feed_id '{feed_id}'")
@@ -458,16 +503,18 @@ class GTFSFeedRegistry:
         except Exception as parse_err:
             status.decode_failures += 1
             status.last_error_classification = "PARSE_ERROR"
-            status.status_notice = f"Failed to decode transit feed payload: {parse_err}"
+            status.status_notice = (
+                f"Failed to decode transit feed payload: {sanitize_diagnostic_message(str(parse_err))}"
+            )
             self._consecutive_failures[feed_id] += 1
             status.consecutive_failure_count = self._consecutive_failures[feed_id]
             if self._consecutive_failures[feed_id] >= settings.GTFS_CIRCUIT_BREAKER_FAILURES:
                 self._record_transition(feed_id, "degraded", status.status_notice)
             return []
 
-        # Validate FeedHeader timestamp freshness
+        # Validate FeedHeader timestamp freshness; never claim 'fresh' when absent or unparseable
         header = feed_dict.get("header", {}) if isinstance(feed_dict, dict) else {}
-        feed_ts = parse_timestamp_to_epoch(header.get("timestamp"))
+        feed_ts = parse_timestamp_to_epoch(header.get("timestamp") if isinstance(header, dict) else None)
         now_ts = int(time.time())
 
         if feed_ts is not None:
@@ -492,7 +539,8 @@ class GTFSFeedRegistry:
                 return []
             status.freshness_status = "aging" if age > (settings.GTFS_MAX_ENTITY_AGE_SECONDS // 2) else "fresh"
         else:
-            status.freshness_status = "fresh"
+            status.last_feed_header_timestamp = None
+            status.freshness_status = "unknown"
 
         # Reset acceptance/rejection stats for current poll cycle
         status.accepted_event_count = 0
@@ -618,11 +666,21 @@ class GTFSFeedRegistry:
             if not isinstance(ent, dict):
                 self._increment_rejection(status, "malformed_entity")
                 continue
+
+            raw_ent_id = ent.get("id")
             if ent.get("is_deleted"):
+                # Immediately evict explicit deleted tombstones rather than holding via grace period
+                if raw_ent_id not in (None, ""):
+                    del_id = str(raw_ent_id)
+                    current_cycle_ids.add(del_id)
+                    removed = active_map.pop(del_id, None)
+                    if removed is not None:
+                        removed.status = "resolved"
+                    absence_map.pop(del_id, None)
                 continue
 
+            ent_id = str(raw_ent_id) if raw_ent_id not in (None, "") else f"{feed_id}-{time.time_ns()}"
             try:
-                ent_id = str(ent.get("id") or f"{feed_id}-{time.time_ns()}")
                 if ent_id in current_cycle_ids:
                     self._increment_rejection(status, "duplicate_entity_id")
                     continue
@@ -644,33 +702,52 @@ class GTFSFeedRegistry:
                     active_map[ent_id] = ev
                     new_events.append(ev)
                     status.accepted_event_count += 1
-                    if ent_id in absence_map:
-                        del absence_map[ent_id]
+                    absence_map.pop(ent_id, None)
+                elif ev is None:
+                    # Replacement update rejected (expired/stale/invalid) or cleared (< threshold):
+                    # never keep stale previous state active in registry.
+                    removed = active_map.pop(ent_id, None)
+                    if removed is not None:
+                        removed.status = "resolved"
+                    absence_map.pop(ent_id, None)
 
             except Exception as e:
+                removed = active_map.pop(ent_id, None)
+                if removed is not None:
+                    removed.status = "resolved"
+                absence_map.pop(ent_id, None)
                 self._increment_rejection(status, "normalization_error")
-                logger.debug(f"GTFSFeedRegistry: error normalizing entity {ent.get('id')}: {e}")
+                logger.debug(
+                    f"GTFSFeedRegistry: error normalizing entity {raw_ent_id}: "
+                    f"{sanitize_diagnostic_message(str(e))}"
+                )
                 continue
 
-        # Lifecycle Management: temporary absence grace period
+        # Lifecycle Management: temporary absence grace period with strict valid_until enforcement
         grace_period = settings.GTFS_ABSENCE_GRACE_PERIOD_SECONDS
         resolved_ids: list[str] = []
 
         for existing_id in list(active_map.keys()):
             if existing_id not in current_cycle_ids:
+                existing_ev = active_map[existing_id]
+                if existing_ev.valid_until:
+                    vu_ts = parse_timestamp_to_epoch(existing_ev.valid_until)
+                    if vu_ts is not None and vu_ts < now_ts:
+                        resolved_ids.append(existing_id)
+                        continue
                 if existing_id not in absence_map:
                     absence_map[existing_id] = now_sec
-                    new_events.append(active_map[existing_id])
+                    new_events.append(existing_ev)
                 else:
                     if (now_sec - absence_map[existing_id]) >= grace_period:
                         resolved_ids.append(existing_id)
                     else:
-                        new_events.append(active_map[existing_id])
+                        new_events.append(existing_ev)
 
         for rid in resolved_ids:
             active_map[rid].status = "resolved"
             del active_map[rid]
-            del absence_map[rid]
+            absence_map.pop(rid, None)
 
         return new_events, counts
 
@@ -752,6 +829,8 @@ class GTFSFeedRegistry:
         stop_ids: list[str] = []
         trip_ids: list[str] = []
         agency_ids: list[str] = []
+        route_types: list[int] = []
+        direction_ids: list[int] = []
 
         if isinstance(informed, list):
             for inf in informed:
@@ -763,11 +842,27 @@ class GTFSFeedRegistry:
                     stop_ids.append(str(inf.get("stop_id") or inf.get("stopId")))
                 if inf.get("agency_id") or inf.get("agencyId"):
                     agency_ids.append(str(inf.get("agency_id") or inf.get("agencyId")))
+                if inf.get("route_type") is not None:
+                    try:
+                        route_types.append(int(inf["route_type"]))
+                    except (TypeError, ValueError):
+                        pass
+                if inf.get("direction_id") is not None:
+                    try:
+                        direction_ids.append(int(inf["direction_id"]))
+                    except (TypeError, ValueError):
+                        pass
                 trip_obj = inf.get("trip")
-                if isinstance(trip_obj, dict) and (trip_obj.get("trip_id") or trip_obj.get("tripId")):
-                    trip_ids.append(str(trip_obj.get("trip_id") or trip_obj.get("tripId")))
-                if isinstance(trip_obj, dict) and (trip_obj.get("route_id") or trip_obj.get("routeId")):
-                    route_ids.append(str(trip_obj.get("route_id") or trip_obj.get("routeId")))
+                if isinstance(trip_obj, dict):
+                    if trip_obj.get("trip_id") or trip_obj.get("tripId"):
+                        trip_ids.append(str(trip_obj.get("trip_id") or trip_obj.get("tripId")))
+                    if trip_obj.get("route_id") or trip_obj.get("routeId"):
+                        route_ids.append(str(trip_obj.get("route_id") or trip_obj.get("routeId")))
+                    if trip_obj.get("direction_id") is not None:
+                        try:
+                            direction_ids.append(int(trip_obj["direction_id"]))
+                        except (TypeError, ValueError):
+                            pass
                 if inf.get("trip_id") or inf.get("tripId"):
                     trip_ids.append(str(inf.get("trip_id") or inf.get("tripId")))
 
@@ -810,6 +905,8 @@ class GTFSFeedRegistry:
                 "cause": cause,
                 "effect": effect,
                 **({"agencyIds": sorted(set(agency_ids))} if agency_ids else {}),
+                **({"routeTypes": sorted(set(route_types))} if route_types else {}),
+                **({"directionIds": sorted(set(direction_ids))} if direction_ids else {}),
             },
         )
 
@@ -1043,6 +1140,8 @@ class GTFSFeedRegistry:
                 "congestionLevel": congestion,
                 **({"speedMps": pos["speed"]} if isinstance(pos.get("speed"), (int, float)) else {}),
                 **({"vehicleId": str(veh_desc["id"])} if veh_desc.get("id") else {}),
+                **({"vehicleLabel": str(veh_desc["label"])} if veh_desc.get("label") else {}),
+                **({"licensePlate": str(veh_desc["license_plate"])} if veh_desc.get("license_plate") else {}),
             },
         )
 
