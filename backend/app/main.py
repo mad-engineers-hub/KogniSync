@@ -20,9 +20,17 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info(f"Starting {settings.PROJECT_NAME} backend service...")
     
+    from app.core.security import is_forbidden_jwt_secret
+
+    jwt_missing_or_weak = (
+        not settings.JWT_SECRET_KEY
+        or len(settings.JWT_SECRET_KEY.strip()) < 32
+        or is_forbidden_jwt_secret(settings.JWT_SECRET_KEY)
+    )
+
     # Startup readiness gate: fail closed in production if security prerequisites are absent
     if settings.ENVIRONMENT == "production":
-        if not settings.JWT_SECRET_KEY or len(settings.JWT_SECRET_KEY.strip()) < 32:
+        if jwt_missing_or_weak:
             logger.critical("Startup aborted: JWT_SECRET_KEY must be configured with >= 32 characters in production.")
             raise RuntimeError("Startup aborted: JWT_SECRET_KEY must be configured with >= 32 characters in production.")
         if not settings.INTERNAL_API_KEY or len(settings.INTERNAL_API_KEY.strip()) < 16:
@@ -48,6 +56,12 @@ async def lifespan(app: FastAPI):
             logger.info(
                 "Valhalla routing engine is disabled for production environment; using deterministic fallback."
             )
+    elif jwt_missing_or_weak:
+        logger.critical(
+            "Security notice (%s): JWT_SECRET_KEY is unset, weak (< 32 chars), or forbidden. "
+            "All JWT-authenticated endpoints will fail closed until a secure random key is configured.",
+            settings.ENVIRONMENT,
+        )
 
     yield
     logger.info(f"Shutting down {settings.PROJECT_NAME} backend service...")

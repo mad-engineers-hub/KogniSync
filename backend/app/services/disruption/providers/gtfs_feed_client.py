@@ -112,14 +112,17 @@ class GTFSFeedFetchResult:
 
 SENSITIVE_QUERY_PARAM_TERMS: tuple[str, ...] = (
     "key",
+    "apikey",
     "token",
     "secret",
     "auth",
     "pwd",
+    "passwd",
     "password",
     "credential",
     "signature",
     "sig",
+    "bearer",
 )
 
 

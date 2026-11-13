@@ -686,3 +686,186 @@ def encode_gtfs_feed(feed: dict[str, Any]) -> bytes:
     for ent in feed.get("entity", []):
         buf.extend(_encode_bytes_field(2, _encode_feed_entity(ent)))
     return bytes(buf)
+
+
+def map_gtfs_route_type_to_mode(route_type: int) -> str | None:
+    """Maps standard and extended GTFS route_type integers to KogniSync TransportMode values."""
+    if route_type in (0, 1, 5, 6, 7, 12, 1300, 1400):
+        return "metro"
+    if route_type == 2 or 100 <= route_type <= 199:
+        return "train"
+    if route_type in (3, 11) or 200 <= route_type <= 299 or 700 <= route_type <= 899:
+        return "bus"
+    if route_type == 4 or route_type in (1000, 1200):
+        return "ferry"
+    if 400 <= route_type <= 499 or 900 <= route_type <= 999:
+        return "metro"
+    return None
+
+
+def _coerce_optional_int(val: Any) -> int | None:
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def derive_affected_modes_from_selectors(
+    selectors: list[dict[str, Any]],
+    default_modes: list[str] | None = None,
+) -> list[str]:
+    """
+    Derives KogniSync affected_modes from GTFS EntitySelector route_type values when present.
+    - If every selector (or the sole trip selector) carries a recognized GTFS route_type,
+      narrows affected_modes strictly to those modes (e.g. route_type=3 -> ["bus"]).
+    - If some selectors specify route_type and others leave it unspecified, returns the union
+      of mapped modes and default_modes so unspecified selectors are not silently pruned before
+      per-selector matching evaluates them.
+    """
+    fallback = list(default_modes or ["bus", "train", "metro"])
+    if not selectors:
+        return fallback
+
+    mapped_modes: set[str] = set()
+    selectors_with_mapped_rt = 0
+    for sel in selectors:
+        rt = sel.get("route_type")
+        if isinstance(rt, int):
+            mapped = map_gtfs_route_type_to_mode(rt)
+            if mapped:
+                mapped_modes.add(mapped)
+                selectors_with_mapped_rt += 1
+
+    if not mapped_modes:
+        return fallback
+    if selectors_with_mapped_rt == len(selectors):
+        return sorted(mapped_modes)
+    return sorted(set(fallback) | mapped_modes)
+
+
+def extract_gtfs_informed_selectors(informed: Any) -> dict[str, Any]:
+    """
+    Extracts flat identifier sets and structured conjunctive EntitySelector objects
+    from GTFS Realtime Alert `informed_entity` entries.
+    """
+    route_ids: list[str] = []
+    stop_ids: list[str] = []
+    trip_ids: list[str] = []
+    agency_ids: list[str] = []
+    route_types: list[int] = []
+    direction_ids: list[int] = []
+    selectors: list[dict[str, Any]] = []
+
+    if isinstance(informed, list):
+        for inf in informed:
+            if not isinstance(inf, dict):
+                continue
+
+            sel: dict[str, Any] = {}
+            raw_agency = inf.get("agency_id") or inf.get("agencyId")
+            if raw_agency:
+                agency_str = str(raw_agency).strip()
+                if agency_str:
+                    agency_ids.append(agency_str)
+                    sel["agency_id"] = agency_str
+
+            raw_route = inf.get("route_id") or inf.get("routeId")
+            raw_stop = inf.get("stop_id") or inf.get("stopId")
+            raw_trip = inf.get("trip_id") or inf.get("tripId")
+            raw_rt = _coerce_optional_int(
+                inf.get("route_type") if inf.get("route_type") is not None else inf.get("routeType")
+            )
+            raw_dir = _coerce_optional_int(
+                inf.get("direction_id") if inf.get("direction_id") is not None else inf.get("directionId")
+            )
+
+            trip_obj = inf.get("trip")
+            if isinstance(trip_obj, dict):
+                t_trip = trip_obj.get("trip_id") or trip_obj.get("tripId")
+                t_route = trip_obj.get("route_id") or trip_obj.get("routeId")
+                t_agency = trip_obj.get("agency_id") or trip_obj.get("agencyId")
+                t_rt = _coerce_optional_int(
+                    trip_obj.get("route_type") if trip_obj.get("route_type") is not None else trip_obj.get("routeType")
+                )
+                t_dir = _coerce_optional_int(
+                    trip_obj.get("direction_id") if trip_obj.get("direction_id") is not None else trip_obj.get("directionId")
+                )
+                if t_trip and not raw_trip:
+                    raw_trip = t_trip
+                if t_route and not raw_route:
+                    raw_route = t_route
+                if t_agency and not raw_agency:
+                    raw_agency = t_agency
+                    agency_str = str(t_agency).strip()
+                    if agency_str:
+                        agency_ids.append(agency_str)
+                        sel["agency_id"] = agency_str
+                if t_rt is not None and raw_rt is None:
+                    raw_rt = t_rt
+                if t_dir is not None and raw_dir is None:
+                    raw_dir = t_dir
+
+            if raw_route:
+                route_str = str(raw_route).strip()
+                if route_str:
+                    route_ids.append(route_str)
+                    sel["route_id"] = route_str
+            if raw_stop:
+                stop_str = str(raw_stop).strip()
+                if stop_str:
+                    stop_ids.append(stop_str)
+                    sel["stop_id"] = stop_str
+            if raw_trip:
+                trip_str = str(raw_trip).strip()
+                if trip_str:
+                    trip_ids.append(trip_str)
+                    sel["trip_id"] = trip_str
+            if raw_rt is not None:
+                route_types.append(raw_rt)
+                sel["route_type"] = raw_rt
+            if raw_dir is not None:
+                direction_ids.append(raw_dir)
+                sel["direction_id"] = raw_dir
+
+            if sel:
+                selectors.append(sel)
+
+    return {
+        "route_ids": sorted(set(route_ids)),
+        "stop_ids": sorted(set(stop_ids)),
+        "trip_ids": sorted(set(trip_ids)),
+        "agency_ids": sorted(set(agency_ids)),
+        "route_types": sorted(set(route_types)),
+        "direction_ids": sorted(set(direction_ids)),
+        "selectors": selectors,
+    }
+
+
+def extract_trip_descriptor_selector(trip: Any) -> dict[str, Any]:
+    """Extracts structured selector fields from a GTFS-RT TripDescriptor dict."""
+    if not isinstance(trip, dict):
+        return {}
+    sel: dict[str, Any] = {}
+    for src_keys, dst_key in (
+        (("trip_id", "tripId"), "trip_id"),
+        (("route_id", "routeId"), "route_id"),
+        (("agency_id", "agencyId"), "agency_id"),
+    ):
+        val = next((trip.get(k) for k in src_keys if trip.get(k)), None)
+        if val:
+            s = str(val).strip()
+            if s:
+                sel[dst_key] = s
+    raw_rt = _coerce_optional_int(
+        trip.get("route_type") if trip.get("route_type") is not None else trip.get("routeType")
+    )
+    if raw_rt is not None:
+        sel["route_type"] = raw_rt
+    raw_dir = _coerce_optional_int(
+        trip.get("direction_id") if trip.get("direction_id") is not None else trip.get("directionId")
+    )
+    if raw_dir is not None:
+        sel["direction_id"] = raw_dir
+    return sel

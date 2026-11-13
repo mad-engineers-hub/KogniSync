@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from app.core.logging import logger
+from app.services.disruption.providers.gtfs_protobuf import map_gtfs_route_type_to_mode
 from app.services.disruption.schemas import DisruptionEvent
 from app.services.journey.schemas import JourneySegmentSchema
 from app.services.maps.polyline import decode_polyline
@@ -180,6 +181,382 @@ class RouteDisruptionMatcher:
 
         return True
 
+    @staticmethod
+    def _coerce_opt_int(val: Any) -> int | None:
+        if val is None or isinstance(val, bool):
+            return None
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return None
+
+    def _match_trip_id(
+        self, trip_id: str, event: DisruptionEvent, segment: JourneySegmentSchema
+    ) -> MatchedSegmentDisruption | None:
+        t_norm = normalize_transit_identifier(trip_id)
+        seg_trip_norm = normalize_transit_identifier(segment.trip_id)
+        if not t_norm or not seg_trip_norm or t_norm != seg_trip_norm:
+            return None
+        logger.debug("Matcher: exact trip_id match '%s'", trip_id)
+        return MatchedSegmentDisruption(
+            event=event,
+            match_type="trip_id_exact",
+            min_distance_km=0.0,
+            confidence=0.99,
+            explanation=f"Exact trip match on trip '{trip_id}': {event.title}",
+            correlation_metadata={
+                "matched_trip_id": trip_id,
+                "match_method": "trip_id_exact",
+                "match_precision": "exact",
+                "confidence": 0.99,
+                "provenance": event.provenance,
+            },
+        )
+
+    def _match_route_id(
+        self, route_id: str, event: DisruptionEvent, segment: JourneySegmentSchema
+    ) -> MatchedSegmentDisruption | None:
+        r_norm = normalize_transit_identifier(route_id)
+        if not r_norm:
+            return None
+
+        seg_route_norm = normalize_transit_identifier(segment.route_id)
+        if seg_route_norm:
+            if r_norm == seg_route_norm:
+                logger.debug("Matcher: authoritative exact route_id match '%s'", route_id)
+                return MatchedSegmentDisruption(
+                    event=event,
+                    match_type="route_id_exact",
+                    min_distance_km=0.0,
+                    confidence=0.99,
+                    explanation=f"Exact route match on route '{route_id}': {event.title}",
+                    correlation_metadata={
+                        "matched_route_id": route_id,
+                        "match_method": "route_id_exact",
+                        "match_precision": "exact",
+                        "confidence": 0.99,
+                        "provenance": event.provenance,
+                    },
+                )
+            return None
+
+        seg_vehicle_norm = normalize_transit_identifier(segment.vehicle_number)
+        if seg_vehicle_norm and r_norm == seg_vehicle_norm:
+            logger.debug("Matcher: exact route_id match '%s' on vehicle_number", route_id)
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="route_id_exact",
+                min_distance_km=0.0,
+                confidence=0.98,
+                explanation=f"Exact route match on route '{route_id}': {event.title}",
+                correlation_metadata={
+                    "matched_route_id": route_id,
+                    "match_method": "route_id_exact",
+                    "match_precision": "exact",
+                    "confidence": 0.98,
+                    "provenance": event.provenance,
+                },
+            )
+
+        seg_name_norm = normalize_transit_identifier(segment.vehicle_name)
+        if seg_name_norm and r_norm == seg_name_norm:
+            logger.debug("Matcher: exact route_id match '%s' on full vehicle_name", route_id)
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="route_id_exact",
+                min_distance_km=0.0,
+                confidence=0.98,
+                explanation=f"Exact route match on route '{route_id}': {event.title}",
+                correlation_metadata={
+                    "matched_route_id": route_id,
+                    "match_method": "route_id_exact",
+                    "match_precision": "exact",
+                    "confidence": 0.98,
+                    "provenance": event.provenance,
+                },
+            )
+
+        seg_name_tokens = tokenize_transit_text(segment.vehicle_name)
+        if r_norm in seg_name_tokens:
+            logger.debug("Matcher: tokenized route_id match '%s' in vehicle_name tokens", route_id)
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="route_id_exact",
+                min_distance_km=0.0,
+                confidence=0.96,
+                explanation=f"Exact route match on route '{route_id}': {event.title}",
+                correlation_metadata={
+                    "matched_route_id": route_id,
+                    "match_method": "route_id_token",
+                    "match_precision": "token",
+                    "confidence": 0.96,
+                    "provenance": event.provenance,
+                },
+            )
+        return None
+
+    def _match_stop_id(
+        self, stop_id: str, event: DisruptionEvent, segment: JourneySegmentSchema
+    ) -> MatchedSegmentDisruption | None:
+        s_norm = normalize_transit_identifier(stop_id)
+        if not s_norm:
+            return None
+
+        orig_code = normalize_transit_identifier(getattr(segment.origin, "code", None))
+        orig_id = normalize_transit_identifier(getattr(segment.origin, "id", None))
+        orig_hub = normalize_transit_identifier(getattr(segment.origin, "hub_id", None))
+        orig_name_norm = normalize_transit_identifier(segment.origin.name)
+        orig_tokens = tokenize_transit_text(segment.origin.name)
+
+        dest_code = normalize_transit_identifier(getattr(segment.destination, "code", None))
+        dest_id = normalize_transit_identifier(getattr(segment.destination, "id", None))
+        dest_hub = normalize_transit_identifier(getattr(segment.destination, "hub_id", None))
+        dest_name_norm = normalize_transit_identifier(segment.destination.name)
+        dest_tokens = tokenize_transit_text(segment.destination.name)
+
+        if s_norm in (orig_code, orig_id, orig_hub) or s_norm == orig_name_norm:
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="stop_id_exact",
+                min_distance_km=0.0,
+                confidence=0.95,
+                explanation=f"Direct transit stop match at {segment.origin.name} ({stop_id}): {event.title}",
+                correlation_metadata={
+                    "matched_stop_id": stop_id,
+                    "match_method": "stop_id_exact",
+                    "match_precision": "exact",
+                    "confidence": 0.95,
+                    "provenance": event.provenance,
+                },
+            )
+        if s_norm in (dest_code, dest_id, dest_hub) or s_norm == dest_name_norm:
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="stop_id_exact",
+                min_distance_km=0.0,
+                confidence=0.95,
+                explanation=f"Direct transit stop match at {segment.destination.name} ({stop_id}): {event.title}",
+                correlation_metadata={
+                    "matched_stop_id": stop_id,
+                    "match_method": "stop_id_exact",
+                    "match_precision": "exact",
+                    "confidence": 0.95,
+                    "provenance": event.provenance,
+                },
+            )
+        if s_norm in orig_tokens:
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="stop_id_exact",
+                min_distance_km=0.0,
+                confidence=0.92,
+                explanation=f"Direct transit stop match at {segment.origin.name} ({stop_id}): {event.title}",
+                correlation_metadata={
+                    "matched_stop_id": stop_id,
+                    "match_method": "stop_id_token",
+                    "match_precision": "token",
+                    "confidence": 0.92,
+                    "provenance": event.provenance,
+                },
+            )
+        if s_norm in dest_tokens:
+            return MatchedSegmentDisruption(
+                event=event,
+                match_type="stop_id_exact",
+                min_distance_km=0.0,
+                confidence=0.92,
+                explanation=f"Direct transit stop match at {segment.destination.name} ({stop_id}): {event.title}",
+                correlation_metadata={
+                    "matched_stop_id": stop_id,
+                    "match_method": "stop_id_token",
+                    "match_precision": "token",
+                    "confidence": 0.92,
+                    "provenance": event.provenance,
+                },
+            )
+        return None
+
+    def _match_agency_id(
+        self, agency_id: str, event: DisruptionEvent, segment: JourneySegmentSchema
+    ) -> MatchedSegmentDisruption | None:
+        a_norm = normalize_transit_identifier(agency_id)
+        if not a_norm:
+            return None
+        seg_agency_norm = normalize_transit_identifier(segment.agency_id)
+        seg_candidate = seg_agency_norm or normalize_transit_identifier(segment.provider)
+        if not seg_candidate or a_norm != seg_candidate:
+            return None
+        logger.debug("Matcher: exact agency_id match '%s'", agency_id)
+        return MatchedSegmentDisruption(
+            event=event,
+            match_type="agency_id_exact",
+            min_distance_km=0.0,
+            confidence=0.90,
+            explanation=f"Transit agency match ({agency_id}): {event.title}",
+            correlation_metadata={
+                "matched_agency_id": agency_id,
+                "match_method": "agency_id_exact",
+                "match_precision": "exact",
+                "confidence": 0.90,
+                "provenance": event.provenance,
+            },
+        )
+
+    def _selector_constraints_hold(
+        self, sel: dict[str, Any], segment: JourneySegmentSchema
+    ) -> bool:
+        has_primary = any(sel.get(k) for k in ("trip_id", "route_id", "stop_id", "agency_id"))
+        if not has_primary:
+            return False
+
+        if "route_type" in sel and sel["route_type"] is not None:
+            sel_rt = self._coerce_opt_int(sel["route_type"])
+            if sel_rt is None:
+                return False
+            if segment.route_type is not None and int(segment.route_type) != sel_rt:
+                return False
+            mapped_mode = map_gtfs_route_type_to_mode(sel_rt)
+            if mapped_mode is not None and segment.mode != mapped_mode:
+                return False
+            if mapped_mode is None and segment.route_type is None:
+                return False
+
+        if "direction_id" in sel and sel["direction_id"] is not None:
+            sel_dir = self._coerce_opt_int(sel["direction_id"])
+            if sel_dir is None:
+                return False
+            if segment.direction_id is not None:
+                if int(segment.direction_id) != sel_dir:
+                    return False
+            elif not any(sel.get(k) for k in ("trip_id", "route_id", "stop_id")):
+                return False
+
+        if sel.get("agency_id") and any(sel.get(k) for k in ("trip_id", "route_id", "stop_id")):
+            seg_agency_norm = normalize_transit_identifier(segment.agency_id)
+            if seg_agency_norm and seg_agency_norm != normalize_transit_identifier(str(sel["agency_id"])):
+                return False
+
+        if sel.get("trip_id"):
+            seg_trip_norm = normalize_transit_identifier(segment.trip_id)
+            if seg_trip_norm and seg_trip_norm != normalize_transit_identifier(str(sel["trip_id"])):
+                return False
+
+        return True
+
+    def _match_selector_list(
+        self,
+        selectors: list[dict[str, Any]],
+        event: DisruptionEvent,
+        segment: JourneySegmentSchema,
+    ) -> MatchedSegmentDisruption | None:
+        for sel in selectors:
+            if not isinstance(sel, dict) or not self._selector_constraints_hold(sel, segment):
+                continue
+
+            if sel.get("trip_id"):
+                trip_match = self._match_trip_id(str(sel["trip_id"]), event, segment)
+                if trip_match is not None:
+                    if sel.get("route_id") and not self._match_route_id(str(sel["route_id"]), event, segment):
+                        continue
+                    if sel.get("stop_id") and not self._match_stop_id(str(sel["stop_id"]), event, segment):
+                        continue
+                    return trip_match
+                if segment.trip_id is None and sel.get("route_id"):
+                    route_match = self._match_route_id(str(sel["route_id"]), event, segment)
+                    if route_match is not None:
+                        if sel.get("stop_id") and not self._match_stop_id(str(sel["stop_id"]), event, segment):
+                            continue
+                        return route_match
+                continue
+
+            if sel.get("route_id"):
+                route_match = self._match_route_id(str(sel["route_id"]), event, segment)
+                if route_match is not None:
+                    if sel.get("stop_id") and not self._match_stop_id(str(sel["stop_id"]), event, segment):
+                        continue
+                    return route_match
+                continue
+
+            if sel.get("stop_id"):
+                stop_match = self._match_stop_id(str(sel["stop_id"]), event, segment)
+                if stop_match is not None:
+                    return stop_match
+                continue
+
+            if sel.get("agency_id"):
+                agency_match = self._match_agency_id(str(sel["agency_id"]), event, segment)
+                if agency_match is not None:
+                    return agency_match
+
+        return None
+
+    def _match_by_identifiers(
+        self, event: DisruptionEvent, segment: JourneySegmentSchema
+    ) -> MatchedSegmentDisruption | None:
+        meta = event.correlation_metadata or {}
+        selectors = meta.get("informedEntities")
+        if isinstance(selectors, list) and len(selectors) > 0:
+            return self._match_selector_list(selectors, event, segment)
+
+        agency_ids = meta.get("agencyIds") or []
+        route_types = meta.get("routeTypes") or []
+        direction_ids = meta.get("directionIds") or []
+
+        has_primary = bool(event.trip_ids or event.route_ids or event.stop_ids or agency_ids)
+        if not has_primary:
+            return None
+
+        if route_types:
+            coerced_rts = {c for x in route_types if (c := self._coerce_opt_int(x)) is not None}
+            if segment.route_type is not None and coerced_rts and int(segment.route_type) not in coerced_rts:
+                return None
+            mapped = {m for rt in coerced_rts if (m := map_gtfs_route_type_to_mode(rt)) is not None}
+            if coerced_rts and not mapped and segment.route_type is None:
+                return None
+            if mapped and segment.mode not in mapped:
+                return None
+
+        if direction_ids:
+            coerced_dirs = {c for x in direction_ids if (c := self._coerce_opt_int(x)) is not None}
+            if segment.direction_id is not None and coerced_dirs and int(segment.direction_id) not in coerced_dirs:
+                return None
+            if segment.direction_id is None and not (event.trip_ids or event.route_ids or event.stop_ids):
+                return None
+
+        if agency_ids and (event.trip_ids or event.route_ids or event.stop_ids):
+            seg_agency_norm = normalize_transit_identifier(segment.agency_id)
+            if seg_agency_norm and seg_agency_norm not in {
+                normalize_transit_identifier(str(a)) for a in agency_ids
+            }:
+                return None
+
+        for t_id in event.trip_ids:
+            m = self._match_trip_id(t_id, event, segment)
+            if m is not None:
+                return m
+
+        seg_trip_norm = normalize_transit_identifier(segment.trip_id)
+        if event.trip_ids and seg_trip_norm:
+            # Segment specifies a distinct trip_id; do not conflate with route_ids/stop_ids of other trips.
+            return None
+
+        for r_id in event.route_ids:
+            m = self._match_route_id(r_id, event, segment)
+            if m is not None:
+                return m
+
+        for s_id in event.stop_ids:
+            m = self._match_stop_id(s_id, event, segment)
+            if m is not None:
+                return m
+
+        for a_id in agency_ids:
+            m = self._match_agency_id(str(a_id), event, segment)
+            if m is not None:
+                return m
+
+        return None
+
     def match_event_to_segment(
         self, event: DisruptionEvent, segment: JourneySegmentSchema
     ) -> MatchedSegmentDisruption | None:
@@ -192,163 +569,12 @@ class RouteDisruptionMatcher:
         if not self.is_temporally_valid(event, segment):
             return None
 
-        # 2A. Direct Route ID Matching (GTFS-RT route descriptor or alert informed entity)
-        # Prevents substring collisions: route '1' will NOT match 'Bus 15' or 'Route 50'
-        # Arbitrary operator/provider descriptions are excluded from route matches
-        if event.route_ids:
-            seg_vehicle_norm = normalize_transit_identifier(segment.vehicle_number)
-            seg_name_tokens = tokenize_transit_text(segment.vehicle_name)
-            seg_name_norm = normalize_transit_identifier(segment.vehicle_name)
-
-            for r_id in event.route_ids:
-                r_norm = normalize_transit_identifier(r_id)
-                if not r_norm:
-                    continue
-
-                # Exact canonical equality against segment vehicle_number
-                if seg_vehicle_norm and r_norm == seg_vehicle_norm:
-                    logger.debug(f"Matcher: exact route_id match '{r_id}' on vehicle_number")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="route_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.98,
-                        explanation=f"Exact route match on route '{r_id}': {event.title}",
-                        correlation_metadata={
-                            "matched_route_id": r_id,
-                            "match_method": "route_id_exact",
-                            "match_precision": "exact",
-                            "confidence": 0.98,
-                            "provenance": event.provenance,
-                        },
-                    )
-
-                # Exact equality against full normalized vehicle_name
-                if seg_name_norm and r_norm == seg_name_norm:
-                    logger.debug(f"Matcher: exact route_id match '{r_id}' on full vehicle_name")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="route_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.98,
-                        explanation=f"Exact route match on route '{r_id}': {event.title}",
-                        correlation_metadata={
-                            "matched_route_id": r_id,
-                            "match_method": "route_id_exact",
-                            "match_precision": "exact",
-                            "confidence": 0.98,
-                            "provenance": event.provenance,
-                        },
-                    )
-
-                # Discrete token equality against vehicle_name tokens (e.g. '500-D' in 'Vajra Bus (Route 500-D)')
-                if r_norm in seg_name_tokens:
-                    logger.debug(f"Matcher: tokenized route_id match '{r_id}' in vehicle_name tokens")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="route_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.96,
-                        explanation=f"Exact route match on route '{r_id}': {event.title}",
-                        correlation_metadata={
-                            "matched_route_id": r_id,
-                            "match_method": "route_id_token",
-                            "match_precision": "token",
-                            "confidence": 0.96,
-                            "provenance": event.provenance,
-                        },
-                    )
-
-        # 2B. Direct Stop ID / Transit Station Matching
-        # Prevents substring collisions: stop '12' will NOT match 'Platform 120'
-        if event.stop_ids:
-            orig_code = normalize_transit_identifier(getattr(segment.origin, "code", None))
-            orig_id = normalize_transit_identifier(getattr(segment.origin, "id", None))
-            orig_hub = normalize_transit_identifier(getattr(segment.origin, "hub_id", None))
-            orig_name_norm = normalize_transit_identifier(segment.origin.name)
-            orig_tokens = tokenize_transit_text(segment.origin.name)
-
-            dest_code = normalize_transit_identifier(getattr(segment.destination, "code", None))
-            dest_id = normalize_transit_identifier(getattr(segment.destination, "id", None))
-            dest_hub = normalize_transit_identifier(getattr(segment.destination, "hub_id", None))
-            dest_name_norm = normalize_transit_identifier(segment.destination.name)
-            dest_tokens = tokenize_transit_text(segment.destination.name)
-
-            for s_id in event.stop_ids:
-                s_norm = normalize_transit_identifier(s_id)
-                if not s_norm:
-                    continue
-
-                # 1. Exact canonical stop equality on origin station identifiers
-                if s_norm in (orig_code, orig_id, orig_hub) or s_norm == orig_name_norm:
-                    logger.debug(f"Matcher: exact stop_id match '{s_id}' on origin station")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="stop_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.95,
-                        explanation=f"Direct transit stop match at {segment.origin.name} ({s_id}): {event.title}",
-                        correlation_metadata={
-                            "matched_stop_id": s_id,
-                            "match_method": "stop_id_exact",
-                            "match_precision": "exact",
-                            "confidence": 0.95,
-                            "provenance": event.provenance,
-                        },
-                    )
-
-                # 2. Exact canonical stop equality on destination station identifiers
-                if s_norm in (dest_code, dest_id, dest_hub) or s_norm == dest_name_norm:
-                    logger.debug(f"Matcher: exact stop_id match '{s_id}' on destination station")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="stop_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.95,
-                        explanation=f"Direct transit stop match at {segment.destination.name} ({s_id}): {event.title}",
-                        correlation_metadata={
-                            "matched_stop_id": s_id,
-                            "match_method": "stop_id_exact",
-                            "match_precision": "exact",
-                            "confidence": 0.95,
-                            "provenance": event.provenance,
-                        },
-                    )
-
-                # 3. Discrete token equality against station name tokens
-                if s_norm in orig_tokens:
-                    logger.debug(f"Matcher: tokenized stop_id match '{s_id}' in origin station tokens")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="stop_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.92,
-                        explanation=f"Direct transit stop match at {segment.origin.name} ({s_id}): {event.title}",
-                        correlation_metadata={
-                            "matched_stop_id": s_id,
-                            "match_method": "stop_id_token",
-                            "match_precision": "token",
-                            "confidence": 0.92,
-                            "provenance": event.provenance,
-                        },
-                    )
-
-                if s_norm in dest_tokens:
-                    logger.debug(f"Matcher: tokenized stop_id match '{s_id}' in destination station tokens")
-                    return MatchedSegmentDisruption(
-                        event=event,
-                        match_type="stop_id_exact",
-                        min_distance_km=0.0,
-                        confidence=0.92,
-                        explanation=f"Direct transit stop match at {segment.destination.name} ({s_id}): {event.title}",
-                        correlation_metadata={
-                            "matched_stop_id": s_id,
-                            "match_method": "stop_id_token",
-                            "match_precision": "token",
-                            "confidence": 0.92,
-                            "provenance": event.provenance,
-                        },
-                    )
+        # 2A. Exact Authoritative Transit Identifier & GTFS EntitySelector Matching
+        # Namespaces (trip_id, route_id, stop_id, agency_id) remain strictly separated
+        # and compound constraints (route_type, direction_id, agency_id) prevent false positives.
+        id_match = self._match_by_identifiers(event, segment)
+        if id_match is not None:
+            return id_match
 
         # 3. Spatial Matching
         event_point = event.point

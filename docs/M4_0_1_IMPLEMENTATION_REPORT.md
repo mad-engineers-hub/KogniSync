@@ -130,3 +130,4 @@ Note: `Settings` loads `.env` (`GEMINI_API_KEY`) locally, so external Gemini API
 ### Database & Workspace Integrity
 - `git diff BookingInventory/`: empty (no modifications).
 - `BookingInventory/data/APS-05.db` SHA-256: `F9B4B3185D91649C454BC70214AF83F69BB2D4D7AB7B9C7FB5AF9B900D52B10A` (matches canonical baseline).
+

@@ -33,6 +33,9 @@ from app.services.disruption.providers.gtfs_protobuf import (
     EFFECT_MAP,
     SCHEDULE_RELATIONSHIP_MAP,
     decode_gtfs_feed,
+    derive_affected_modes_from_selectors,
+    extract_gtfs_informed_selectors,
+    extract_trip_descriptor_selector,
 )
 from app.services.disruption.providers.iudx_adapter import (
     is_iudx_payload,
@@ -152,7 +155,7 @@ class GTFSFeedRegistry:
                             cfg = GTFSFeedConfig.model_validate(item)
                             self.register_feed(cfg)
             except Exception as e:
-                logger.error(f"Failed to parse GTFS_FEEDS_CONFIG_JSON: {e}")
+                logger.error(f"Failed to parse GTFS_FEEDS_CONFIG_JSON: {sanitize_diagnostic_message(str(e))}")
 
         # C. Documented Indian agency onboarding presets (activate only when legitimate credentials exist)
         bmtc_token = _resolve_secret_from_env_or_settings("BMTC_IUDX_AUTH_TOKEN") or _resolve_secret_from_env_or_settings(
@@ -429,10 +432,11 @@ class GTFSFeedRegistry:
                 allow_http=config.allow_http,
             )
         except GTFSFeedSecurityError as sec_err:
+            safe_sec = sanitize_diagnostic_message(str(sec_err))
             status.retrieval_failures += 1
             status.last_error_classification = "SSRF_BLOCKED"
-            status.live_blocker_reason = f"Security validation failed: {sec_err}"
-            status.status_notice = f"BLOCKED — security validation failed: {sec_err}"
+            status.live_blocker_reason = f"Security validation failed: {safe_sec}"
+            status.status_notice = f"BLOCKED — security validation failed: {safe_sec}"
             self._consecutive_failures[feed_id] += 1
             status.consecutive_failure_count = self._consecutive_failures[feed_id]
             self._record_transition(feed_id, "blocked", status.status_notice)
@@ -825,46 +829,11 @@ class GTFSFeedRegistry:
             severity = "moderate"
 
         informed = alert.get("informed_entity") or alert.get("informedEntity") or []
-        route_ids: list[str] = []
-        stop_ids: list[str] = []
-        trip_ids: list[str] = []
-        agency_ids: list[str] = []
-        route_types: list[int] = []
-        direction_ids: list[int] = []
-
-        if isinstance(informed, list):
-            for inf in informed:
-                if not isinstance(inf, dict):
-                    continue
-                if inf.get("route_id") or inf.get("routeId"):
-                    route_ids.append(str(inf.get("route_id") or inf.get("routeId")))
-                if inf.get("stop_id") or inf.get("stopId"):
-                    stop_ids.append(str(inf.get("stop_id") or inf.get("stopId")))
-                if inf.get("agency_id") or inf.get("agencyId"):
-                    agency_ids.append(str(inf.get("agency_id") or inf.get("agencyId")))
-                if inf.get("route_type") is not None:
-                    try:
-                        route_types.append(int(inf["route_type"]))
-                    except (TypeError, ValueError):
-                        pass
-                if inf.get("direction_id") is not None:
-                    try:
-                        direction_ids.append(int(inf["direction_id"]))
-                    except (TypeError, ValueError):
-                        pass
-                trip_obj = inf.get("trip")
-                if isinstance(trip_obj, dict):
-                    if trip_obj.get("trip_id") or trip_obj.get("tripId"):
-                        trip_ids.append(str(trip_obj.get("trip_id") or trip_obj.get("tripId")))
-                    if trip_obj.get("route_id") or trip_obj.get("routeId"):
-                        route_ids.append(str(trip_obj.get("route_id") or trip_obj.get("routeId")))
-                    if trip_obj.get("direction_id") is not None:
-                        try:
-                            direction_ids.append(int(trip_obj["direction_id"]))
-                        except (TypeError, ValueError):
-                            pass
-                if inf.get("trip_id") or inf.get("tripId"):
-                    trip_ids.append(str(inf.get("trip_id") or inf.get("tripId")))
+        extracted = extract_gtfs_informed_selectors(informed)
+        selectors = extracted["selectors"]
+        affected_modes = derive_affected_modes_from_selectors(
+            selectors, default_modes=["bus", "train", "metro"]
+        )
 
         obs_iso = (
             datetime.fromtimestamp(ent_ts, tz=timezone.utc).isoformat()
@@ -883,7 +852,7 @@ class GTFSFeedRegistry:
             status="active",
             title=title,
             description=description,
-            affected_modes=["bus", "train", "metro"],
+            affected_modes=affected_modes,
             point=None,
             radius_meters=3000.0,
             valid_from=start_iso,
@@ -894,9 +863,9 @@ class GTFSFeedRegistry:
             provenance="provider_live",
             confidence=0.95,
             estimated_delay_minutes=25 if severity == "critical" else 10,
-            route_ids=sorted(set(route_ids)),
-            stop_ids=sorted(set(stop_ids)),
-            trip_ids=sorted(set(trip_ids)),
+            route_ids=extracted["route_ids"],
+            stop_ids=extracted["stop_ids"],
+            trip_ids=extracted["trip_ids"],
             corridor_name=config.geographic_coverage,
             correlation_metadata={
                 "feedId": feed_id,
@@ -904,9 +873,10 @@ class GTFSFeedRegistry:
                 "providerFormat": config.provider_format,
                 "cause": cause,
                 "effect": effect,
-                **({"agencyIds": sorted(set(agency_ids))} if agency_ids else {}),
-                **({"routeTypes": sorted(set(route_types))} if route_types else {}),
-                **({"directionIds": sorted(set(direction_ids))} if direction_ids else {}),
+                **({"agencyIds": extracted["agency_ids"]} if extracted["agency_ids"] else {}),
+                **({"routeTypes": extracted["route_types"]} if extracted["route_types"] else {}),
+                **({"directionIds": extracted["direction_ids"]} if extracted["direction_ids"] else {}),
+                **({"informedEntities": selectors} if selectors else {}),
             },
         )
 
@@ -936,8 +906,12 @@ class GTFSFeedRegistry:
             return None
 
         trip = tu.get("trip", {}) if isinstance(tu.get("trip"), dict) else {}
-        trip_id = str(trip.get("trip_id") or trip.get("tripId") or "")
-        route_id = str(trip.get("route_id") or trip.get("routeId") or "")
+        trip_sel = extract_trip_descriptor_selector(trip)
+        trip_id = str(trip_sel.get("trip_id") or "")
+        route_id = str(trip_sel.get("route_id") or "")
+        tu_modes = derive_affected_modes_from_selectors(
+            [trip_sel] if trip_sel else [], default_modes=["bus", "train", "metro"]
+        )
         sched_raw = trip.get("schedule_relationship") or trip.get("scheduleRelationship") or "SCHEDULED"
         sched_rel = (
             SCHEDULE_RELATIONSHIP_MAP.get(sched_raw, "SCHEDULED")
@@ -1009,7 +983,7 @@ class GTFSFeedRegistry:
             status="active",
             title=title,
             description=desc,
-            affected_modes=["bus", "train", "metro"],
+            affected_modes=tu_modes,
             point=None,
             radius_meters=2000.0,
             valid_from=obs_iso,
@@ -1031,6 +1005,10 @@ class GTFSFeedRegistry:
                 "providerFormat": config.provider_format,
                 "scheduleRelationship": sched_rel,
                 **({"skippedStops": skipped_stops} if skipped_stops else {}),
+                **({"agencyIds": [trip_sel["agency_id"]]} if trip_sel.get("agency_id") else {}),
+                **({"routeTypes": [trip_sel["route_type"]]} if "route_type" in trip_sel else {}),
+                **({"directionIds": [trip_sel["direction_id"]]} if "direction_id" in trip_sel else {}),
+                **({"informedEntities": [trip_sel]} if trip_sel else {}),
             },
         )
 
@@ -1094,9 +1072,15 @@ class GTFSFeedRegistry:
             return None
 
         trip = veh.get("trip", {}) if isinstance(veh.get("trip"), dict) else {}
-        route_id = str(trip.get("route_id") or trip.get("routeId") or "")
-        trip_id = str(trip.get("trip_id") or trip.get("tripId") or "")
-        stop_id = str(veh.get("stop_id") or veh.get("stopId") or "")
+        veh_sel = extract_trip_descriptor_selector(trip)
+        route_id = str(veh_sel.get("route_id") or "")
+        trip_id = str(veh_sel.get("trip_id") or "")
+        stop_id = str(veh.get("stop_id") or veh.get("stopId") or "").strip()
+        if stop_id:
+            veh_sel["stop_id"] = stop_id
+        veh_modes = derive_affected_modes_from_selectors(
+            [veh_sel] if veh_sel else [], default_modes=["bus", "metro"]
+        )
         veh_desc = veh.get("vehicle") if isinstance(veh.get("vehicle"), dict) else {}
 
         severity: DisruptionSeverity = "critical" if congestion == "SEVERE_CONGESTION" else "high"
@@ -1118,7 +1102,7 @@ class GTFSFeedRegistry:
             status="active",
             title=title,
             description=desc,
-            affected_modes=["bus", "metro"],
+            affected_modes=veh_modes,
             point=CoordinatesSchema(lat=round(lat, 6), lng=round(lng, 6)),
             radius_meters=1500.0,
             valid_from=obs_iso,
@@ -1142,6 +1126,10 @@ class GTFSFeedRegistry:
                 **({"vehicleId": str(veh_desc["id"])} if veh_desc.get("id") else {}),
                 **({"vehicleLabel": str(veh_desc["label"])} if veh_desc.get("label") else {}),
                 **({"licensePlate": str(veh_desc["license_plate"])} if veh_desc.get("license_plate") else {}),
+                **({"agencyIds": [veh_sel["agency_id"]]} if veh_sel.get("agency_id") else {}),
+                **({"routeTypes": [veh_sel["route_type"]]} if "route_type" in veh_sel else {}),
+                **({"directionIds": [veh_sel["direction_id"]]} if "direction_id" in veh_sel else {}),
+                **({"informedEntities": [veh_sel]} if veh_sel else {}),
             },
         )
 

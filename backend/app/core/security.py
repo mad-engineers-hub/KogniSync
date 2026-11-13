@@ -6,8 +6,8 @@ Guarantees:
 1. Cryptographic token signature verification using configured algorithm (HS256).
 2. Token expiry (exp) and subject (sub) enforcement.
 3. Issuer (iss) and Audience (aud) validation when configured.
-4. Fails closed in production if JWT_SECRET_KEY is missing.
-5. Consistent 401 Unauthorized responses with WWW-Authenticate header.
+4. Fails closed across all environments if JWT_SECRET_KEY is missing, weak (< 32 chars), or forbidden.
+5. Consistent 401 Unauthorized / 500 misconfiguration responses without silent fallbacks.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -22,30 +22,63 @@ from app.core.config import settings
 logger = logging.getLogger("kognisync.security")
 
 
+# SHA-256 digests of known insecure/default secrets that must never be accepted.
+_FORBIDDEN_JWT_SECRET_DIGESTS = frozenset({
+    "38acc57d362a391d454a7a62b7fe55335145f864c3fbeacca2e6e807d1fdd5ba",
+})
+
+
+def is_forbidden_jwt_secret(secret: str) -> bool:
+    """Return True if a candidate secret matches a known insecure/legacy default digest."""
+    candidate = secret.strip().encode("utf-8")
+    raw_candidate = secret.encode("utf-8")
+    return (
+        hashlib.sha256(candidate).hexdigest() in _FORBIDDEN_JWT_SECRET_DIGESTS
+        or hashlib.sha256(raw_candidate).hexdigest() in _FORBIDDEN_JWT_SECRET_DIGESTS
+    )
+
+
 def get_jwt_secret() -> str:
     """
-    Authoritatively resolves the JWT secret.
-    Fails closed in production if JWT_SECRET_KEY is missing or shorter than 32 characters.
-    In development and test environments, falls back to a development-only secret if unset.
+    Authoritatively resolves the JWT secret across ALL environments.
+    Fails closed (HTTP 500) if JWT_SECRET_KEY is missing, shorter than 32 non-whitespace
+    characters, or matches a prohibited legacy default secret.
     """
-    if settings.JWT_SECRET_KEY:
-        if settings.ENVIRONMENT == "production" and len(settings.JWT_SECRET_KEY.strip()) < 32:
-            logger.error("Authentication configuration error: JWT_SECRET_KEY must be at least 32 characters in production.")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Authentication service misconfigured: secret key too short for production (min 32 bytes required)",
-            )
-        return settings.JWT_SECRET_KEY
-
-    if settings.ENVIRONMENT == "production":
-        logger.error("Authentication configuration error: JWT_SECRET_KEY is missing in production environment.")
+    raw_secret = settings.JWT_SECRET_KEY
+    if not raw_secret or not raw_secret.strip():
+        logger.error(
+            "Authentication configuration error: JWT_SECRET_KEY is missing in %s environment.",
+            settings.ENVIRONMENT,
+        )
+        detail = (
+            "Authentication service misconfigured: secret key missing in production"
+            if settings.ENVIRONMENT == "production"
+            else "Authentication service misconfigured: JWT_SECRET_KEY is required"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Authentication service misconfigured: secret key missing in production",
+            detail=detail,
         )
 
-    # Insecure fallback strictly for local development and test suite
-    return "kognisync_insecure_development_jwt_secret_key_384729"
+    stripped = raw_secret.strip()
+    if len(stripped) < 32:
+        logger.error(
+            "Authentication configuration error: JWT_SECRET_KEY must be at least 32 characters in %s environment.",
+            settings.ENVIRONMENT,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service misconfigured: secret key too short (min 32 bytes required)",
+        )
+
+    if is_forbidden_jwt_secret(raw_secret):
+        logger.error("Authentication configuration error: JWT_SECRET_KEY uses a prohibited default secret.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service misconfigured: insecure default secret key is forbidden",
+        )
+
+    return raw_secret
 
 
 def create_access_token(

@@ -137,13 +137,23 @@ class StartupOrchestrator:
         secret_key = secrets.token_urlsafe(32)
         internal_key = secrets.token_hex(16)
 
-        if "JWT_SECRET_KEY=" in content:
+        if "JWT_SECRET_KEY=" in content or "INTERNAL_API_KEY=" in content:
             lines = []
+            saw_jwt = False
+            saw_internal = False
             for line in content.splitlines():
                 if line.startswith("JWT_SECRET_KEY="):
                     lines.append(f"JWT_SECRET_KEY={secret_key}")
+                    saw_jwt = True
+                elif line.startswith("INTERNAL_API_KEY="):
+                    lines.append(f"INTERNAL_API_KEY={internal_key}")
+                    saw_internal = True
                 else:
                     lines.append(line)
+            if not saw_jwt:
+                lines.append(f"JWT_SECRET_KEY={secret_key}")
+            if not saw_internal:
+                lines.append(f"INTERNAL_API_KEY={internal_key}")
             content = "\n".join(lines) + "\n"
         else:
             content += f"\nJWT_SECRET_KEY={secret_key}\nINTERNAL_API_KEY={internal_key}\n"
