@@ -4,7 +4,7 @@
  * API client for Real-Time Journey Disruption Intelligence (Milestone M3.7).
  * Connects to FastAPI backend disruption endpoints with graceful offline client simulation.
  */
-import { apiClient } from './client';
+import { ApiError, apiClient } from './client';
 import {
   DisruptionAssessRequest,
   DisruptionEvent,
@@ -74,13 +74,36 @@ export async function getGTFSFeeds(): Promise<GTFSFeedListResponse> {
   }
 }
 
-export async function pollGTFSFeeds(force = false): Promise<GTFSFeedListResponse> {
+export interface TransitPollOperationalAuth {
+  internalKey?: string;
+  elevatedKey?: string;
+}
+
+export async function pollGTFSFeeds(
+  force = false,
+  operationalAuth?: TransitPollOperationalAuth
+): Promise<GTFSFeedListResponse> {
+  const headers: Record<string, string> = {};
+  if (operationalAuth?.internalKey) {
+    headers['X-Internal-Key'] = operationalAuth.internalKey;
+  }
+  if (operationalAuth?.elevatedKey) {
+    headers['X-Elevated-Key'] = operationalAuth.elevatedKey;
+  }
+
   try {
     return await apiClient<GTFSFeedListResponse>(
       `/api/v1/disruptions/providers/feeds/poll?force=${force ? 'true' : 'false'}`,
-      { method: 'POST' }
+      {
+        method: 'POST',
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      }
     );
   } catch (err) {
+    // Propagate explicit authorization (401/403) and rate-limit (429) responses honestly
+    if (err instanceof ApiError && err.status > 0) {
+      throw err;
+    }
     console.warn('[pollGTFSFeeds] Backend offline; falling back to feed status:', err);
     return getGTFSFeeds();
   }

@@ -2,9 +2,12 @@ name: PostgreSQL Integration & Booking Safety Gate
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'feature/**' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'feature/**' ]
+
+permissions:
+  contents: read
 
 jobs:
   postgres-integration:
@@ -39,6 +42,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,6 +57,18 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio anyio httpx
 
+      - name: Generate ephemeral CI test credentials
+        run: |
+          JWT_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(36))")
+          INT_KEY=$(python -c "import secrets; print(secrets.token_hex(24))")
+          ELEV_KEY=$(python -c "import secrets; print(secrets.token_hex(24))")
+          echo "::add-mask::$JWT_KEY"
+          echo "::add-mask::$INT_KEY"
+          echo "::add-mask::$ELEV_KEY"
+          echo "CI_JWT_SECRET_KEY=$JWT_KEY" >> "$GITHUB_ENV"
+          echo "CI_INTERNAL_API_KEY=$INT_KEY" >> "$GITHUB_ENV"
+          echo "CI_TRANSIT_POLL_ELEVATED_KEY=$ELEV_KEY" >> "$GITHUB_ENV"
+
       - name: Run Alembic migrations to head
         env:
           ALLOW_DESTRUCTIVE_DB_INIT: "true"
@@ -61,6 +78,8 @@ jobs:
           POSTGRES_PASSWORD: kognisync_pass
           POSTGRES_DB: kognisync_db
           DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
+          JWT_SECRET_KEY: ${{ env.CI_JWT_SECRET_KEY }}
+          INTERNAL_API_KEY: ${{ env.CI_INTERNAL_API_KEY }}
           PYTHONPATH: .
         run: |
           python scripts/init_db.py --force-destructive
@@ -71,8 +90,9 @@ jobs:
         env:
           POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
           REDIS_URL: redis://localhost:6380/0
-          JWT_SECRET_KEY: ci_super_secret_jwt_key_999_32bytes_long
-          INTERNAL_API_KEY: ci_super_secret_ops_key_888
+          JWT_SECRET_KEY: ${{ env.CI_JWT_SECRET_KEY }}
+          INTERNAL_API_KEY: ${{ env.CI_INTERNAL_API_KEY }}
+          TRANSIT_POLL_ELEVATED_KEY: ${{ env.CI_TRANSIT_POLL_ELEVATED_KEY }}
           PYTHONPATH: backend:.
         run: |
           pytest backend/tests/test_postgres_integration.py -v -rs
@@ -81,9 +101,9 @@ jobs:
         env:
           POSTGRES_TEST_DATABASE_URL: postgresql+asyncpg://kognisync:kognisync_pass@localhost:5434/kognisync_db
           REDIS_URL: redis://localhost:6380/0
-          JWT_SECRET_KEY: ci_super_secret_jwt_key_999_32bytes_long
-          INTERNAL_API_KEY: ci_super_secret_ops_key_888
+          JWT_SECRET_KEY: ${{ env.CI_JWT_SECRET_KEY }}
+          INTERNAL_API_KEY: ${{ env.CI_INTERNAL_API_KEY }}
+          TRANSIT_POLL_ELEVATED_KEY: ${{ env.CI_TRANSIT_POLL_ELEVATED_KEY }}
           PYTHONPATH: backend:.
         run: |
-          pytest backend/tests -v
-
+          pytest backend/tests -v -rs

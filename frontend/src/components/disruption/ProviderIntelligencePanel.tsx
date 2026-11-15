@@ -7,8 +7,13 @@
  * (TomTom Orbis Traffic v2, GTFS Realtime, Simulation Engine).
  */
 import React, { useState, useEffect } from 'react';
-import { getDisruptionProviders, getGTFSFeeds, pollGTFSFeeds } from '../../api/disruptions';
-import { DisruptionProviderCapability, GTFSFeedStatus } from '../../types/disruption';
+import { getDisruptionProviders, getGTFSFeeds } from '../../api/disruptions';
+import {
+  DisruptionProviderCapability,
+  FeedConnectivityStatus,
+  GTFSFeedStatus,
+  ProviderConnectivityStatus,
+} from '../../types/disruption';
 
 interface ProviderIntelligencePanelProps {
   onRefresh?: () => void;
@@ -51,51 +56,69 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    try {
-      await pollGTFSFeeds(false);
-    } catch {
-      // Fallback handled cleanly by fetchCapabilities
-    }
     await fetchCapabilities();
     if (onRefresh) onRefresh();
   };
 
   const getStatusBadge = (provider: DisruptionProviderCapability) => {
-    const status = provider.connectivityStatus || (provider.isAvailable ? 'available' : 'unconfigured');
+    const status: ProviderConnectivityStatus | FeedConnectivityStatus =
+      provider.connectivityStatus || (provider.isAvailable ? 'available' : 'unconfigured');
 
-    switch (status) {
-      case 'available':
-        return (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
-            ● AVAILABLE
-          </span>
-        );
-      case 'rate_limited':
-        return (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-amber-100 text-amber-800 border border-amber-300">
-            ⚠ RATE LIMITED
-          </span>
-        );
-      case 'degraded':
-        return (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-orange-100 text-orange-800 border border-orange-300">
-            ▲ DEGRADED
-          </span>
-        );
-      case 'blocked':
-        return (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-rose-100 text-rose-800 border border-rose-300">
-            ✕ BLOCKED
-          </span>
-        );
-      case 'unconfigured':
-      default:
-        return (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-300">
-            ○ UNCONFIGURED
-          </span>
-        );
-    }
+    const badgeMeta: Record<string, { style: string; label: string }> = {
+      available: {
+        style: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+        label: '● AVAILABLE',
+      },
+      rate_limited: {
+        style: 'bg-amber-100 text-amber-800 border-amber-300',
+        label: '⚠ RATE LIMITED',
+      },
+      degraded: {
+        style: 'bg-orange-100 text-orange-800 border-orange-300',
+        label: '▲ DEGRADED',
+      },
+      blocked: {
+        style: 'bg-rose-100 text-rose-800 border-rose-300',
+        label: '✕ BLOCKED',
+      },
+      unreachable: {
+        style: 'bg-rose-100 text-rose-800 border-rose-300',
+        label: '✕ UNREACHABLE',
+      },
+      invalid_response: {
+        style: 'bg-orange-100 text-orange-800 border-orange-300',
+        label: '▲ INVALID RESPONSE',
+      },
+      disabled: {
+        style: 'bg-slate-100 text-slate-600 border-slate-300',
+        label: '○ DISABLED',
+      },
+      configured: {
+        style: 'bg-sky-100 text-sky-800 border-sky-300',
+        label: '◎ CONFIGURED',
+      },
+      stale: {
+        style: 'bg-amber-100 text-amber-800 border-amber-300',
+        label: '⚠ STALE',
+      },
+      unknown: {
+        style: 'bg-slate-100 text-slate-600 border-slate-300',
+        label: '? UNKNOWN',
+      },
+      unconfigured: {
+        style: 'bg-slate-100 text-slate-700 border-slate-300',
+        label: '○ UNCONFIGURED',
+      },
+    };
+
+    const meta = badgeMeta[status] || badgeMeta.unconfigured;
+    return (
+      <span
+        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${meta.style}`}
+      >
+        {meta.label}
+      </span>
+    );
   };
 
   const getProvenanceBadge = (prov: string) => {
@@ -291,10 +314,12 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
                               ? 'bg-amber-100 text-amber-800 border border-amber-300'
                               : feed.connectivityStatus === 'degraded'
                               ? 'bg-orange-100 text-orange-800 border border-orange-300'
+                              : feed.connectivityStatus === 'blocked'
+                              ? 'bg-rose-100 text-rose-800 border border-rose-300'
                               : 'bg-slate-100 text-slate-700 border border-slate-300'
                           }`}
                         >
-                          {feed.connectivityStatus}
+                          {feed.connectivityStatus.replace('_', ' ')}
                         </span>
                       </div>
                     </div>
@@ -357,7 +382,11 @@ export const ProviderIntelligencePanel: React.FC<ProviderIntelligencePanelProps>
           <div className="p-2.5 rounded bg-blue-50 border border-blue-200 text-blue-900 text-[11px] leading-relaxed">
             <span className="font-bold">Operational Note:</span> TomTom Orbis v2 and GTFS Realtime
             adapters require commercial/agency API configuration. In absence of valid environment
-            credentials, the system reports status honestly as <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-[10px]">BLOCKED</code> and activates deterministic simulation scenarios with visible badges. No live telemetry is fabricated.
+            credentials or verified upstream authorization, adapters report status honestly as{' '}
+            <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-[10px]">UNCONFIGURED</code>,{' '}
+            <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-[10px]">DISABLED</code>, or{' '}
+            <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-[10px]">BLOCKED</code>{' '}
+            and activate deterministic simulation scenarios with visible badges. No live telemetry is fabricated.
           </div>
         </div>
       )}

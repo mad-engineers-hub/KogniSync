@@ -16,8 +16,13 @@ import fnmatch
 import hashlib
 import json
 from pathlib import Path
-import pytest
+import sys
 from typing import Any, Dict, List, Optional, Set
+import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.reset_demo_state import (
     reset_demo_state,
@@ -305,6 +310,8 @@ def test_6_redis_unavailability_does_not_trigger_database_deletion():
 def test_7_canonical_organizer_database_checksum_remains_unchanged():
     """Prove that canonical organizer SQLite DB checksum remains 100% unchanged."""
     canonical_path = Path("BookingInventory") / "data" / "APS-05.db"
+    if not canonical_path.exists():
+        canonical_path = Path(__file__).resolve().parent.parent.parent / "BookingInventory" / "data" / "APS-05.db"
     assert canonical_path.exists(), "APS-05.db must exist"
 
     hash_before = hashlib.sha256(canonical_path.read_bytes()).hexdigest().upper()

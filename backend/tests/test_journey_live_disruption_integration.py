@@ -13,6 +13,7 @@ Verifies:
 """
 from datetime import datetime, timezone, timedelta
 import hashlib
+from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 import httpx
 import pytest
@@ -206,7 +207,10 @@ async def test_live_incident_matching_and_attribute_provenance(sample_live_multi
 
 
 def test_canonical_db_checksum_unchanged():
-    db_path = "BookingInventory/data/APS-05.db"
+    db_path = Path("BookingInventory") / "data" / "APS-05.db"
+    if not db_path.exists():
+        db_path = Path(__file__).resolve().parent.parent.parent / "BookingInventory" / "data" / "APS-05.db"
+    assert db_path.exists(), f"APS-05.db must exist at {db_path}"
     hasher = hashlib.sha256()
     with open(db_path, "rb") as f:
         while chunk := f.read(65536):

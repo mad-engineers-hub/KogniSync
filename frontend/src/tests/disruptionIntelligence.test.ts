@@ -326,8 +326,29 @@ async function runTests() {
   assert.strictEqual(JSON.stringify(feedsResp).includes('authTokenEnvVar'), false, 'Never expose env var metadata in feed status');
 
   const pollResp = await pollGTFSFeeds(false);
-  assert.ok(Array.isArray(pollResp.feeds), 'Poll response must preserve GTFSFeedListResponse shape');
-  console.log('✓ M4.0 transit feed diagnostics and poll contract verified cleanly');
+  assert.ok(Array.isArray(pollResp.feeds), 'Offline fallback poll response must preserve GTFSFeedListResponse shape');
+
+  // Verify HTTP 401/403 operational authorization errors are propagated, never masked as success
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ detail: 'Unauthorized: operational credentials required' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+
+    let caughtStatus: number | null = null;
+    try {
+      await pollGTFSFeeds(false);
+    } catch (err: any) {
+      caughtStatus = err?.status ?? null;
+    }
+    assert.strictEqual(caughtStatus, 401, 'pollGTFSFeeds must surface HTTP 401 authorization rejections');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  console.log('✓ M4.0.1 transit feed diagnostics and secure poll contract verified cleanly');
 
   console.log('\n=================================================================');
   console.log('ALL DISRUPTION INTELLIGENCE (M3.7-M4.0) FRONTEND TESTS PASSED');
