@@ -72,6 +72,11 @@ export interface JourneySegment {
   provider: string;
   vehicleName?: string;
   vehicleNumber?: string;
+  tripId?: string | null;
+  routeId?: string | null;
+  agencyId?: string | null;
+  routeType?: number | null;
+  directionId?: number | null;
   origin: Location;
   destination: Location;
   departureTime: string; // ISO string

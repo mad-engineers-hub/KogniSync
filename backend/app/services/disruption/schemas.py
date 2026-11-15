@@ -200,8 +200,10 @@ class DisruptedSegmentImpact(BaseModel):
         "exact_geometry",
         "spatial_corridor",
         "hub_approximate",
+        "trip_id_exact",
         "route_id_exact",
         "stop_id_exact",
+        "agency_id_exact",
         "multimodal_corridor_correlation",
     ] = Field(
         default="spatial_corridor",

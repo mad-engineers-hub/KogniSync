@@ -166,6 +166,31 @@ class JourneySegmentSchema(BaseModel):
         validation_alias=AliasChoices("vehicle_number", "vehicleNumber"),
         serialization_alias="vehicleNumber",
     )
+    trip_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("trip_id", "tripId"),
+        serialization_alias="tripId",
+    )
+    route_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("route_id", "routeId"),
+        serialization_alias="routeId",
+    )
+    agency_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("agency_id", "agencyId"),
+        serialization_alias="agencyId",
+    )
+    route_type: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("route_type", "routeType"),
+        serialization_alias="routeType",
+    )
+    direction_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("direction_id", "directionId"),
+        serialization_alias="directionId",
+    )
     origin: LocationSchema
     destination: LocationSchema
     departure_time: str = Field(
