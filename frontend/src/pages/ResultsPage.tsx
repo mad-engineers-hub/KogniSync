@@ -41,6 +41,21 @@ export const ResultsPage: React.FC = () => {
     ? parseFloat(searchParams.get('carbonWeight')!)
     : 0.1;
 
+  const rawOriginLat = searchParams.get('originLat') || searchParams.get('origin_lat');
+  const rawOriginLng = searchParams.get('originLng') || searchParams.get('origin_lng');
+  const rawDestLat = searchParams.get('destLat') || searchParams.get('dest_lat');
+  const rawDestLng = searchParams.get('destLng') || searchParams.get('dest_lng');
+
+  const originCoordinates =
+    rawOriginLat && rawOriginLng && !isNaN(Number(rawOriginLat)) && !isNaN(Number(rawOriginLng))
+      ? { lat: parseFloat(rawOriginLat), lng: parseFloat(rawOriginLng) }
+      : undefined;
+
+  const destinationCoordinates =
+    rawDestLat && rawDestLng && !isNaN(Number(rawDestLat)) && !isNaN(Number(rawDestLng))
+      ? { lat: parseFloat(rawDestLat), lng: parseFloat(rawDestLng) }
+      : undefined;
+
   const request: TravelRequest = {
     naturalLanguageQuery: query,
     origin,
@@ -55,6 +70,8 @@ export const ResultsPage: React.FC = () => {
       comfort: comfortWeight,
       carbon: carbonWeight,
     },
+    originCoordinates,
+    destinationCoordinates,
   };
 
   const {
@@ -65,8 +82,8 @@ export const ResultsPage: React.FC = () => {
   } = useQuery({
     queryKey: [
       'journeys',
-      origin,
-      destination,
+      origin.trim().toLowerCase(),
+      destination.trim().toLowerCase(),
       query,
       resolvedDate,
       arrivalBefore,
@@ -76,6 +93,10 @@ export const ResultsPage: React.FC = () => {
       comfortWeight,
       carbonWeight,
       passengers,
+      originCoordinates?.lat,
+      originCoordinates?.lng,
+      destinationCoordinates?.lat,
+      destinationCoordinates?.lng,
     ],
     queryFn: () => searchJourneys(request),
     staleTime: 10000,

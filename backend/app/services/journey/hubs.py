@@ -464,7 +464,7 @@ def resolve_hub_context(
                         break
 
     if not parent_city_key and custom_coordinates:
-        # Spatial resolution: resolve to closest registered hub if text did not match directly
+        # Spatial resolution: resolve to closest registered hub ONLY within metropolitan radius (35km)
         closest_city: str | None = None
         min_dist = float("inf")
         for key, p in CITY_HUB_REGISTRY.items():
@@ -472,7 +472,7 @@ def resolve_hub_context(
             if dist < min_dist:
                 min_dist = dist
                 closest_city = key
-        if closest_city:
+        if closest_city and min_dist <= 35.0:
             parent_city_key = closest_city
             is_locality = True
 
@@ -480,40 +480,54 @@ def resolve_hub_context(
 
     if parent_city_key and parent_city_key in CITY_HUB_REGISTRY:
         profile = CITY_HUB_REGISTRY[parent_city_key]
+        user_coords = (
+            custom_coordinates
+            if custom_coordinates
+            else CoordinatesSchema(
+                lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
+                lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
+            )
+        )
     else:
+        from app.services.location.service import location_service
         dynamic_city = capitalized_raw
-        def_lat = 13.0 if is_origin else 15.0
-        def_lng = 77.6 if is_origin else 74.5
+        geocoded = custom_coordinates or location_service.forward_geocode_sync(raw)
+        if geocoded:
+            def_lat = geocoded.lat
+            def_lng = geocoded.lng
+        else:
+            def_lat = 13.0 if is_origin else 15.0
+            def_lng = 77.6 if is_origin else 74.5
+
         profile = HubProfile(
             city=dynamic_city,
             lat=def_lat,
             lng=def_lng,
-            railway_name=f"{dynamic_city} Railway Junction",
+            railway_name=f"{dynamic_city} Railway Station",
             railway_code=None,
-            railway_lat=def_lat,
-            railway_lng=def_lng,
+            railway_lat=round(def_lat + 0.005, 4),
+            railway_lng=round(def_lng + 0.005, 4),
             airport_name=f"{dynamic_city} Regional Airport",
             airport_code=None,
-            airport_lat=def_lat + 0.12,
-            airport_lng=def_lng + 0.08,
-            bus_name=f"{dynamic_city} Central Intercity Bus Terminal",
-            bus_lat=def_lat - 0.02,
-            bus_lng=def_lng,
-            metro_name=f"{dynamic_city} City Transit Center",
+            airport_lat=round(def_lat + 0.12, 4),
+            airport_lng=round(def_lng + 0.08, 4),
+            bus_name=f"{dynamic_city} Central Bus Stand",
+            bus_lat=round(def_lat - 0.005, 4),
+            bus_lng=round(def_lng - 0.002, 4),
+            metro_name=f"{dynamic_city} Transit Center",
             metro_lat=def_lat,
             metro_lng=def_lng,
             has_metro=False,
         )
         is_locality = False
-
-    user_coords = (
-        custom_coordinates
-        if custom_coordinates
-        else CoordinatesSchema(
-            lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
-            lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
+        user_coords = (
+            custom_coordinates
+            if custom_coordinates
+            else CoordinatesSchema(
+                lat=round(def_lat + (-0.015 if is_origin else 0.015), 4),
+                lng=round(def_lng + (-0.015 if is_origin else 0.015), 4),
+            )
         )
-    )
 
     user_node = LocationSchema(
         id=f"loc-usr-{'orig' if is_origin else 'dest'}-{slugify(raw or profile.city)}",
@@ -569,25 +583,44 @@ def resolve_hub_context(
     )
 
 
-def estimate_corridor_distance_km(origin_city: str, dest_city: str) -> int:
+def estimate_corridor_distance_km(
+    origin_city: str,
+    dest_city: str,
+    origin_coords: CoordinatesSchema | None = None,
+    dest_coords: CoordinatesSchema | None = None,
+) -> int:
     o = slugify(origin_city)
     d = slugify(dest_city)
     key = f"{o}-{d}"
     if key in CORRIDOR_DISTANCES:
         return CORRIDOR_DISTANCES[key]
 
-    p1 = CITY_HUB_REGISTRY.get(o)
-    p2 = CITY_HUB_REGISTRY.get(d)
-    if p1 and p2:
+    c1_lat = origin_coords.lat if origin_coords else (CITY_HUB_REGISTRY[o].lat if o in CITY_HUB_REGISTRY else None)
+    c1_lng = origin_coords.lng if origin_coords else (CITY_HUB_REGISTRY[o].lng if o in CITY_HUB_REGISTRY else None)
+    c2_lat = dest_coords.lat if dest_coords else (CITY_HUB_REGISTRY[d].lat if d in CITY_HUB_REGISTRY else None)
+    c2_lng = dest_coords.lng if dest_coords else (CITY_HUB_REGISTRY[d].lng if d in CITY_HUB_REGISTRY else None)
+
+    if c1_lat is None or c2_lat is None:
+        from app.services.location.service import location_service
+        if c1_lat is None:
+            g1 = location_service.forward_geocode_sync(origin_city)
+            if g1:
+                c1_lat, c1_lng = g1.lat, g1.lng
+        if c2_lat is None:
+            g2 = location_service.forward_geocode_sync(dest_city)
+            if g2:
+                c2_lat, c2_lng = g2.lat, g2.lng
+
+    if c1_lat is not None and c1_lng is not None and c2_lat is not None and c2_lng is not None:
         R = 6371.0
-        d_lat = math.radians(p2.lat - p1.lat)
-        d_lon = math.radians(p2.lng - p1.lng)
+        d_lat = math.radians(c2_lat - c1_lat)
+        d_lon = math.radians(c2_lng - c1_lng)
         a = (
             math.sin(d_lat / 2.0) ** 2
-            + math.cos(math.radians(p1.lat)) * math.cos(math.radians(p2.lat)) * math.sin(d_lon / 2.0) ** 2
+            + math.cos(math.radians(c1_lat)) * math.cos(math.radians(c2_lat)) * math.sin(d_lon / 2.0) ** 2
         )
         c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-        return max(90, int(round(R * c * 1.25)))
+        return max(50, int(round(R * c * 1.25)))
 
     return 450
 

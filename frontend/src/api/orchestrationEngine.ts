@@ -217,6 +217,57 @@ const LOCALITY_TO_CITY_MAP: Record<string, string> = {
   karkala: 'udupi',
 };
 
+function round4(val: number): number {
+  return Math.round(val * 10000) / 10000;
+}
+
+export const REGIONAL_GAZETTEER: Record<string, { lat: number; lng: number; name: string }> = {
+  tumkur: { lat: 13.3401, lng: 77.1006, name: 'Tumakuru' },
+  tumakuru: { lat: 13.3401, lng: 77.1006, name: 'Tumakuru' },
+  hubli: { lat: 15.3647, lng: 75.1240, name: 'Hubballi' },
+  hubballi: { lat: 15.3647, lng: 75.1240, name: 'Hubballi' },
+  dharwad: { lat: 15.4589, lng: 75.0078, name: 'Dharwad' },
+  belgaum: { lat: 15.8497, lng: 74.4977, name: 'Belagavi' },
+  belagavi: { lat: 15.8497, lng: 74.4977, name: 'Belagavi' },
+  mangalore: { lat: 12.9141, lng: 74.8560, name: 'Mangaluru' },
+  mangaluru: { lat: 12.9141, lng: 74.8560, name: 'Mangaluru' },
+  mysore: { lat: 12.2958, lng: 76.6394, name: 'Mysuru' },
+  mysuru: { lat: 12.2958, lng: 76.6394, name: 'Mysuru' },
+  shivamogga: { lat: 13.9299, lng: 75.5681, name: 'Shivamogga' },
+  shimoga: { lat: 13.9299, lng: 75.5681, name: 'Shivamogga' },
+  davangere: { lat: 14.4644, lng: 75.9218, name: 'Davanagere' },
+  ballari: { lat: 15.1394, lng: 76.9214, name: 'Ballari' },
+  bellary: { lat: 15.1394, lng: 76.9214, name: 'Ballari' },
+  hassan: { lat: 13.0033, lng: 76.1004, name: 'Hassan' },
+  coimbatore: { lat: 11.0168, lng: 76.9558, name: 'Coimbatore' },
+  madurai: { lat: 9.9252, lng: 78.1198, name: 'Madurai' },
+  trichy: { lat: 10.7905, lng: 78.7047, name: 'Tiruchirappalli' },
+  salem: { lat: 11.6643, lng: 78.1460, name: 'Salem' },
+  vellore: { lat: 12.9165, lng: 79.1325, name: 'Vellore' },
+  kochi: { lat: 9.9312, lng: 76.2673, name: 'Kochi' },
+  thiruvananthapuram: { lat: 8.5241, lng: 76.9366, name: 'Thiruvananthapuram' },
+  trivandrum: { lat: 8.5241, lng: 76.9366, name: 'Thiruvananthapuram' },
+  kozhikode: { lat: 11.2588, lng: 75.7804, name: 'Kozhikode' },
+  calicut: { lat: 11.2588, lng: 75.7804, name: 'Kozhikode' },
+  vijayawada: { lat: 16.5062, lng: 80.6480, name: 'Vijayawada' },
+  visakhapatnam: { lat: 17.6868, lng: 83.2185, name: 'Visakhapatnam' },
+  vizag: { lat: 17.6868, lng: 83.2185, name: 'Visakhapatnam' },
+  tirupati: { lat: 13.6288, lng: 79.4192, name: 'Tirupati' },
+  warangal: { lat: 17.9689, lng: 79.5941, name: 'Warangal' },
+  delhi: { lat: 28.6139, lng: 77.2090, name: 'New Delhi' },
+  mumbai: { lat: 19.0760, lng: 72.8777, name: 'Mumbai' },
+  pune: { lat: 18.5204, lng: 73.8567, name: 'Pune' },
+  hyderabad: { lat: 17.3850, lng: 78.4867, name: 'Hyderabad' },
+  chennai: { lat: 13.0827, lng: 80.2707, name: 'Chennai' },
+  bangalore: { lat: 12.9716, lng: 77.5946, name: 'Bangalore' },
+  bengaluru: { lat: 12.9716, lng: 77.5946, name: 'Bangalore' },
+  kolkata: { lat: 22.5726, lng: 88.3639, name: 'Kolkata' },
+  jaipur: { lat: 26.9124, lng: 75.7873, name: 'Jaipur' },
+  ahmedabad: { lat: 23.0225, lng: 72.5714, name: 'Ahmedabad' },
+  goa: { lat: 15.2993, lng: 74.1240, name: 'Goa' },
+  panaji: { lat: 15.4909, lng: 73.8278, name: 'Panaji' },
+};
+
 export interface ResolvedHubContext {
   rawLocation: string;
   isLocality: boolean;
@@ -228,7 +279,11 @@ export interface ResolvedHubContext {
   metroHub: Location;
 }
 
-export function resolveHubContext(locationStr: string, isOrigin: boolean): ResolvedHubContext {
+export function resolveHubContext(
+  locationStr: string,
+  isOrigin: boolean,
+  customCoordinates?: { lat: number; lng: number }
+): ResolvedHubContext {
   const raw = (locationStr || '').trim();
   const lower = raw.toLowerCase();
 
@@ -264,23 +319,25 @@ export function resolveHubContext(locationStr: string, isOrigin: boolean): Resol
 
   const capitalizedRaw = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : (isOrigin ? 'Bangalore' : 'Chennai');
 
-  // 3. Fallback: If not in registry, synthesize a dynamic profile for this specific city
+  // 3. Resolve profile via registry or regional gazetteer / custom coordinates
   let profile: CityHubProfile;
   if (parentCityKey && CITY_HUB_REGISTRY[parentCityKey]) {
     profile = CITY_HUB_REGISTRY[parentCityKey];
   } else {
-    // Generate realistic dynamic profile for ANY arbitrary city/town
-    const dynamicCity = capitalizedRaw;
-    const defLat = isOrigin ? 13.0 : 15.0;
-    const defLng = isOrigin ? 77.6 : 74.5;
+    // Check gazetteer or custom coordinates for dynamic resolution
+    const gz = REGIONAL_GAZETTEER[lower] || Object.entries(REGIONAL_GAZETTEER).find(([k]) => lower.includes(k))?.[1];
+    const defLat = customCoordinates?.lat ?? gz?.lat ?? (isOrigin ? 13.0 : 15.0);
+    const defLng = customCoordinates?.lng ?? gz?.lng ?? (isOrigin ? 77.6 : 74.5);
+    const dynamicCity = gz?.name || capitalizedRaw;
+
     profile = {
       city: dynamicCity,
       lat: defLat,
       lng: defLng,
-      railwayHub: { name: `${dynamicCity} Railway Junction`, lat: defLat, lng: defLng },
-      airportHub: { name: `${dynamicCity} Regional Airport`, lat: defLat + 0.12, lng: defLng + 0.08 },
-      busHub: { name: `${dynamicCity} Central Intercity Bus Terminal`, lat: defLat - 0.02, lng: defLng },
-      metroHub: { name: `${dynamicCity} City Transit Center`, lat: defLat, lng: defLng, hasMetro: false },
+      railwayHub: { name: `${dynamicCity} Railway Station`, lat: round4(defLat + 0.005), lng: round4(defLng + 0.005) },
+      airportHub: { name: `${dynamicCity} Regional Airport`, lat: round4(defLat + 0.12), lng: round4(defLng + 0.08) },
+      busHub: { name: `${dynamicCity} Central Bus Stand`, lat: round4(defLat - 0.005), lng: round4(defLng - 0.002) },
+      metroHub: { name: `${dynamicCity} Transit Center`, lat: defLat, lng: defLng, hasMetro: false },
     };
     isLocality = false;
   }
@@ -290,9 +347,9 @@ export function resolveHubContext(locationStr: string, isOrigin: boolean): Resol
     name: isLocality ? `${capitalizedRaw}` : `${profile.city} City Hub`,
     city: isLocality ? `${capitalizedRaw} (${profile.city})` : profile.city,
     type: isLocality ? 'address' : 'landmark',
-    coordinates: {
-      lat: profile.lat + (isOrigin ? -0.04 : 0.04),
-      lng: profile.lng + (isOrigin ? -0.03 : 0.03),
+    coordinates: customCoordinates ?? {
+      lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
+      lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
     },
   };
 
@@ -373,26 +430,41 @@ const CORRIDOR_DISTANCES: Record<string, number> = {
   'mysore-bangalore': 145,
 };
 
-export function estimateCorridorDistanceKm(originCity: string, destCity: string): number {
+export function estimateCorridorDistanceKm(
+  originCity: string,
+  destCity: string,
+  originCoords?: { lat: number; lng: number },
+  destCoords?: { lat: number; lng: number }
+): number {
   const o = slugify(originCity);
   const d = slugify(destCity);
   const key = `${o}-${d}`;
   if (CORRIDOR_DISTANCES[key]) return CORRIDOR_DISTANCES[key];
 
-  const p1 = CITY_HUB_REGISTRY[o];
-  const p2 = CITY_HUB_REGISTRY[d];
-  if (p1 && p2) {
+  let c1 = originCoords || (CITY_HUB_REGISTRY[o] ? { lat: CITY_HUB_REGISTRY[o].lat, lng: CITY_HUB_REGISTRY[o].lng } : undefined);
+  let c2 = destCoords || (CITY_HUB_REGISTRY[d] ? { lat: CITY_HUB_REGISTRY[d].lat, lng: CITY_HUB_REGISTRY[d].lng } : undefined);
+
+  if (!c1) {
+    const gz = REGIONAL_GAZETTEER[o] || Object.entries(REGIONAL_GAZETTEER).find(([k]) => o.includes(k))?.[1];
+    if (gz) c1 = { lat: gz.lat, lng: gz.lng };
+  }
+  if (!c2) {
+    const gz = REGIONAL_GAZETTEER[d] || Object.entries(REGIONAL_GAZETTEER).find(([k]) => d.includes(k))?.[1];
+    if (gz) c2 = { lat: gz.lat, lng: gz.lng };
+  }
+
+  if (c1 && c2) {
     const R = 6371;
-    const dLat = ((p2.lat - p1.lat) * Math.PI) / 180;
-    const dLon = ((p2.lng - p1.lng) * Math.PI) / 180;
+    const dLat = ((c2.lat - c1.lat) * Math.PI) / 180;
+    const dLon = ((c2.lng - c1.lng) * Math.PI) / 180;
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos((p1.lat * Math.PI) / 180) *
-      Math.cos((p2.lat * Math.PI) / 180) *
+      Math.cos((c1.lat * Math.PI) / 180) *
+      Math.cos((c2.lat * Math.PI) / 180) *
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return Math.max(90, Math.round(R * c * 1.25));
+    return Math.max(50, Math.round(R * c * 1.25));
   }
 
   return 450; // Default reasonable intercity baseline
@@ -518,11 +590,16 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
   const budgetMax = request.budgetMax && request.budgetMax > 0 ? request.budgetMax : undefined;
   const target = parseTargetArrival(request.preferredArrivalBefore);
 
-  // 1. Resolve hubs for origin and destination
-  const originHubs = resolveHubContext(originStr, true);
-  const destHubs = resolveHubContext(destStr, false);
+  // 1. Resolve hubs for origin and destination (incorporating exact coordinates or gazetteer)
+  const originHubs = resolveHubContext(originStr, true, request.originCoordinates);
+  const destHubs = resolveHubContext(destStr, false, request.destinationCoordinates);
 
-  const routeDistanceKm = estimateCorridorDistanceKm(originHubs.parentCity, destHubs.parentCity);
+  const routeDistanceKm = estimateCorridorDistanceKm(
+    originHubs.parentCity,
+    destHubs.parentCity,
+    originHubs.userNode.coordinates,
+    destHubs.userNode.coordinates
+  );
   const routeSlug = `${slugify(originStr)}-to-${slugify(destStr)}`;
 
   const originOps = getLocalTransitOperators(originHubs.parentCity);

@@ -12,6 +12,7 @@ const tests = [
   'src/tests/gpsStartingLocation.test.ts',
   'src/tests/navigationGuidance.test.ts',
   'src/tests/disruptionIntelligence.test.ts',
+  'src/tests/dynamicJourneyMapSync.test.ts',
 ];
 
 for (const testPath of tests) {

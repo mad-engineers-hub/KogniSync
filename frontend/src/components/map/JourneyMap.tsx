@@ -178,7 +178,15 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
   // Query enriched route geometry from backend Valhalla / Geo engine
   const { data: enrichedRoute } = useQuery<EnrichedJourneyRoute>({
-    queryKey: ['route-enrichment', targetJourney.id, segments.map((s) => s.segmentId).join(':')],
+    queryKey: [
+      'route-enrichment',
+      targetJourney.id,
+      targetJourney.origin.coordinates.lat,
+      targetJourney.origin.coordinates.lng,
+      targetJourney.destination.coordinates.lat,
+      targetJourney.destination.coordinates.lng,
+      segments.map((s) => `${s.segmentId}-${s.origin.coordinates.lat}-${s.destination.coordinates.lat}`).join(':'),
+    ],
     queryFn: () => enrichJourneyRoute(targetJourney),
     staleTime: 60000,
     retry: 1,
@@ -186,7 +194,23 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
   // Effective route geometry (server enriched with client fallback)
   const effectiveRoute = useMemo<EnrichedJourneyRoute>(() => {
-    if (enrichedRoute) return enrichedRoute;
+    if (enrichedRoute && enrichedRoute.segments?.length > 0) {
+      // Validate that enriched route origin is geographically congruent with targetJourney
+      const enrichedOrigLat = enrichedRoute.segments[0].origin_coords?.latitude;
+      const targetOrigLat = targetJourney.origin.coordinates.lat;
+      const enrichedOrigLng = enrichedRoute.segments[0].origin_coords?.longitude;
+      const targetOrigLng = targetJourney.origin.coordinates.lng;
+
+      if (
+        enrichedOrigLat !== undefined &&
+        targetOrigLat !== undefined &&
+        Math.hypot(enrichedOrigLat - targetOrigLat, (enrichedOrigLng ?? 0) - (targetOrigLng ?? 0)) > 0.5
+      ) {
+        // Enriched route origin diverged from active journey origin (stale cache) -> use client fallback
+        return buildClientFallbackRoute(targetJourney);
+      }
+      return enrichedRoute;
+    }
     return buildClientFallbackRoute(targetJourney);
   }, [enrichedRoute, targetJourney]);
 
@@ -496,6 +520,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       });
 
       const marker = L.marker([wp.lat, wp.lng], { icon: customIcon }).addTo(featureGroup);
+      allLatLangs.push([wp.lat, wp.lng]);
 
       const xrButtonHtml = hasXR
         ? `<button id="xr-btn-${wp.xrSceneId}" style="margin-top: 8px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 10px; background: #2563eb; color: #ffffff; font-weight: 700; font-size: 11px; border: none; border-radius: 8px; cursor: pointer;">
