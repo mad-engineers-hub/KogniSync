@@ -77,8 +77,10 @@ export type DisruptionMatchType =
   | 'exact_geometry'
   | 'spatial_corridor'
   | 'hub_approximate'
+  | 'trip_id_exact'
   | 'route_id_exact'
   | 'stop_id_exact'
+  | 'agency_id_exact'
   | 'multimodal_corridor_correlation';
 
 export interface DisruptedSegmentImpact {
@@ -206,6 +208,15 @@ export type FeedConnectivityStatus =
   | 'stale'
   | 'disabled';
 
+export type FeedProviderFormat = 'auto' | 'gtfs_rt' | 'iudx_ngsi_ld';
+
+export interface FeedAvailabilityTransition {
+  timestamp: string;
+  fromStatus: string;
+  toStatus: string;
+  reason: string;
+}
+
 export interface GTFSFeedStatus {
   feedId: string;
   operatorName: string;
@@ -224,6 +235,21 @@ export interface GTFSFeedStatus {
   lastResponseLatencyMs?: number | null;
   consecutiveFailureCount: number;
   entityCounts: Record<string, number>;
+  authType?: 'none' | 'bearer_token' | 'api_key_header' | 'api_key_query';
+  providerFormat?: FeedProviderFormat;
+  lastAttemptedFetch?: string | null;
+  connectionAttempts?: number;
+  authFailures?: number;
+  retrievalFailures?: number;
+  decodeFailures?: number;
+  staleRejections?: number;
+  acceptedEventCount?: number;
+  rejectedEventCount?: number;
+  rejectedReasons?: Record<string, number>;
+  availabilityTransitions?: FeedAvailabilityTransition[];
+  pollingIntervalSeconds?: number;
+  documentationUrl?: string | null;
+  liveBlockerReason?: string | null;
   statusNotice: string;
 }
 

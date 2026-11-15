@@ -14,19 +14,32 @@ import socket
 import time
 import urllib.parse
 from datetime import datetime, timezone
+import math
 from typing import Any, Sequence
-import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.services.disruption.providers.base import DisruptionProvider
 from app.services.disruption.providers.gtfs_feed_client import (
+    GTFSFeedPayloadTooLargeError,
+    GTFSFeedSecurityError,
+    SecureGTFSFeedClient,
+    sanitize_diagnostic_message,
+    sanitize_feed_url,
     validate_feed_url_ssrf_safety,
 )
 from app.services.disruption.providers.gtfs_protobuf import (
     CAUSE_MAP,
+    CONGESTION_LEVEL_MAP,
     EFFECT_MAP,
     SCHEDULE_RELATIONSHIP_MAP,
     decode_gtfs_feed,
+    derive_affected_modes_from_selectors,
+    extract_gtfs_informed_selectors,
+    extract_trip_descriptor_selector,
+)
+from app.services.disruption.providers.iudx_adapter import (
+    is_iudx_payload,
+    normalize_iudx_payload,
 )
 from app.services.disruption.schemas import (
     DisruptionEvent,
@@ -66,11 +79,17 @@ class GTFSRealtimeProvider(DisruptionProvider):
         allow_http: bool | None = None,
         registry: Any | None = None,
     ):
+        self._explicit_feed_url = feed_url
         self._feed_url = feed_url or settings.GTFS_REALTIME_FEED_URL
         self._api_key = api_key or settings.GTFS_REALTIME_API_KEY
         self._timeout_seconds = timeout_seconds or settings.GTFS_REALTIME_TIMEOUT_SECONDS
         self._allow_http = (
             allow_http if allow_http is not None else settings.GTFS_REALTIME_ALLOW_HTTP
+        )
+        self._direct_client = SecureGTFSFeedClient(
+            timeout_seconds=self._timeout_seconds,
+            allow_http=self._allow_http,
+            max_retries=0,
         )
         if registry is not None:
             self.registry = registry
@@ -88,6 +107,23 @@ class GTFSRealtimeProvider(DisruptionProvider):
         self._last_status_reason: str = ""
         self._ssrf_blocked: bool = False
 
+    def _has_active_registry_mode(self) -> bool:
+        """Uses unified GTFSFeedRegistry multi-feed mode unless explicit direct URL override is active."""
+        if self._explicit_feed_url is not None:
+            return False
+        enabled_ids = self.registry.get_enabled_feed_ids() if hasattr(self.registry, "get_enabled_feed_ids") else []
+        return len(enabled_ids) > 0
+
+    def _enabled_registry_statuses(self) -> list[Any]:
+        if not hasattr(self.registry, "get_enabled_feed_ids"):
+            return []
+        statuses = []
+        for fid in self.registry.get_enabled_feed_ids():
+            st = self.registry.get_feed_status(fid)
+            if st is not None:
+                statuses.append(st)
+        return statuses
+
     @property
     def name(self) -> str:
         return "gtfs_realtime_feed"
@@ -97,6 +133,13 @@ class GTFSRealtimeProvider(DisruptionProvider):
         return "Official GTFS Realtime Transit Feed"
 
     def is_configured(self) -> bool:
+        if self._has_active_registry_mode():
+            statuses = self._enabled_registry_statuses()
+            return any(
+                s.connectivity_status not in ("unconfigured", "disabled")
+                for s in statuses
+            )
+
         if not settings.GTFS_REALTIME_ENABLED or not self._feed_url:
             return False
         if len(self._feed_url.strip()) <= 8:
@@ -110,10 +153,29 @@ class GTFSRealtimeProvider(DisruptionProvider):
         return True
 
     def is_available(self) -> bool:
-        """Returns True only when an authorized feed URL is configured and enabled."""
+        """Returns True only when an authorized feed URL is configured and healthy."""
+        if self._has_active_registry_mode():
+            if not self.is_configured():
+                return False
+            return self.get_connectivity_status() not in ("blocked", "degraded", "unconfigured", "disabled")
         return self.is_configured() and self._consecutive_failure_count < 3
 
     def get_connectivity_status(self) -> ProviderConnectivityStatus:
+        if self._has_active_registry_mode():
+            statuses = self._enabled_registry_statuses()
+            if not statuses or not self.is_configured():
+                return "unconfigured"
+            conn_states = {s.connectivity_status for s in statuses}
+            if "available" in conn_states:
+                return "available"
+            if conn_states == {"blocked"}:
+                return "blocked"
+            if "degraded" in conn_states:
+                return "degraded"
+            if "rate_limited" in conn_states:
+                return "rate_limited"
+            return "unknown"
+
         if not settings.GTFS_REALTIME_ENABLED or not self._feed_url:
             return "unconfigured"
         if self._ssrf_blocked:
@@ -129,6 +191,60 @@ class GTFSRealtimeProvider(DisruptionProvider):
         available = self.is_available()
         status = self.get_connectivity_status()
 
+        if self._has_active_registry_mode():
+            statuses = self._enabled_registry_statuses()
+            verified_timestamps = [s.last_successful_fetch for s in statuses if s.last_successful_fetch]
+            latest_verified = max(verified_timestamps) if verified_timestamps else self._last_successful_request
+            latencies = [s.last_response_latency_ms for s in statuses if s.last_response_latency_ms is not None]
+            avg_latency = round(sum(latencies) / len(latencies), 1) if latencies else self._last_response_latency_ms
+            max_failures = max((s.consecutive_failure_count for s in statuses), default=self._consecutive_failure_count)
+            has_creds = any(s.authorization_status == "authorized" for s in statuses)
+
+            if not configured:
+                notice = "BLOCKED — authorized GTFS Realtime feed unavailable."
+                reason = "Registered feeds are awaiting authorized agency credentials."
+            elif status == "blocked":
+                blockers = [s.live_blocker_reason or s.status_notice for s in statuses if s.connectivity_status == "blocked"]
+                notice = "BLOCKED — transit feed authorization or security check failed."
+                reason = "; ".join(blockers[:2]) or "Upstream authorization rejected."
+            elif status == "degraded":
+                notice = "DEGRADED — registered transit feeds experiencing upstream errors."
+                reason = "; ".join(s.status_notice for s in statuses[:2])
+            elif not latest_verified:
+                notice = "Configured — awaiting initial live connection verification."
+                reason = ", ".join(f"{s.operator_name} ({s.feed_url_sanitized})" for s in statuses)
+            else:
+                op_names = [s.operator_name for s in statuses if s.connectivity_status == "available"]
+                notice = f"Connected to {len(op_names)} verified live transit feed(s)."
+                reason = f"Operational feeds: {', '.join(op_names)}"
+
+            return DisruptionProviderCapability(
+                name=self.name,
+                display_name=self.display_name,
+                provider_type="gtfs_realtime",
+                is_available=available,
+                is_configured=configured,
+                credentials_present=has_creds,
+                connectivity_status=status,
+                last_successful_request=latest_verified,
+                last_failed_request=self._last_failed_request,
+                last_observation_time=latest_verified or self._last_observation_time,
+                last_response_latency_ms=avg_latency,
+                consecutive_failure_count=max_failures,
+                is_rate_limited=("rate_limited" in {s.connectivity_status for s in statuses}),
+                supported_attributes=[
+                    "trip_updates_delay",
+                    "trip_cancellations",
+                    "service_alerts",
+                    "vehicle_positions",
+                ],
+                supported_geographic_coverage=", ".join(s.geographic_coverage for s in statuses[:3]) or "configured_feed_boundary",
+                provenance_source="provider_live" if latest_verified else "unknown",
+                supported_modes=["bus", "train", "metro"],
+                status_notice=notice,
+                status_reason=reason,
+            )
+
         if self._ssrf_blocked:
             notice = "BLOCKED — GTFS feed endpoint failed SSRF security validation."
             reason = self._last_status_reason or "Private or unapproved network target."
@@ -140,10 +256,10 @@ class GTFSRealtimeProvider(DisruptionProvider):
             reason = self._last_status_reason or "Network connection errors."
         elif not self._last_successful_request:
             notice = "Configured — awaiting initial live connection verification."
-            reason = f"Feed endpoint configured; awaiting initial response verification from {self._feed_url}."
+            reason = f"Feed endpoint configured; awaiting initial response verification from {sanitize_feed_url(self._feed_url)}."
         else:
             notice = "Connected to authorized GTFS Realtime transit feed."
-            reason = f"Active feed endpoint: {self._feed_url}"
+            reason = f"Active feed endpoint: {sanitize_feed_url(self._feed_url)}"
 
         return DisruptionProviderCapability(
             name=self.name,
@@ -180,52 +296,70 @@ class GTFSRealtimeProvider(DisruptionProvider):
         bbox: tuple[float, float, float, float] | None = None,
     ) -> list[DisruptionEvent]:
         """
-        Fetches and normalizes trip updates and service alerts from the GTFS Realtime feed.
-        Fails safely if unconfigured or unreachable. Enforces SSRF and redirect limits.
+        Fetches and normalizes trip updates, service alerts, and vehicle telemetry from
+        authorized transit feeds using M3.9.1 IP-pinned SSRF transport.
+        Fails closed when unconfigured or unauthorized; never fabricates live transit data.
         """
+        if self._has_active_registry_mode():
+            start_t = time.perf_counter()
+            events = await self.registry.poll_all_enabled_feeds(force=False)
+            latency_ms = (time.perf_counter() - start_t) * 1000.0
+            statuses = self._enabled_registry_statuses()
+            if any(s.connectivity_status == "available" for s in statuses):
+                self._record_success(latency_ms)
+            elif any(s.last_error_classification for s in statuses):
+                first_err = next((s.last_error_classification for s in statuses if s.last_error_classification), "UPSTREAM_ERROR")
+                self._record_failure(0, first_err)
+            if modes:
+                mode_set = set(modes)
+                events = [e for e in events if not e.affected_modes or any(m in mode_set for m in e.affected_modes)]
+            return events
+
         if not self.is_available():
             logger.debug(
                 "GTFSRealtimeProvider: fetch skipped — authorized feed unavailable or unconfigured."
             )
             return []
 
-        headers: dict[str, str] = {"Accept": "application/x-protobuf, application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        auth_header = ("Authorization", f"Bearer {self._api_key}") if self._api_key else None
 
-        start_t = time.perf_counter()
         try:
             assert self._feed_url is not None
-            async with httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=False) as client:
-                response = await client.get(self._feed_url, headers=headers)
-            latency_ms = (time.perf_counter() - start_t) * 1000.0
+            result = await self._direct_client.fetch_feed(
+                feed_id="gtfs_direct",
+                feed_url=self._feed_url,
+                auth_header=auth_header,
+                allow_http=self._allow_http,
+            )
 
-            if response.status_code == 200:
-                content_type = ""
-                if hasattr(response, "headers") and hasattr(response.headers, "get"):
-                    content_type = response.headers.get("content-type", "")
-
-                raw_bytes = getattr(response, "content", None)
-                if raw_bytes is None and hasattr(response, "text"):
-                    raw_bytes = response.text.encode("utf-8")
-
-                if not raw_bytes:
+            if result.status_code == 200:
+                if not result.content:
                     self._record_failure(200, "Empty payload received from GTFS feed")
                     return []
 
                 try:
                     events = self.decode_and_parse_feed(
-                        raw_bytes, content_type=content_type, raise_on_error=True
+                        result.content, content_type=result.content_type, raise_on_error=True
                     )
                 except ValueError as parse_err:
-                    self._record_failure(200, f"Malformed feed payload: {parse_err}")
+                    self._record_failure(
+                        200,
+                        sanitize_diagnostic_message(f"Malformed feed payload: {parse_err}"),
+                    )
                     return []
 
-                self._record_success(latency_ms)
+                self._record_success(result.latency_ms)
+                if modes:
+                    mode_set = set(modes)
+                    events = [e for e in events if not e.affected_modes or any(m in mode_set for m in e.affected_modes)]
                 return events
-            else:
-                self._record_failure(response.status_code, f"HTTP {response.status_code}")
-                return []
+
+            err_reason = result.headers.get("x-error-type") if result.status_code == 0 else None
+            self._record_failure(result.status_code, err_reason or f"HTTP {result.status_code}")
+            return []
+        except (GTFSFeedSecurityError, GTFSFeedPayloadTooLargeError) as sec_err:
+            self._record_failure(0, sanitize_diagnostic_message(str(sec_err)))
+            return []
         except Exception as e:
             self._record_failure(0, type(e).__name__)
             logger.warning(f"GTFS Realtime fetch error: {type(e).__name__}")
@@ -272,18 +406,23 @@ class GTFSRealtimeProvider(DisruptionProvider):
             try:
                 payload = json.loads(raw_bytes.decode("utf-8"))
             except Exception as json_err:
-                logger.warning(f"Failed to decode GTFS Realtime JSON: {json_err}")
+                safe_err = sanitize_diagnostic_message(str(json_err))
+                logger.warning(f"Failed to decode GTFS Realtime JSON: {safe_err}")
                 if raise_on_error:
-                    raise ValueError(f"Corrupt GTFS Realtime JSON: {json_err}") from json_err
+                    raise ValueError(f"Corrupt GTFS Realtime JSON: {safe_err}") from json_err
                 return []
 
             if isinstance(payload, dict):
+                if is_iudx_payload(payload):
+                    return self.parse_gtfs_payload(normalize_iudx_payload(payload))
                 if "header" not in payload and "entity" not in payload:
                     if raise_on_error:
                         raise ValueError("Invalid GTFS Realtime JSON: missing header and entity")
                     return []
                 return self.parse_gtfs_payload(payload)
             elif isinstance(payload, list):
+                if is_iudx_payload(payload):
+                    return self.parse_gtfs_payload(normalize_iudx_payload(payload))
                 return self.parse_gtfs_payload({"header": {}, "entity": payload})
             else:
                 logger.warning("GTFS Realtime JSON payload is neither object nor array.")
@@ -295,9 +434,10 @@ class GTFSRealtimeProvider(DisruptionProvider):
         try:
             feed_dict = decode_gtfs_feed(raw_bytes)
         except Exception as pb_err:
-            logger.warning(f"Failed to decode GTFS Realtime Protobuf payload: {pb_err}")
+            safe_err = sanitize_diagnostic_message(str(pb_err))
+            logger.warning(f"Failed to decode GTFS Realtime Protobuf payload: {safe_err}")
             if raise_on_error:
-                raise ValueError(f"Corrupt GTFS Realtime Protobuf: {pb_err}") from pb_err
+                raise ValueError(f"Corrupt GTFS Realtime Protobuf: {safe_err}") from pb_err
             return []
 
         if not feed_dict.get("header") and not feed_dict.get("entity"):
@@ -364,7 +504,9 @@ class GTFSRealtimeProvider(DisruptionProvider):
                         events.append(veh_ev)
 
             except Exception as ent_err:
-                logger.debug(f"Failed to parse GTFS-RT entity {entity.get('id')}: {ent_err}")
+                safe_id = sanitize_diagnostic_message(str(entity.get("id")))
+                safe_err = sanitize_diagnostic_message(str(ent_err))
+                logger.debug(f"Failed to parse GTFS-RT entity {safe_id}: {safe_err}")
                 continue
 
         return events
@@ -426,20 +568,13 @@ class GTFSRealtimeProvider(DisruptionProvider):
         title = header_text or f"Transit Alert: {event_type.replace('_', ' ').title()}"
         description = desc_text or f"Cause: {cause}; Effect: {effect}"
 
-        # Extract informed entities (routes, stops, trips)
+        # Extract informed entities (routes, stops, trips, agencies, route_types, directions)
         informed = alert.get("informed_entity") or alert.get("informedEntity") or []
-        route_ids: list[str] = []
-        stop_ids: list[str] = []
-        trip_ids: list[str] = []
-        if isinstance(informed, list):
-            for inf in informed:
-                if isinstance(inf, dict):
-                    if inf.get("route_id") or inf.get("routeId"):
-                        route_ids.append(str(inf.get("route_id") or inf.get("routeId")))
-                    if inf.get("stop_id") or inf.get("stopId"):
-                        stop_ids.append(str(inf.get("stop_id") or inf.get("stopId")))
-                    if inf.get("trip_id") or inf.get("tripId"):
-                        trip_ids.append(str(inf.get("trip_id") or inf.get("tripId")))
+        extracted = extract_gtfs_informed_selectors(informed)
+        selectors = extracted["selectors"]
+        affected_modes = derive_affected_modes_from_selectors(
+            selectors, default_modes=["bus", "train", "metro"]
+        )
 
         return DisruptionEvent(
             id=f"gtfs-alert-{entity_id}",
@@ -450,7 +585,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
             status="active",
             title=title,
             description=description,
-            affected_modes=["bus", "train", "metro"],
+            affected_modes=affected_modes,
             point=None,
             radius_meters=3000.0,
             valid_from=start_iso,
@@ -461,9 +596,15 @@ class GTFSRealtimeProvider(DisruptionProvider):
             provenance="provider_live",
             confidence=0.95,
             estimated_delay_minutes=20 if severity in ("high", "critical") else 5,
-            route_ids=list(set(route_ids)),
-            stop_ids=list(set(stop_ids)),
-            trip_ids=list(set(trip_ids)),
+            route_ids=extracted["route_ids"],
+            stop_ids=extracted["stop_ids"],
+            trip_ids=extracted["trip_ids"],
+            correlation_metadata={
+                **({"agencyIds": extracted["agency_ids"]} if extracted["agency_ids"] else {}),
+                **({"routeTypes": extracted["route_types"]} if extracted["route_types"] else {}),
+                **({"directionIds": extracted["direction_ids"]} if extracted["direction_ids"] else {}),
+                **({"informedEntities": selectors} if selectors else {}),
+            },
         )
 
     def _parse_trip_update_entity(
@@ -471,8 +612,18 @@ class GTFSRealtimeProvider(DisruptionProvider):
     ) -> DisruptionEvent | None:
         tu = entity.get("trip_update") or entity.get("tripUpdate") or {}
         trip = tu.get("trip", {})
-        trip_id = str(trip.get("trip_id") or trip.get("tripId") or "")
-        route_id = str(trip.get("route_id") or trip.get("routeId") or "")
+        trip_sel = extract_trip_descriptor_selector(trip)
+        trip_id = str(trip_sel.get("trip_id") or "")
+        route_id = str(trip_sel.get("route_id") or "")
+        tu_modes = derive_affected_modes_from_selectors(
+            [trip_sel] if trip_sel else [], default_modes=["bus", "train", "metro"]
+        )
+        tu_meta = {
+            **({"agencyIds": [trip_sel["agency_id"]]} if trip_sel.get("agency_id") else {}),
+            **({"routeTypes": [trip_sel["route_type"]]} if "route_type" in trip_sel else {}),
+            **({"directionIds": [trip_sel["direction_id"]]} if "direction_id" in trip_sel else {}),
+            **({"informedEntities": [trip_sel]} if trip_sel else {}),
+        }
 
         tu_ts = tu.get("timestamp") or entity.get("timestamp")
         tu_obs_iso = (
@@ -492,7 +643,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
                 status="active",
                 title=f"Transit Trip {trip_id or route_id or 'Scheduled'} Canceled",
                 description=f"Trip {trip_id} on route {route_id} reported canceled by official transit agency.",
-                affected_modes=["bus", "train", "metro"],
+                affected_modes=tu_modes,
                 point=None,
                 valid_from=tu_obs_iso,
                 valid_until=None,
@@ -504,6 +655,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
                 estimated_delay_minutes=60,
                 route_ids=[route_id] if route_id else [],
                 trip_ids=[trip_id] if trip_id else [],
+                correlation_metadata=tu_meta,
             )
 
         # Stop time updates
@@ -542,7 +694,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
             status="active",
             title=f"Trip Delay (+{delay_minutes} min): Route {route_id or 'Corridor'}",
             description=f"Official agency reported {delay_minutes}-minute delay on trip {trip_id or route_id}.",
-            affected_modes=["bus", "train", "metro"],
+            affected_modes=tu_modes,
             point=None,
             valid_from=tu_obs_iso,
             valid_until=None,
@@ -556,6 +708,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
             route_ids=[route_id] if route_id else [],
             stop_ids=list(set(stop_ids)),
             trip_ids=[trip_id] if trip_id else [],
+            correlation_metadata=tu_meta,
         )
 
     def _parse_vehicle_entity(
@@ -564,8 +717,21 @@ class GTFSRealtimeProvider(DisruptionProvider):
         veh = entity.get("vehicle", {})
         entity_id = str(entity.get("id", f"veh-{time.time_ns()}"))
         trip = veh.get("trip", {})
-        trip_id = str(trip.get("trip_id") or trip.get("tripId") or "")
-        route_id = str(trip.get("route_id") or trip.get("routeId") or "")
+        veh_sel = extract_trip_descriptor_selector(trip)
+        trip_id = str(veh_sel.get("trip_id") or "")
+        route_id = str(veh_sel.get("route_id") or "")
+        veh_stop_id = str(veh.get("stop_id") or veh.get("stopId") or "").strip()
+        if veh_stop_id:
+            veh_sel["stop_id"] = veh_stop_id
+        veh_modes = derive_affected_modes_from_selectors(
+            [veh_sel] if veh_sel else [], default_modes=["bus", "metro"]
+        )
+        veh_meta = {
+            **({"agencyIds": [veh_sel["agency_id"]]} if veh_sel.get("agency_id") else {}),
+            **({"routeTypes": [veh_sel["route_type"]]} if "route_type" in veh_sel else {}),
+            **({"directionIds": [veh_sel["direction_id"]]} if "direction_id" in veh_sel else {}),
+            **({"informedEntities": [veh_sel]} if veh_sel else {}),
+        }
         position = veh.get("position", {})
 
         coords_pt: CoordinatesSchema | None = None
@@ -573,11 +739,25 @@ class GTFSRealtimeProvider(DisruptionProvider):
             try:
                 lat = float(position["latitude"])
                 lng = float(position["longitude"])
-                coords_pt = CoordinatesSchema(lat=lat, lng=lng)
+                if (
+                    math.isfinite(lat)
+                    and math.isfinite(lng)
+                    and -90.0 <= lat <= 90.0
+                    and -180.0 <= lng <= 180.0
+                    and not (abs(lat) < 1e-6 and abs(lng) < 1e-6)
+                ):
+                    coords_pt = CoordinatesSchema(lat=lat, lng=lng)
+                else:
+                    return None
             except (ValueError, TypeError):
-                coords_pt = None
+                return None
 
-        congestion_level = veh.get("congestion_level") or veh.get("congestionLevel")
+        congestion_raw = veh.get("congestion_level") or veh.get("congestionLevel")
+        congestion_level = (
+            CONGESTION_LEVEL_MAP.get(congestion_raw, congestion_raw)
+            if isinstance(congestion_raw, int)
+            else congestion_raw
+        )
         if congestion_level in ("CONGESTION", "SEVERE_CONGESTION", "STOP_AND_GO", 2, 3, 4):
             severity: DisruptionSeverity = "critical" if congestion_level in ("SEVERE_CONGESTION", 4) else "high"
             event_type: DisruptionEventType = "traffic_congestion"
@@ -601,7 +781,7 @@ class GTFSRealtimeProvider(DisruptionProvider):
             status="active",
             title=f"Transit Congestion: Route {route_id or trip_id or 'Line'}",
             description=desc,
-            affected_modes=["bus", "metro"],
+            affected_modes=veh_modes,
             point=coords_pt,
             radius_meters=1500.0,
             valid_from=veh_obs_iso,
@@ -613,7 +793,9 @@ class GTFSRealtimeProvider(DisruptionProvider):
             confidence=0.95,
             estimated_delay_minutes=15 if severity == "critical" else 8,
             route_ids=[route_id] if route_id else [],
+            stop_ids=[veh_stop_id] if veh_stop_id else [],
             trip_ids=[trip_id] if trip_id else [],
+            correlation_metadata=veh_meta,
         )
 
     def _extract_translated_string(self, obj: Any) -> str:

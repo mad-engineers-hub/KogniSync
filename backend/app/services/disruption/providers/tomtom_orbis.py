@@ -16,7 +16,7 @@ import anyio
 import httpx
 from pydantic import BaseModel
 from app.core.config import settings
-from app.core.logging import logger
+from app.core.logging import logger, sanitize_sensitive_log_text
 from app.services.disruption.providers.base import DisruptionProvider
 from app.services.disruption.schemas import (
     DisruptionEvent,
@@ -463,7 +463,10 @@ class TomTomOrbisTrafficProvider(DisruptionProvider):
                 if event:
                     events.append(event)
             except Exception as err:
-                logger.debug(f"Failed to normalize TomTom incident: {err}")
+                logger.debug(
+                    "Failed to normalize TomTom incident: %s",
+                    sanitize_sensitive_log_text(str(err)),
+                )
                 continue
 
         return events

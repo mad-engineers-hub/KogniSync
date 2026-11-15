@@ -4,7 +4,7 @@
  * API client for Real-Time Journey Disruption Intelligence (Milestone M3.7).
  * Connects to FastAPI backend disruption endpoints with graceful offline client simulation.
  */
-import { apiClient } from './client';
+import { ApiError, apiClient } from './client';
 import {
   DisruptionAssessRequest,
   DisruptionEvent,
@@ -25,25 +25,87 @@ export async function getGTFSFeeds(): Promise<GTFSFeedListResponse> {
     return {
       feeds: [
         {
-          feedId: 'bmtc_iudx_alerts',
+          feedId: 'bmtc_iudx_vehicle_positions',
           operatorName: 'BMTC',
-          displayName: 'Bengaluru Metropolitan Transport Corporation (IUDX)',
+          displayName: 'BMTC Bengaluru Live Bus Telemetry (IUDX cOS)',
           geographicCoverage: 'Bengaluru Metropolitan Area',
-          feedUrlSanitized: 'https://opendata.benscl.com/gtfs-rt/alerts',
-          entityTypes: ['service_alerts', 'trip_updates'],
+          feedUrlSanitized: 'https://rs.cos.iudx.org.in/ngsi-ld/v1/entities?id=8a9c53c2-7291-454e-b173-2d9bfe893eb1',
+          entityTypes: ['vehicle_positions'],
           enabled: false,
           authorizationStatus: 'pending_credentials',
-          connectivityStatus: 'unconfigured',
+          connectivityStatus: 'disabled',
           freshnessStatus: 'unknown',
+          authType: 'api_key_header',
+          providerFormat: 'iudx_ngsi_ld',
           consecutiveFailureCount: 0,
           entityCounts: {},
-          statusNotice: 'Awaiting authorized credentials in environment variable BMTC_IUDX_AUTH_TOKEN.',
+          pollingIntervalSeconds: 30,
+          documentationUrl: 'https://cos.iudx.org.in/',
+          liveBlockerReason:
+            'Agency access credentials not present in BMTC_IUDX_AUTH_TOKEN; BMTC feed disabled pending consumer authorization.',
+          statusNotice: 'Awaiting authorized IUDX consumer token in BMTC_IUDX_AUTH_TOKEN.',
+        },
+        {
+          feedId: 'delhi_otd_vehicle_positions',
+          operatorName: 'Delhi OTD (DIMTS/DTC)',
+          displayName: 'Delhi Open Transit Data Real-Time Vehicle Positions',
+          geographicCoverage: 'Delhi NCR',
+          feedUrlSanitized: 'https://otd.delhi.gov.in/api/realtime/VehiclePositions.pb',
+          entityTypes: ['vehicle_positions'],
+          enabled: false,
+          authorizationStatus: 'pending_credentials',
+          connectivityStatus: 'disabled',
+          freshnessStatus: 'unknown',
+          authType: 'api_key_query',
+          providerFormat: 'gtfs_rt',
+          consecutiveFailureCount: 0,
+          entityCounts: {},
+          pollingIntervalSeconds: 30,
+          documentationUrl: 'https://otd.delhi.gov.in/',
+          liveBlockerReason:
+            'Agency access credentials not present in DELHI_OTD_API_KEY; Delhi OTD feed disabled pending consumer authorization.',
+          statusNotice: 'Awaiting authorized Delhi OTD API key in DELHI_OTD_API_KEY.',
         },
       ],
       totalConfigured: 0,
       totalOperational: 0,
       notice: 'No live GTFS Realtime feeds are currently verified and operational.',
     };
+  }
+}
+
+export interface TransitPollOperationalAuth {
+  internalKey?: string;
+  elevatedKey?: string;
+}
+
+export async function pollGTFSFeeds(
+  force = false,
+  operationalAuth?: TransitPollOperationalAuth
+): Promise<GTFSFeedListResponse> {
+  const headers: Record<string, string> = {};
+  if (operationalAuth?.internalKey) {
+    headers['X-Internal-Key'] = operationalAuth.internalKey;
+  }
+  if (operationalAuth?.elevatedKey) {
+    headers['X-Elevated-Key'] = operationalAuth.elevatedKey;
+  }
+
+  try {
+    return await apiClient<GTFSFeedListResponse>(
+      `/api/v1/disruptions/providers/feeds/poll?force=${force ? 'true' : 'false'}`,
+      {
+        method: 'POST',
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      }
+    );
+  } catch (err) {
+    // Propagate explicit authorization (401/403) and rate-limit (429) responses honestly
+    if (err instanceof ApiError && err.status > 0) {
+      throw err;
+    }
+    console.warn('[pollGTFSFeeds] Backend offline; falling back to feed status:', err);
+    return getGTFSFeeds();
   }
 }
 

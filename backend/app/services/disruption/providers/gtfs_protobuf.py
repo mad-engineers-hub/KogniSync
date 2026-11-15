@@ -80,6 +80,13 @@ CAUSE_REVERSE_MAP = {v: k for k, v in CAUSE_MAP.items()}
 EFFECT_REVERSE_MAP = {v: k for k, v in EFFECT_MAP.items()}
 SCHEDULE_RELATIONSHIP_REVERSE_MAP = {v: k for k, v in SCHEDULE_RELATIONSHIP_MAP.items()}
 CONGESTION_LEVEL_REVERSE_MAP = {v: k for k, v in CONGESTION_LEVEL_MAP.items()}
+SEVERITY_LEVEL_MAP: dict[int, str] = {
+    1: "UNKNOWN_SEVERITY",
+    2: "INFO",
+    3: "WARNING",
+    4: "SEVERE",
+}
+SEVERITY_LEVEL_REVERSE_MAP = {v: k for k, v in SEVERITY_LEVEL_MAP.items()}
 
 
 def decode_varint(data: bytes, pos: int) -> tuple[int, int]:
@@ -309,22 +316,69 @@ def _decode_vehicle_position(raw_bytes: bytes) -> dict[str, Any]:
     return veh
 
 
+def _decode_entity_selector(raw_bytes: bytes) -> dict[str, Any]:
+    """Decodes official gtfs-realtime.proto EntitySelector message (tags 1..6)."""
+    es: dict[str, Any] = {}
+    for tag, wire_type, val in decode_fields(raw_bytes):
+        if tag == 1 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["agency_id"] = _decode_string(val)
+        elif tag == 2 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["route_id"] = _decode_string(val)
+        elif tag == 3 and wire_type == WIRE_VARINT:
+            es["route_type"] = decode_signed_varint32(val)
+        elif tag == 4 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["trip"] = _decode_trip_descriptor(val)
+        elif tag == 5 and wire_type == WIRE_LENGTH_DELIMITED:
+            es["stop_id"] = _decode_string(val)
+        elif tag == 6 and wire_type == WIRE_VARINT:
+            es["direction_id"] = val
+    return es
+
+
 def _decode_alert(raw_bytes: bytes) -> dict[str, Any]:
-    alert: dict[str, Any] = {"active_period": []}
-    for tag, _, val in decode_fields(raw_bytes):
-        if tag == 1:
+    """
+    Decodes GTFS Realtime Alert message adhering to official gtfs-realtime.proto tags:
+    - active_period = 1 (bytes TimeRange)
+    - informed_entity = 5 (bytes EntitySelector)
+    - cause = 6 (varint Cause)
+    - effect = 7 (varint Effect)
+    - url = 8 (bytes TranslatedString)
+    - header_text = 10 (bytes TranslatedString)
+    - description_text = 11 (bytes TranslatedString)
+    - severity_level = 14 (varint SeverityLevel)
+    Discriminates by (tag, wire_type) so legacy internal fixtures remain compatible without
+    colliding with official gtfs-realtime.proto payloads.
+    """
+    alert: dict[str, Any] = {"active_period": [], "informed_entity": []}
+    for tag, wire_type, val in decode_fields(raw_bytes):
+        if tag == 1 and wire_type == WIRE_LENGTH_DELIMITED:
             alert["active_period"].append(_decode_time_range(val))
-        elif tag == 3:
+        elif tag == 5 and wire_type == WIRE_LENGTH_DELIMITED:
+            alert["informed_entity"].append(_decode_entity_selector(val))
+        elif tag == 6 and wire_type == WIRE_VARINT:
             alert["cause"] = CAUSE_MAP.get(val, "UNKNOWN_CAUSE")
-        elif tag == 4:
+        elif tag == 7 and wire_type == WIRE_VARINT:
             alert["effect"] = EFFECT_MAP.get(val, "UNKNOWN_EFFECT")
-        elif tag == 6:
+        elif tag == 8 and wire_type == WIRE_LENGTH_DELIMITED:
+            alert["url"] = _decode_translated_string(val)
+        elif tag == 10 and wire_type == WIRE_LENGTH_DELIMITED:
             alert["header_text"] = _decode_translated_string(val)
-        elif tag == 7:
+        elif tag == 11 and wire_type == WIRE_LENGTH_DELIMITED:
             alert["description_text"] = _decode_translated_string(val)
-        elif tag == 10:
+        elif tag == 14 and wire_type == WIRE_VARINT:
+            alert["severity_level"] = SEVERITY_LEVEL_MAP.get(val, val)
+        # Backwards-compatible wire-type-guarded legacy internal tags
+        elif tag == 3 and wire_type == WIRE_VARINT and "cause" not in alert:
+            alert["cause"] = CAUSE_MAP.get(val, "UNKNOWN_CAUSE")
+        elif tag == 4 and wire_type == WIRE_VARINT and "effect" not in alert:
+            alert["effect"] = EFFECT_MAP.get(val, "UNKNOWN_EFFECT")
+        elif tag == 6 and wire_type == WIRE_LENGTH_DELIMITED and "header_text" not in alert:
+            alert["header_text"] = _decode_translated_string(val)
+        elif tag == 7 and wire_type == WIRE_LENGTH_DELIMITED and "description_text" not in alert:
+            alert["description_text"] = _decode_translated_string(val)
+        elif tag == 10 and wire_type == WIRE_VARINT and "severity_level" not in alert:
             alert["severity_level"] = val
-        elif tag == 11:
+        elif tag == 11 and wire_type == WIRE_VARINT:
             alert["timestamp"] = val
     return alert
 
@@ -427,30 +481,58 @@ def _encode_time_range(tr: dict[str, int]) -> bytes:
     return bytes(buf)
 
 
+def _encode_entity_selector(es: dict[str, Any]) -> bytes:
+    """Encodes an EntitySelector per official gtfs-realtime.proto field numbers (tags 1..6)."""
+    buf = bytearray()
+    if es.get("agency_id") is not None:
+        buf.extend(_encode_string_field(1, str(es["agency_id"])))
+    if es.get("route_id") is not None:
+        buf.extend(_encode_string_field(2, str(es["route_id"])))
+    if es.get("route_type") is not None:
+        buf.extend(_encode_varint_field(3, int(es["route_type"])))
+    if isinstance(es.get("trip"), dict):
+        buf.extend(_encode_bytes_field(4, _encode_trip_descriptor(es["trip"])))
+    if es.get("stop_id") is not None:
+        buf.extend(_encode_string_field(5, str(es["stop_id"])))
+    if es.get("direction_id") is not None:
+        buf.extend(_encode_varint_field(6, int(es["direction_id"])))
+    return bytes(buf)
+
+
 def _encode_alert(alert: dict[str, Any]) -> bytes:
+    """Encodes an Alert message strictly using official gtfs-realtime.proto field tags."""
     buf = bytearray()
     for ap in alert.get("active_period", []):
         buf.extend(_encode_bytes_field(1, _encode_time_range(ap)))
+
+    for inf in alert.get("informed_entity", []):
+        if isinstance(inf, dict):
+            buf.extend(_encode_bytes_field(5, _encode_entity_selector(inf)))
 
     cause_val = alert.get("cause")
     if isinstance(cause_val, str):
         cause_val = CAUSE_REVERSE_MAP.get(cause_val, 1)
     if isinstance(cause_val, int):
-        buf.extend(_encode_varint_field(3, cause_val))
+        buf.extend(_encode_varint_field(6, cause_val))
 
     effect_val = alert.get("effect")
     if isinstance(effect_val, str):
         effect_val = EFFECT_REVERSE_MAP.get(effect_val, 8)
     if isinstance(effect_val, int):
-        buf.extend(_encode_varint_field(4, effect_val))
+        buf.extend(_encode_varint_field(7, effect_val))
 
+    if "url" in alert and isinstance(alert["url"], dict):
+        buf.extend(_encode_translated_string(8, alert["url"]))
     if "header_text" in alert and isinstance(alert["header_text"], dict):
-        buf.extend(_encode_translated_string(6, alert["header_text"]))
+        buf.extend(_encode_translated_string(10, alert["header_text"]))
     if "description_text" in alert and isinstance(alert["description_text"], dict):
-        buf.extend(_encode_translated_string(7, alert["description_text"]))
+        buf.extend(_encode_translated_string(11, alert["description_text"]))
 
-    if "timestamp" in alert:
-        buf.extend(_encode_varint_field(11, int(alert["timestamp"])))
+    sev_val = alert.get("severity_level")
+    if isinstance(sev_val, str):
+        sev_val = SEVERITY_LEVEL_REVERSE_MAP.get(sev_val, 1)
+    if isinstance(sev_val, int):
+        buf.extend(_encode_varint_field(14, sev_val))
 
     return bytes(buf)
 
@@ -604,3 +686,186 @@ def encode_gtfs_feed(feed: dict[str, Any]) -> bytes:
     for ent in feed.get("entity", []):
         buf.extend(_encode_bytes_field(2, _encode_feed_entity(ent)))
     return bytes(buf)
+
+
+def map_gtfs_route_type_to_mode(route_type: int) -> str | None:
+    """Maps standard and extended GTFS route_type integers to KogniSync TransportMode values."""
+    if route_type in (0, 1, 5, 6, 7, 12, 1300, 1400):
+        return "metro"
+    if route_type == 2 or 100 <= route_type <= 199:
+        return "train"
+    if route_type in (3, 11) or 200 <= route_type <= 299 or 700 <= route_type <= 899:
+        return "bus"
+    if route_type == 4 or route_type in (1000, 1200):
+        return "ferry"
+    if 400 <= route_type <= 499 or 900 <= route_type <= 999:
+        return "metro"
+    return None
+
+
+def _coerce_optional_int(val: Any) -> int | None:
+    if val is None or isinstance(val, bool):
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def derive_affected_modes_from_selectors(
+    selectors: list[dict[str, Any]],
+    default_modes: list[str] | None = None,
+) -> list[str]:
+    """
+    Derives KogniSync affected_modes from GTFS EntitySelector route_type values when present.
+    - If every selector (or the sole trip selector) carries a recognized GTFS route_type,
+      narrows affected_modes strictly to those modes (e.g. route_type=3 -> ["bus"]).
+    - If some selectors specify route_type and others leave it unspecified, returns the union
+      of mapped modes and default_modes so unspecified selectors are not silently pruned before
+      per-selector matching evaluates them.
+    """
+    fallback = list(default_modes or ["bus", "train", "metro"])
+    if not selectors:
+        return fallback
+
+    mapped_modes: set[str] = set()
+    selectors_with_mapped_rt = 0
+    for sel in selectors:
+        rt = sel.get("route_type")
+        if isinstance(rt, int):
+            mapped = map_gtfs_route_type_to_mode(rt)
+            if mapped:
+                mapped_modes.add(mapped)
+                selectors_with_mapped_rt += 1
+
+    if not mapped_modes:
+        return fallback
+    if selectors_with_mapped_rt == len(selectors):
+        return sorted(mapped_modes)
+    return sorted(set(fallback) | mapped_modes)
+
+
+def extract_gtfs_informed_selectors(informed: Any) -> dict[str, Any]:
+    """
+    Extracts flat identifier sets and structured conjunctive EntitySelector objects
+    from GTFS Realtime Alert `informed_entity` entries.
+    """
+    route_ids: list[str] = []
+    stop_ids: list[str] = []
+    trip_ids: list[str] = []
+    agency_ids: list[str] = []
+    route_types: list[int] = []
+    direction_ids: list[int] = []
+    selectors: list[dict[str, Any]] = []
+
+    if isinstance(informed, list):
+        for inf in informed:
+            if not isinstance(inf, dict):
+                continue
+
+            sel: dict[str, Any] = {}
+            raw_agency = inf.get("agency_id") or inf.get("agencyId")
+            if raw_agency:
+                agency_str = str(raw_agency).strip()
+                if agency_str:
+                    agency_ids.append(agency_str)
+                    sel["agency_id"] = agency_str
+
+            raw_route = inf.get("route_id") or inf.get("routeId")
+            raw_stop = inf.get("stop_id") or inf.get("stopId")
+            raw_trip = inf.get("trip_id") or inf.get("tripId")
+            raw_rt = _coerce_optional_int(
+                inf.get("route_type") if inf.get("route_type") is not None else inf.get("routeType")
+            )
+            raw_dir = _coerce_optional_int(
+                inf.get("direction_id") if inf.get("direction_id") is not None else inf.get("directionId")
+            )
+
+            trip_obj = inf.get("trip")
+            if isinstance(trip_obj, dict):
+                t_trip = trip_obj.get("trip_id") or trip_obj.get("tripId")
+                t_route = trip_obj.get("route_id") or trip_obj.get("routeId")
+                t_agency = trip_obj.get("agency_id") or trip_obj.get("agencyId")
+                t_rt = _coerce_optional_int(
+                    trip_obj.get("route_type") if trip_obj.get("route_type") is not None else trip_obj.get("routeType")
+                )
+                t_dir = _coerce_optional_int(
+                    trip_obj.get("direction_id") if trip_obj.get("direction_id") is not None else trip_obj.get("directionId")
+                )
+                if t_trip and not raw_trip:
+                    raw_trip = t_trip
+                if t_route and not raw_route:
+                    raw_route = t_route
+                if t_agency and not raw_agency:
+                    raw_agency = t_agency
+                    agency_str = str(t_agency).strip()
+                    if agency_str:
+                        agency_ids.append(agency_str)
+                        sel["agency_id"] = agency_str
+                if t_rt is not None and raw_rt is None:
+                    raw_rt = t_rt
+                if t_dir is not None and raw_dir is None:
+                    raw_dir = t_dir
+
+            if raw_route:
+                route_str = str(raw_route).strip()
+                if route_str:
+                    route_ids.append(route_str)
+                    sel["route_id"] = route_str
+            if raw_stop:
+                stop_str = str(raw_stop).strip()
+                if stop_str:
+                    stop_ids.append(stop_str)
+                    sel["stop_id"] = stop_str
+            if raw_trip:
+                trip_str = str(raw_trip).strip()
+                if trip_str:
+                    trip_ids.append(trip_str)
+                    sel["trip_id"] = trip_str
+            if raw_rt is not None:
+                route_types.append(raw_rt)
+                sel["route_type"] = raw_rt
+            if raw_dir is not None:
+                direction_ids.append(raw_dir)
+                sel["direction_id"] = raw_dir
+
+            if sel:
+                selectors.append(sel)
+
+    return {
+        "route_ids": sorted(set(route_ids)),
+        "stop_ids": sorted(set(stop_ids)),
+        "trip_ids": sorted(set(trip_ids)),
+        "agency_ids": sorted(set(agency_ids)),
+        "route_types": sorted(set(route_types)),
+        "direction_ids": sorted(set(direction_ids)),
+        "selectors": selectors,
+    }
+
+
+def extract_trip_descriptor_selector(trip: Any) -> dict[str, Any]:
+    """Extracts structured selector fields from a GTFS-RT TripDescriptor dict."""
+    if not isinstance(trip, dict):
+        return {}
+    sel: dict[str, Any] = {}
+    for src_keys, dst_key in (
+        (("trip_id", "tripId"), "trip_id"),
+        (("route_id", "routeId"), "route_id"),
+        (("agency_id", "agencyId"), "agency_id"),
+    ):
+        val = next((trip.get(k) for k in src_keys if trip.get(k)), None)
+        if val:
+            s = str(val).strip()
+            if s:
+                sel[dst_key] = s
+    raw_rt = _coerce_optional_int(
+        trip.get("route_type") if trip.get("route_type") is not None else trip.get("routeType")
+    )
+    if raw_rt is not None:
+        sel["route_type"] = raw_rt
+    raw_dir = _coerce_optional_int(
+        trip.get("direction_id") if trip.get("direction_id") is not None else trip.get("directionId")
+    )
+    if raw_dir is not None:
+        sel["direction_id"] = raw_dir
+    return sel

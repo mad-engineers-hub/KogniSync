@@ -6,12 +6,15 @@ Guarantees:
 1. Cryptographic token signature verification using configured algorithm (HS256).
 2. Token expiry (exp) and subject (sub) enforcement.
 3. Issuer (iss) and Audience (aud) validation when configured.
-4. Fails closed in production if JWT_SECRET_KEY is missing.
-5. Consistent 401 Unauthorized responses with WWW-Authenticate header.
+4. Fails closed across all environments if JWT_SECRET_KEY is missing, weak (< 32 chars), or forbidden.
+5. Consistent 401 Unauthorized / 500 misconfiguration responses without silent fallbacks.
 """
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
+import hashlib
 import logging
+import secrets
 import jwt
 from fastapi import Header, HTTPException, status
 from app.core.config import settings
@@ -19,30 +22,66 @@ from app.core.config import settings
 logger = logging.getLogger("kognisync.security")
 
 
+# SHA-256 digests of known insecure/default secrets that must never be accepted.
+_FORBIDDEN_JWT_SECRET_DIGESTS = frozenset({
+    "38acc57d362a391d454a7a62b7fe55335145f864c3fbeacca2e6e807d1fdd5ba",  # legacy insecure dev secret digest 1
+    "27e8536054b288b65f909cfa4c1e0bf0e1b7c464eb4249b643c7ab3b8d559299",  # legacy insecure dev secret digest 2
+    "c6710a1a3b1c1f15b3e5284cef0e7f170ba4e044170ef98196d862120569228c",  # legacy insecure default digest 3
+    "4d0e5bfa615256c6fa42add564cfdbf0f7e9db5a7384dfc80bd7fe81109cf67d",  # legacy insecure default digest 4
+})
+
+
+def is_forbidden_jwt_secret(secret: str) -> bool:
+    """Return True if a candidate secret matches a known insecure/legacy default digest."""
+    candidate = secret.strip().encode("utf-8")
+    raw_candidate = secret.encode("utf-8")
+    return (
+        hashlib.sha256(candidate).hexdigest() in _FORBIDDEN_JWT_SECRET_DIGESTS
+        or hashlib.sha256(raw_candidate).hexdigest() in _FORBIDDEN_JWT_SECRET_DIGESTS
+    )
+
+
 def get_jwt_secret() -> str:
     """
-    Authoritatively resolves the JWT secret.
-    Fails closed in production if JWT_SECRET_KEY is missing or shorter than 32 characters.
-    In development and test environments, falls back to a development-only secret if unset.
+    Authoritatively resolves the JWT secret across ALL environments.
+    Fails closed (HTTP 500) if JWT_SECRET_KEY is missing, shorter than 32 non-whitespace
+    characters, or matches a prohibited legacy default secret.
     """
-    if settings.JWT_SECRET_KEY:
-        if settings.ENVIRONMENT == "production" and len(settings.JWT_SECRET_KEY.strip()) < 32:
-            logger.error("Authentication configuration error: JWT_SECRET_KEY must be at least 32 characters in production.")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Authentication service misconfigured: secret key too short for production (min 32 bytes required)",
-            )
-        return settings.JWT_SECRET_KEY
-
-    if settings.ENVIRONMENT == "production":
-        logger.error("Authentication configuration error: JWT_SECRET_KEY is missing in production environment.")
+    raw_secret = settings.JWT_SECRET_KEY
+    if not raw_secret or not raw_secret.strip():
+        logger.error(
+            "Authentication configuration error: JWT_SECRET_KEY is missing in %s environment.",
+            settings.ENVIRONMENT,
+        )
+        detail = (
+            "Authentication service misconfigured: secret key missing in production"
+            if settings.ENVIRONMENT == "production"
+            else "Authentication service misconfigured: JWT_SECRET_KEY is required"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Authentication service misconfigured: secret key missing in production",
+            detail=detail,
         )
 
-    # Insecure fallback strictly for local development and test suite
-    return "kognisync_insecure_development_jwt_secret_key_384729"
+    stripped = raw_secret.strip()
+    if len(stripped) < 32:
+        logger.error(
+            "Authentication configuration error: JWT_SECRET_KEY must be at least 32 characters in %s environment.",
+            settings.ENVIRONMENT,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service misconfigured: secret key too short (min 32 bytes required)",
+        )
+
+    if is_forbidden_jwt_secret(raw_secret):
+        logger.error("Authentication configuration error: JWT_SECRET_KEY uses a prohibited default secret.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication service misconfigured: insecure default secret key is forbidden",
+        )
+
+    return raw_secret
 
 
 def create_access_token(
@@ -162,4 +201,100 @@ async def get_current_user_id(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return str(user_id)
+
+
+@dataclass(frozen=True)
+class TransitPollPrincipal:
+    """Verified operational caller identity and transit-polling capability set."""
+
+    principal_id: str
+    can_poll: bool
+    can_force: bool
+
+
+def _extract_jwt_privileges(payload: Dict[str, Any]) -> tuple[bool, bool]:
+    role = str(payload.get("role") or "").strip().lower()
+    raw_scopes = payload.get("scopes") if payload.get("scopes") is not None else payload.get("scope", "")
+    if isinstance(raw_scopes, str):
+        scopes = {s.strip().lower() for s in raw_scopes.replace(",", " ").split() if s.strip()}
+    elif isinstance(raw_scopes, (list, tuple, set)):
+        scopes = {str(s).strip().lower() for s in raw_scopes if str(s).strip()}
+    else:
+        scopes = set()
+
+    can_force = role in ("admin", "superadmin") or bool(scopes & {"transit:force_poll", "admin"})
+    can_poll = can_force or role in ("operator", "ops") or bool(scopes & {"transit:poll", "ops:poll"})
+    return can_poll, can_force
+
+
+async def verify_transit_poll_access(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+    x_elevated_key: Optional[str] = Header(None, alias="X-Elevated-Key"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> TransitPollPrincipal:
+    """
+    Fails closed across ALL environments unless valid operational credentials
+    (`X-Internal-Key` or an operational Bearer JWT) are supplied.
+    Force polling (`force=true`) additionally requires elevated privilege (`X-Elevated-Key`
+    or admin/`transit:force_poll` JWT claims).
+    """
+    if not x_internal_key and not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: operational credentials required for transit feed polling",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    can_force = False
+    principal_id: str | None = None
+
+    if x_internal_key is not None:
+        if not settings.INTERNAL_API_KEY or not secrets.compare_digest(
+            x_internal_key, settings.INTERNAL_API_KEY
+        ):
+            logger.warning("Transit poll access denied: invalid or unconfigured X-Internal-Key")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: invalid or unconfigured operational credentials",
+            )
+        key_digest = hashlib.sha256(x_internal_key.encode("utf-8")).hexdigest()[:12]
+        principal_id = f"internal:{key_digest}"
+        if (
+            x_elevated_key is not None
+            and settings.TRANSIT_POLL_ELEVATED_KEY
+            and secrets.compare_digest(x_elevated_key, settings.TRANSIT_POLL_ELEVATED_KEY)
+        ):
+            can_force = True
+
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication scheme; Bearer token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        payload = decode_access_token(token.strip())
+        jwt_can_poll, jwt_can_force = _extract_jwt_privileges(payload)
+        if principal_id is None and not jwt_can_poll:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: operational transit polling role or scope required",
+            )
+        can_force = can_force or jwt_can_force
+        if principal_id is None:
+            principal_id = f"jwt:{payload.get('sub')}"
+
+    if x_elevated_key is not None and not can_force:
+        logger.warning("Transit poll elevated privilege denied: invalid or unconfigured X-Elevated-Key")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: invalid or unconfigured elevated polling credentials",
+        )
+
+    return TransitPollPrincipal(
+        principal_id=principal_id or "unknown",
+        can_poll=True,
+        can_force=can_force,
+    )
 

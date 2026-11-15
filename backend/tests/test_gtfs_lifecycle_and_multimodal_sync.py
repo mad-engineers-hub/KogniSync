@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -63,7 +63,9 @@ from app.services.journey.schemas import (
 
 client = TestClient(app)
 
-CANONICAL_DB_PATH = Path("BookingInventory/data/APS-05.db")
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_CANDIDATE_DB = _REPO_ROOT / "BookingInventory" / "data" / "APS-05.db"
+CANONICAL_DB_PATH = _CANDIDATE_DB if _CANDIDATE_DB.exists() else Path("BookingInventory/data/APS-05.db")
 EXPECTED_DB_SHA256 = "f9b4b3185d91649c454bc70214af83f69bb2d4d7ab7b9c7fb5af9b900d52b10a"
 
 
@@ -374,6 +376,10 @@ def test_multimodal_road_incident_correlation():
     journey = _build_test_journey()
     bus_segment = journey.segments[1]  # Leg 2: Bus from Majestic to Chennai
 
+    now = datetime.now(timezone.utc)
+    bus_segment.departure_time = (now + timedelta(minutes=30)).isoformat()
+    bus_segment.arrival_time = (now + timedelta(hours=4)).isoformat()
+
     # Road incident at Majestic Bus Station origin point
     road_incident = DisruptionEvent(
         id="tt-incident-majestic-01",
@@ -387,10 +393,10 @@ def test_multimodal_road_incident_correlation():
         affected_modes=["cab", "bus", "auto"],
         point=CoordinatesSchema(lat=12.9767, lng=77.5713),  # Exact Majestic coordinates
         radius_meters=1500.0,
-        valid_from="2026-11-12T07:00:00+00:00",
-        valid_until="2026-11-12T18:00:00+00:00",
-        observed_at="2026-11-12T08:00:00+00:00",
-        last_verified_at="2026-11-12T08:00:00+00:00",
+        valid_from=(now - timedelta(hours=1)).isoformat(),
+        valid_until=(now + timedelta(hours=6)).isoformat(),
+        observed_at=now.isoformat(),
+        last_verified_at=now.isoformat(),
         provenance="provider_live",
         confidence=0.98,
         estimated_delay_minutes=45,

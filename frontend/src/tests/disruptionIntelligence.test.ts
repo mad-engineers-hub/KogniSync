@@ -8,6 +8,8 @@
 import assert from 'node:assert';
 import {
   getDisruptionProviders,
+  getGTFSFeeds,
+  pollGTFSFeeds,
   getActiveDisruptions,
   assessJourneyDisruptions,
   recoverDisruptedJourney,
@@ -308,8 +310,48 @@ async function runTests() {
   );
   console.log('✓ Recovery engine generates feasible Pareto alternatives while enforcing safety invariants');
 
+  // ============================================================================
+  // 6. M4.0: GTFS-RT / IUDX FEED DIAGNOSTICS & SECRET HYGIENE
+  // ============================================================================
+  console.log('\n--- 6. M4.0 Transit Feed Diagnostics & Poll Contract ---');
+
+  const feedsResp = await getGTFSFeeds();
+  assert.ok(Array.isArray(feedsResp.feeds) && feedsResp.feeds.length >= 2, 'Should list documented Indian agency feed definitions');
+  const bmtcFeed = feedsResp.feeds.find((f) => f.feedId === 'bmtc_iudx_vehicle_positions');
+  const delhiFeed = feedsResp.feeds.find((f) => f.feedId === 'delhi_otd_vehicle_positions');
+  assert.ok(bmtcFeed, 'Should expose BMTC IUDX feed status');
+  assert.ok(delhiFeed, 'Should expose Delhi OTD feed status');
+  assert.strictEqual(bmtcFeed?.providerFormat, 'iudx_ngsi_ld');
+  assert.strictEqual(delhiFeed?.providerFormat, 'gtfs_rt');
+  assert.strictEqual(JSON.stringify(feedsResp).includes('authTokenEnvVar'), false, 'Never expose env var metadata in feed status');
+
+  const pollResp = await pollGTFSFeeds(false);
+  assert.ok(Array.isArray(pollResp.feeds), 'Offline fallback poll response must preserve GTFSFeedListResponse shape');
+
+  // Verify HTTP 401/403 operational authorization errors are propagated, never masked as success
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ detail: 'Unauthorized: operational credentials required' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+
+    let caughtStatus: number | null = null;
+    try {
+      await pollGTFSFeeds(false);
+    } catch (err: any) {
+      caughtStatus = err?.status ?? null;
+    }
+    assert.strictEqual(caughtStatus, 401, 'pollGTFSFeeds must surface HTTP 401 authorization rejections');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  console.log('✓ M4.0.1 transit feed diagnostics and secure poll contract verified cleanly');
+
   console.log('\n=================================================================');
-  console.log('ALL DISRUPTION INTELLIGENCE (M3.7) FRONTEND TESTS PASSED (12/12)');
+  console.log('ALL DISRUPTION INTELLIGENCE (M3.7-M4.0) FRONTEND TESTS PASSED');
   console.log('=================================================================');
 }
 

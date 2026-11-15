@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # scripts/start_kognisync.ps1 — KogniSync One-Command Startup Launcher
 # ==============================================================================
 # Orchestrates environment bootstrap, infrastructure readiness, migrations,
@@ -251,17 +251,26 @@ if (Test-Path $EnvFile) {
         Write-Info "No .env detected. Creating from .env.example..."
         $content = Get-Content -Path $EnvExampleFile -Raw
         
-        # Generate cryptographically secure random token
+        # Generate cryptographically secure random tokens
         $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
         $bytes = New-Object byte[] 32
         $rng.GetBytes($bytes)
         $secretKey = [System.Convert]::ToBase64String($bytes)
+
+        $internalBytes = New-Object byte[] 24
+        $rng.GetBytes($internalBytes)
+        $internalKey = ([System.BitConverter]::ToString($internalBytes)).Replace("-", "").ToLowerInvariant()
         
-        # Ensure JWT_SECRET_KEY is defined
+        # Ensure JWT_SECRET_KEY and INTERNAL_API_KEY are populated cleanly
         if ($content -match "JWT_SECRET_KEY=") {
             $content = $content -replace "JWT_SECRET_KEY=.*", "JWT_SECRET_KEY=$secretKey"
         } else {
-            $content += "`nJWT_SECRET_KEY=$secretKey`nINTERNAL_API_KEY=kognisync_dev_ops_secret_internal_key_123`n"
+            $content += "`nJWT_SECRET_KEY=$secretKey"
+        }
+        if ($content -match "INTERNAL_API_KEY=") {
+            $content = $content -replace "INTERNAL_API_KEY=.*", "INTERNAL_API_KEY=$internalKey"
+        } else {
+            $content += "`nINTERNAL_API_KEY=$internalKey`n"
         }
         
         Set-Content -Path $EnvFile -Value $content -Encoding UTF8
