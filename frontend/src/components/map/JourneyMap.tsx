@@ -77,6 +77,20 @@ function getModeStyle(mode: string) {
   return MODE_COLORS[mode] || { stroke: '#2563eb', glow: '#60a5fa', weight: 5 };
 }
 
+function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 export const JourneyMap: React.FC<JourneyMapProps> = ({
   segments,
   journey,
@@ -142,14 +156,14 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         name: 'Origin',
         city: 'Origin',
         type: 'address',
-        coordinates: { lat: 12.97, lng: 77.59 },
+        coordinates: { lat: 0, lng: 0 },
       },
       destination: segments[segments.length - 1]?.destination || {
         id: 'dest',
         name: 'Destination',
         city: 'Destination',
         type: 'address',
-        coordinates: { lat: 13.08, lng: 80.27 },
+        coordinates: { lat: 0, lng: 0 },
       },
       departureTime: segments[0]?.departureTime || defaultTime,
       arrivalTime: segments[segments.length - 1]?.arrivalTime || defaultTime,
@@ -204,10 +218,21 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       if (
         enrichedOrigLat !== undefined &&
         targetOrigLat !== undefined &&
-        Math.hypot(enrichedOrigLat - targetOrigLat, (enrichedOrigLng ?? 0) - (targetOrigLng ?? 0)) > 0.5
+        enrichedOrigLng !== undefined &&
+        targetOrigLng !== undefined
       ) {
-        // Enriched route origin diverged from active journey origin (stale cache) -> use client fallback
-        return buildClientFallbackRoute(targetJourney);
+        const distKm = calculateHaversineDistanceKm(
+          enrichedOrigLat,
+          enrichedOrigLng,
+          targetOrigLat,
+          targetOrigLng
+        );
+        // Distance-based threshold: 45 km allows for terminal/airport access buffers
+        // within a metropolitan corridor, but strictly rejects unrelated-city divergence (e.g. Tumkur vs Bengaluru ~70km)
+        if (distKm > 45) {
+          // Enriched route origin diverged from active journey origin (stale cache) -> use client fallback
+          return buildClientFallbackRoute(targetJourney);
+        }
       }
       return enrichedRoute;
     }

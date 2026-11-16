@@ -491,13 +491,23 @@ def resolve_hub_context(
     else:
         from app.services.location.service import location_service
         dynamic_city = capitalized_raw
-        geocoded = custom_coordinates or location_service.forward_geocode_sync(raw)
-        if geocoded:
+        geocoded = location_service.forward_geocode_sync(raw)
+        if geocoded and custom_coordinates:
+            dist = _hub_distance_km(custom_coordinates.lat, custom_coordinates.lng, geocoded.lat, geocoded.lng)
+            if dist <= 45.0:
+                def_lat = custom_coordinates.lat
+                def_lng = custom_coordinates.lng
+            else:
+                def_lat = geocoded.lat
+                def_lng = geocoded.lng
+        elif custom_coordinates:
+            def_lat = custom_coordinates.lat
+            def_lng = custom_coordinates.lng
+        elif geocoded:
             def_lat = geocoded.lat
             def_lng = geocoded.lng
         else:
-            def_lat = 13.0 if is_origin else 15.0
-            def_lng = 77.6 if is_origin else 74.5
+            raise ValueError(f"Unable to resolve coordinates for location: '{raw}'. Geocoding returned no match.")
 
         profile = HubProfile(
             city=dynamic_city,

@@ -221,6 +221,20 @@ function round4(val: number): number {
   return Math.round(val * 10000) / 10000;
 }
 
+export function computeDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c * 10) / 10;
+}
+
 export const REGIONAL_GAZETTEER: Record<string, { lat: number; lng: number; name: string }> = {
   tumkur: { lat: 13.3401, lng: 77.1006, name: 'Tumakuru' },
   tumakuru: { lat: 13.3401, lng: 77.1006, name: 'Tumakuru' },
@@ -321,14 +335,66 @@ export function resolveHubContext(
 
   // 3. Resolve profile via registry or regional gazetteer / custom coordinates
   let profile: CityHubProfile;
+  let effectiveCoords: { lat: number; lng: number };
+
   if (parentCityKey && CITY_HUB_REGISTRY[parentCityKey]) {
     profile = CITY_HUB_REGISTRY[parentCityKey];
+    if (customCoordinates) {
+      // Validate that customCoordinates is not divergent from the requested city (> 45km)
+      const dist = computeDistanceKm(customCoordinates.lat, customCoordinates.lng, profile.lat, profile.lng);
+      if (dist <= 45) {
+        effectiveCoords = customCoordinates;
+      } else {
+        effectiveCoords = {
+          lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
+          lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
+        };
+      }
+    } else {
+      effectiveCoords = {
+        lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
+        lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
+      };
+    }
   } else {
     // Check gazetteer or custom coordinates for dynamic resolution
-    const gz = REGIONAL_GAZETTEER[lower] || Object.entries(REGIONAL_GAZETTEER).find(([k]) => lower.includes(k))?.[1];
-    const defLat = customCoordinates?.lat ?? gz?.lat ?? (isOrigin ? 13.0 : 15.0);
-    const defLng = customCoordinates?.lng ?? gz?.lng ?? (isOrigin ? 77.6 : 74.5);
-    const dynamicCity = gz?.name || capitalizedRaw;
+    const gz = REGIONAL_GAZETTEER[lower] || Object.entries(REGIONAL_GAZETTEER).find(([k]) => lower.includes(k) || k.includes(lower))?.[1];
+
+    if (!gz && !customCoordinates) {
+      throw new Error(`Unable to resolve coordinates for location: "${raw}". Location is not recognized in regional gazetteer and no geocoded coordinates were provided.`);
+    }
+
+    let defLat: number;
+    let defLng: number;
+
+    if (gz) {
+      defLat = gz.lat;
+      defLng = gz.lng;
+      if (customCoordinates) {
+        const dist = computeDistanceKm(customCoordinates.lat, customCoordinates.lng, gz.lat, gz.lng);
+        if (dist <= 45) {
+          effectiveCoords = customCoordinates;
+        } else {
+          // Reject divergent stale coordinates (e.g. Bangalore coords retained when searching Tumkur)
+          effectiveCoords = {
+            lat: round4(defLat + (isOrigin ? -0.015 : 0.015)),
+            lng: round4(defLng + (isOrigin ? -0.015 : 0.015)),
+          };
+        }
+      } else {
+        effectiveCoords = {
+          lat: round4(defLat + (isOrigin ? -0.015 : 0.015)),
+          lng: round4(defLng + (isOrigin ? -0.015 : 0.015)),
+        };
+      }
+    } else {
+      // Unknown location, but valid customCoordinates provided
+      defLat = customCoordinates!.lat;
+      defLng = customCoordinates!.lng;
+      effectiveCoords = customCoordinates!;
+    }
+
+    const dynamicCity = capitalizedRaw;
 
     profile = {
       city: dynamicCity,
@@ -344,13 +410,10 @@ export function resolveHubContext(
 
   const userNode: Location = {
     id: `loc-usr-${isOrigin ? 'orig' : 'dest'}-${slugify(raw || profile.city)}`,
-    name: isLocality ? `${capitalizedRaw}` : `${profile.city} City Hub`,
-    city: isLocality ? `${capitalizedRaw} (${profile.city})` : profile.city,
+    name: isLocality ? `${capitalizedRaw}` : `${capitalizedRaw} City Hub`,
+    city: isLocality ? `${capitalizedRaw} (${profile.city})` : capitalizedRaw,
     type: isLocality ? 'address' : 'landmark',
-    coordinates: customCoordinates ?? {
-      lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
-      lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
-    },
+    coordinates: effectiveCoords,
   };
 
   const railwayHub: Location = {

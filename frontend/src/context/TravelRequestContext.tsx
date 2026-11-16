@@ -83,6 +83,13 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
       ? { lat: parseFloat(initialOriginLat), lng: parseFloat(initialOriginLng) }
       : null;
 
+  const initialDestLat = searchParams.get('destLat') || searchParams.get('destinationLat');
+  const initialDestLng = searchParams.get('destLng') || searchParams.get('destinationLng');
+  const initialDestCoords =
+    initialDestLat && initialDestLng
+      ? { lat: parseFloat(initialDestLat), lng: parseFloat(initialDestLng) }
+      : null;
+
   const [state, setState] = useState<TravelRequestState>(() => {
     let timeText = initialArrival ? `Arrive by ${formatTime12h(initialArrival)}` : 'Anytime';
     if (initialArrival && initialDeparture) {
@@ -124,7 +131,7 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
       naturalLanguageQuery: initialQuery,
       understoodMessage: summary,
       originCoordinates: initialOriginCoords,
-      destinationCoordinates: null,
+      destinationCoordinates: initialDestCoords,
     };
   });
 
@@ -142,6 +149,10 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
     const urlDuration = searchParams.get('durationWeight');
     const urlComfort = searchParams.get('comfortWeight');
     const urlCarbon = searchParams.get('carbonWeight');
+    const urlOriginLat = searchParams.get('originLat');
+    const urlOriginLng = searchParams.get('originLng');
+    const urlDestLat = searchParams.get('destLat') || searchParams.get('destinationLat');
+    const urlDestLng = searchParams.get('destLng') || searchParams.get('destinationLng');
 
     if (urlOrigin || urlDest || urlBudget || urlArrival || urlDate) {
       setState((prev) => {
@@ -159,6 +170,20 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
         const costW = urlCost ? parseFloat(urlCost) : prev.weights.cost;
         const comfW = urlComfort ? parseFloat(urlComfort) : prev.weights.comfort;
         const carbW = urlCarbon ? parseFloat(urlCarbon) : prev.weights.carbon;
+
+        let nextOriginCoords = prev.originCoordinates;
+        if (urlOriginLat && urlOriginLng) {
+          nextOriginCoords = { lat: parseFloat(urlOriginLat), lng: parseFloat(urlOriginLng) };
+        } else if (urlOrigin && urlOrigin !== prev.origin) {
+          nextOriginCoords = null; // Clear stale coordinates when origin changes
+        }
+
+        let nextDestCoords = prev.destinationCoordinates;
+        if (urlDestLat && urlDestLng) {
+          nextDestCoords = { lat: parseFloat(urlDestLat), lng: parseFloat(urlDestLng) };
+        } else if (urlDest && urlDest !== prev.destination) {
+          nextDestCoords = null; // Clear stale coordinates when destination changes
+        }
 
         let timeText = prev.timeDeadlineText;
         if (nextArrival && nextDeparture) {
@@ -198,6 +223,8 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
             carbon: carbW,
           },
           understoodMessage: summary,
+          originCoordinates: nextOriginCoords,
+          destinationCoordinates: nextDestCoords,
         };
       });
     }
@@ -396,6 +423,10 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
       params.set('originLat', state.originCoordinates.lat.toString());
       params.set('originLng', state.originCoordinates.lng.toString());
     }
+    if (state.destinationCoordinates) {
+      params.set('destLat', state.destinationCoordinates.lat.toString());
+      params.set('destLng', state.destinationCoordinates.lng.toString());
+    }
 
     return `/plan?${params.toString()}`;
   };
@@ -424,6 +455,14 @@ export const TravelRequestProvider: React.FC<{ children: ReactNode }> = ({ child
     }
     if (normalized.departureTime) {
       params.set('departureAfter', normalized.departureTime);
+    }
+    if (normalized.originCoordinates) {
+      params.set('originLat', normalized.originCoordinates.lat.toString());
+      params.set('originLng', normalized.originCoordinates.lng.toString());
+    }
+    if (normalized.destinationCoordinates) {
+      params.set('destLat', normalized.destinationCoordinates.lat.toString());
+      params.set('destLng', normalized.destinationCoordinates.lng.toString());
     }
 
     return `/plan?${params.toString()}`;
