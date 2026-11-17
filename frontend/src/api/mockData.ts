@@ -1,6 +1,6 @@
 import { Journey, TravelRequest } from '../types/journey';
 import { Trip } from '../types/trip';
-import { composeMultiModalJourneys } from './orchestrationEngine';
+import { composeMultiModalJourneys, CANONICAL_CITY_ALIASES } from './orchestrationEngine';
 import { generateSvgQrDataUri } from './trips';
 
 export const DEMO_PRESETS: { title: string; subtitle: string; query: string; request: Partial<TravelRequest> }[] = [
@@ -57,31 +57,6 @@ export const DEMO_PRESETS: { title: string; subtitle: string; query: string; req
     },
   },
 ];
-
-const CANONICAL_CITY_ALIASES: Record<string, string[]> = {
-  tumkur: ['tumkur', 'tumakuru'],
-  tumakuru: ['tumkur', 'tumakuru'],
-  bangalore: ['bangalore', 'bengaluru'],
-  bengaluru: ['bangalore', 'bengaluru'],
-  mysore: ['mysore', 'mysuru'],
-  mysuru: ['mysore', 'mysuru'],
-  hubli: ['hubli', 'hubballi'],
-  hubballi: ['hubli', 'hubballi'],
-  belgaum: ['belgaum', 'belagavi'],
-  belagavi: ['belgaum', 'belagavi'],
-  mangalore: ['mangalore', 'mangaluru'],
-  mangaluru: ['mangalore', 'mangaluru'],
-  shimoga: ['shimoga', 'shivamogga'],
-  shivamogga: ['shimoga', 'shivamogga'],
-  bellary: ['bellary', 'ballari'],
-  ballari: ['bellary', 'ballari'],
-  calicut: ['calicut', 'kozhikode'],
-  kozhikode: ['calicut', 'kozhikode'],
-  trivandrum: ['trivandrum', 'thiruvananthapuram'],
-  thiruvananthapuram: ['trivandrum', 'thiruvananthapuram'],
-  vizag: ['vizag', 'visakhapatnam'],
-  visakhapatnam: ['vizag', 'visakhapatnam'],
-};
 
 function matchesLocationString(queryLoc: string, targetName: string, targetCity: string): boolean {
   const q = (queryLoc || '').toLowerCase().trim();

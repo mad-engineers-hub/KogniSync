@@ -282,6 +282,133 @@ export const REGIONAL_GAZETTEER: Record<string, { lat: number; lng: number; name
   panaji: { lat: 15.4909, lng: 73.8278, name: 'Panaji' },
 };
 
+export const CANONICAL_CITY_ALIASES: Record<string, string[]> = {
+  tumkur: ['tumakuru'],
+  tumakuru: ['tumkur'],
+  bangalore: ['bengaluru'],
+  bengaluru: ['bangalore'],
+  mysore: ['mysuru'],
+  mysuru: ['mysore'],
+  hubli: ['hubballi'],
+  hubballi: ['hubli'],
+  belgaum: ['belagavi'],
+  belagavi: ['belgaum'],
+  shimoga: ['shivamogga'],
+  shivamogga: ['shimoga'],
+  bellary: ['ballari'],
+  ballari: ['bellary'],
+  davanagere: ['davangere'],
+  davangere: ['davanagere'],
+  calicut: ['kozhikode'],
+  kozhikode: ['calicut'],
+  trivandrum: ['thiruvananthapuram'],
+  thiruvananthapuram: ['trivandrum'],
+  cochin: ['kochi', 'ernakulam'],
+  kochi: ['cochin', 'ernakulam'],
+  ernakulam: ['kochi', 'cochin'],
+  vizag: ['visakhapatnam'],
+  visakhapatnam: ['vizag'],
+  madras: ['chennai'],
+  chennai: ['madras'],
+  bombay: ['mumbai'],
+  mumbai: ['bombay'],
+  calcutta: ['kolkata'],
+  kolkata: ['calcutta'],
+  delhi: ['new delhi', 'gurgaon', 'gurugram', 'noida'],
+  'new delhi': ['delhi'],
+};
+
+export interface CrossCityCollisionResult {
+  isStaleCollision: boolean;
+  conflictingCity?: string;
+  distanceKm?: number;
+}
+
+/**
+ * Cross-city collision detector:
+ * Identifies if customCoordinates demonstrably belong to an entirely different registered city hub
+ * (within 25 km of that city's hub) while the text query targets another city (e.g., Bengaluru
+ * coordinates attached to a Tumkur search request).
+ *
+ * Preserves legitimate GPS / map-picker coordinates that do not conflict with a foreign registered city hub,
+ * even if they are situated > 45 km from the requested city's centroid (e.g. Palolem in Goa, Sira in Tumkur,
+ * Jewar in Delhi NCR).
+ */
+export function detectCrossCityCollision(
+  coordsOrLocation: { lat: number; lng: number } | string | undefined,
+  targetOrCoords?: string | { lat: number; lng: number },
+  rawLocationStr?: string
+): CrossCityCollisionResult {
+  let customCoordinates: { lat: number; lng: number } | undefined;
+  let targetCityKey: string | undefined;
+  let rawStr = '';
+
+  if (typeof coordsOrLocation === 'string') {
+    // Flexible overload: detectCrossCityCollision(locationStr, customCoords)
+    rawStr = coordsOrLocation;
+    targetCityKey = coordsOrLocation;
+    customCoordinates = (targetOrCoords && typeof targetOrCoords === 'object')
+      ? (targetOrCoords as { lat: number; lng: number })
+      : undefined;
+  } else {
+    // Standard signature: detectCrossCityCollision(customCoords, targetCityKey, rawLocationStr)
+    customCoordinates = coordsOrLocation;
+    targetCityKey = typeof targetOrCoords === 'string' ? targetOrCoords : undefined;
+    rawStr = rawLocationStr || '';
+  }
+
+  if (!customCoordinates) {
+    return { isStaleCollision: false };
+  }
+
+  const rawLower = (rawStr || '').toLowerCase().trim();
+  const normalizedTarget = (targetCityKey || '').toLowerCase().trim();
+
+  const isTargetMatch = (cityKey: string, cityName: string): boolean => {
+    const keyLower = cityKey.toLowerCase();
+    const nameLower = cityName.toLowerCase();
+    if (!rawLower && !normalizedTarget) return false;
+    if (keyLower === normalizedTarget || nameLower === normalizedTarget) return true;
+    if (rawLower.includes(keyLower) || keyLower.includes(rawLower)) return true;
+    if (rawLower.includes(nameLower) || nameLower.includes(rawLower)) return true;
+    const aliases = CANONICAL_CITY_ALIASES[rawLower] || [];
+    if (aliases.includes(keyLower) || aliases.includes(nameLower)) return true;
+    const targetAliases = CANONICAL_CITY_ALIASES[normalizedTarget] || [];
+    if (targetAliases.includes(keyLower) || targetAliases.includes(nameLower)) return true;
+    return false;
+  };
+
+  // 1. Check against major city hub registry
+  for (const [key, profile] of Object.entries(CITY_HUB_REGISTRY)) {
+    const dist = computeDistanceKm(customCoordinates.lat, customCoordinates.lng, profile.lat, profile.lng);
+    if (dist <= 25.0) {
+      if (!isTargetMatch(key, profile.city)) {
+        return {
+          isStaleCollision: true,
+          conflictingCity: profile.city,
+          distanceKm: dist,
+        };
+      }
+    }
+  }
+
+  // 2. Check against regional gazetteer hubs
+  for (const [key, entry] of Object.entries(REGIONAL_GAZETTEER)) {
+    const dist = computeDistanceKm(customCoordinates.lat, customCoordinates.lng, entry.lat, entry.lng);
+    if (dist <= 25.0) {
+      if (!isTargetMatch(key, entry.name)) {
+        return {
+          isStaleCollision: true,
+          conflictingCity: entry.name,
+          distanceKm: dist,
+        };
+      }
+    }
+  }
+
+  return { isStaleCollision: false };
+}
+
 export interface ResolvedHubContext {
   rawLocation: string;
   isLocality: boolean;
@@ -333,24 +460,20 @@ export function resolveHubContext(
 
   const capitalizedRaw = raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : (isOrigin ? 'Bangalore' : 'Chennai');
 
+  // Check for cross-city collision (stale coordinates from a different city)
+  const collision = detectCrossCityCollision(customCoordinates, parentCityKey || lower, raw);
+
   // 3. Resolve profile via registry or regional gazetteer / custom coordinates
   let profile: CityHubProfile;
   let effectiveCoords: { lat: number; lng: number };
 
   if (parentCityKey && CITY_HUB_REGISTRY[parentCityKey]) {
     profile = CITY_HUB_REGISTRY[parentCityKey];
-    if (customCoordinates) {
-      // Validate that customCoordinates is not divergent from the requested city (> 45km)
-      const dist = computeDistanceKm(customCoordinates.lat, customCoordinates.lng, profile.lat, profile.lng);
-      if (dist <= 45) {
-        effectiveCoords = customCoordinates;
-      } else {
-        effectiveCoords = {
-          lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
-          lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
-        };
-      }
+    if (customCoordinates && !collision.isStaleCollision) {
+      // Rule 1 & 4: Preserve intentional GPS / map-picker coordinates
+      effectiveCoords = customCoordinates;
     } else {
+      // Rule 3: Stale collision cleared or missing custom coords -> use canonical centroid
       effectiveCoords = {
         lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
         lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
@@ -360,8 +483,8 @@ export function resolveHubContext(
     // Check gazetteer or custom coordinates for dynamic resolution
     const gz = REGIONAL_GAZETTEER[lower] || Object.entries(REGIONAL_GAZETTEER).find(([k]) => lower.includes(k) || k.includes(lower))?.[1];
 
-    if (!gz && !customCoordinates) {
-      throw new Error(`Unable to resolve coordinates for location: "${raw}". Location is not recognized in regional gazetteer and no geocoded coordinates were provided.`);
+    if (!gz && (!customCoordinates || collision.isStaleCollision)) {
+      throw new Error(`Unable to resolve coordinates for location: "${raw}". Location is not recognized in regional gazetteer and no valid custom coordinates were provided.`);
     }
 
     let defLat: number;
@@ -370,25 +493,18 @@ export function resolveHubContext(
     if (gz) {
       defLat = gz.lat;
       defLng = gz.lng;
-      if (customCoordinates) {
-        const dist = computeDistanceKm(customCoordinates.lat, customCoordinates.lng, gz.lat, gz.lng);
-        if (dist <= 45) {
-          effectiveCoords = customCoordinates;
-        } else {
-          // Reject divergent stale coordinates (e.g. Bangalore coords retained when searching Tumkur)
-          effectiveCoords = {
-            lat: round4(defLat + (isOrigin ? -0.015 : 0.015)),
-            lng: round4(defLng + (isOrigin ? -0.015 : 0.015)),
-          };
-        }
+      if (customCoordinates && !collision.isStaleCollision) {
+        // Rule 1 & 4: Preserve intentional coordinates even if distant from gazetteer center
+        effectiveCoords = customCoordinates;
       } else {
+        // Rule 3: Conflicting stale coordinates cleared -> use gazetteer coordinates
         effectiveCoords = {
           lat: round4(defLat + (isOrigin ? -0.015 : 0.015)),
           lng: round4(defLng + (isOrigin ? -0.015 : 0.015)),
         };
       }
     } else {
-      // Unknown location, but valid customCoordinates provided
+      // Rule 5: Unknown location text, but valid non-colliding customCoordinates provided (e.g. map picker pin)
       defLat = customCoordinates!.lat;
       defLng = customCoordinates!.lng;
       effectiveCoords = customCoordinates!;

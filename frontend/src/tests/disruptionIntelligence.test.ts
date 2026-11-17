@@ -325,35 +325,74 @@ async function runTests() {
   assert.strictEqual(delhiFeed?.providerFormat, 'gtfs_rt');
   assert.strictEqual(JSON.stringify(feedsResp).includes('authTokenEnvVar'), false, 'Never expose env var metadata in feed status');
 
-  let pollResp;
-  try {
-    pollResp = await pollGTFSFeeds(false);
-  } catch (err: any) {
-    // When a live backend instance is active locally without auth headers, catch 401 as valid auth enforcement
-    if (err?.status === 401 || err?.status === 403) {
-      pollResp = await getGTFSFeeds();
-    } else {
-      throw err;
-    }
-  }
-  assert.ok(Array.isArray(pollResp.feeds), 'Offline fallback poll response must preserve GTFSFeedListResponse shape');
-
-  // Verify HTTP 401/403 operational authorization errors are propagated, never masked as success
   const originalFetch = globalThis.fetch;
   try {
+    // Case A: Network failure -> graceful offline fallback feeds list
+    globalThis.fetch = (async () => {
+      throw new TypeError('fetch failed: network unreachable');
+    }) as typeof fetch;
+
+    const offlineResp = await pollGTFSFeeds(false);
+    assert.ok(Array.isArray(offlineResp.feeds) && offlineResp.feeds.length >= 2, 'Case A: Network failure must return offline fallback feeds');
+
+    // Case B: HTTP 401 -> raises ApiError 401 (never swallowed)
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ detail: 'Unauthorized: operational credentials required' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' },
       })) as typeof fetch;
 
-    let caughtStatus: number | null = null;
+    let caseBErr: any = null;
     try {
       await pollGTFSFeeds(false);
     } catch (err: any) {
-      caughtStatus = err?.status ?? null;
+      caseBErr = err;
     }
-    assert.strictEqual(caughtStatus, 401, 'pollGTFSFeeds must surface HTTP 401 authorization rejections');
+    assert.strictEqual(caseBErr?.status, 401, 'Case B: pollGTFSFeeds must surface HTTP 401 authorization rejections');
+
+    // Case C: HTTP 403 -> raises ApiError 403 (never swallowed)
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ detail: 'Forbidden: elevated authorization required' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+
+    let caseCErr: any = null;
+    try {
+      await pollGTFSFeeds(false);
+    } catch (err: any) {
+      caseCErr = err;
+    }
+    assert.strictEqual(caseCErr?.status, 403, 'Case C: pollGTFSFeeds must surface HTTP 403 forbidden rejections');
+
+    // Case D: HTTP 200 with valid mock feeds -> returns parsed GTFSFeedListResponse
+    const mockLivePayload = {
+      feeds: [
+        {
+          feedId: 'bmtc_iudx_vehicle_positions',
+          agencyName: 'BMTC',
+          city: 'Bengaluru',
+          supportedModes: ['bus'],
+          providerFormat: 'iudx_ngsi_ld',
+          status: 'verified_active',
+          lastPollTime: '2026-11-17T08:00:00Z',
+          consecutiveErrors: 0,
+        },
+      ],
+      totalConfigured: 1,
+      totalOperational: 1,
+      notice: 'Feeds operational',
+    };
+
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(mockLivePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+
+    const caseDResp = await pollGTFSFeeds(false, { internalKey: 'valid-test-key' });
+    assert.strictEqual(caseDResp.totalOperational, 1, 'Case D: pollGTFSFeeds must parse HTTP 200 response');
+    assert.strictEqual(caseDResp.feeds[0].feedId, 'bmtc_iudx_vehicle_positions');
   } finally {
     globalThis.fetch = originalFetch;
   }

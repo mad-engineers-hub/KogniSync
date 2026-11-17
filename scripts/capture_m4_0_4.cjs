@@ -20,7 +20,7 @@ async function copyToArtifact(filePath, filename) {
 }
 
 async function run() {
-  console.log('Starting Playwright capture for M4.0.4 (Client Fallback Origin Sync)...');
+  console.log('Starting Playwright capture for M4.0.4.1 (Adversarial Review Remediation & Fallback Sync)...');
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1050 },
@@ -28,15 +28,23 @@ async function run() {
   });
 
   // =========================================================================
-  // SCENARIO 1: Client Fallback Simulation — Tumkur -> Goa
+  // SCENARIO 1: Pure Client Fallback Simulation — Tumkur -> Goa
   // =========================================================================
   {
-    console.log('\n--- Capturing Scenario 1: Client Fallback Simulation (Tumkur -> Goa) ---');
+    console.log('\n--- Capturing Scenario 1: Pure Client Fallback Simulation (Tumkur -> Goa) ---');
     const page = await context.newPage();
 
-    // Force client fallback by failing backend journey search
+    // Isolate pure client fallback: fail both journey search AND backend map enrichment
     await page.route('**/api/v1/journeys/search', (route) => {
-      console.log('Intercepted /api/v1/journeys/search -> failing to trigger Client Fallback');
+      console.log('Intercepted /api/v1/journeys/search -> aborting (pure client fallback)');
+      route.abort();
+    });
+    await page.route('**/api/v1/maps/enrich', (route) => {
+      console.log('Intercepted /api/v1/maps/enrich -> aborting (pure client fallback)');
+      route.abort();
+    });
+    await page.route('**/api/v1/maps/health', (route) => {
+      console.log('Intercepted /api/v1/maps/health -> aborting (pure client fallback)');
       route.abort();
     });
 
@@ -69,13 +77,13 @@ async function run() {
   }
 
   // =========================================================================
-  // SCENARIO 2: Backend Orchestrated — Tumkur -> Goa
+  // SCENARIO 2: Backend Orchestrated (Valhalla OSM Live) — Tumkur -> Goa
   // =========================================================================
   {
-    console.log('\n--- Capturing Scenario 2: Backend Orchestrated (Tumkur -> Goa) ---');
+    console.log('\n--- Capturing Scenario 2: Backend Orchestrated Valhalla (Tumkur -> Goa) ---');
     const page = await context.newPage();
 
-    // Do NOT intercept or fail: let live backend on port 8005 orchestrate
+    // Do NOT intercept: let live backend on port 8000 orchestrate and enrich
     const url = 'http://127.0.0.1:5175/plan?origin=Tumkur&destination=Goa&date=2026-11-21&passengers=1&budgetMax=3000';
     console.log(`Navigating to: ${url}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -104,17 +112,16 @@ async function run() {
   }
 
   // =========================================================================
-  // SCENARIO 3: Client Fallback Simulation — Bengaluru -> Goa
+  // SCENARIO 3: Client Fallback Simulation — Bengaluru -> Goa Baseline
   // =========================================================================
   {
     console.log('\n--- Capturing Scenario 3: Client Fallback Simulation (Bengaluru -> Goa) ---');
     const page = await context.newPage();
 
-    // Force client fallback
-    await page.route('**/api/v1/journeys/search', (route) => {
-      console.log('Intercepted /api/v1/journeys/search -> failing to trigger Client Fallback');
-      route.abort();
-    });
+    // Pure client fallback
+    await page.route('**/api/v1/journeys/search', (route) => route.abort());
+    await page.route('**/api/v1/maps/enrich', (route) => route.abort());
+    await page.route('**/api/v1/maps/health', (route) => route.abort());
 
     const url = 'http://127.0.0.1:5175/plan?origin=Bengaluru&destination=Goa&date=2026-11-21&passengers=1&budgetMax=3000';
     console.log(`Navigating to: ${url}`);
@@ -143,8 +150,110 @@ async function run() {
     await page.close();
   }
 
+  // =========================================================================
+  // SCENARIO 4: Invalid Geometry Mode — Spatial Geometry Unavailable (No Null Island)
+  // =========================================================================
+  {
+    console.log('\n--- Capturing Scenario 4: Spatial Geometry Unavailable Overlay (No Null Island) ---');
+    const page = await context.newPage();
+
+    // Mock search response with missing spatial coordinates
+    await page.route('**/api/v1/journeys/search', async (route) => {
+      const mockJourneyWithoutCoords = {
+        journeys: [
+          {
+            id: 'jny-no-coords',
+            title: 'Abstract Corridor Connection',
+            origin: {
+              id: 'loc-orig-unloc',
+              name: 'Remote Research Outpost',
+              city: 'Deep Reserve',
+              type: 'address',
+              coordinates: { lat: NaN, lng: NaN },
+            },
+            destination: {
+              id: 'loc-dest-unloc',
+              name: 'Continental Logistics Hub',
+              city: 'Inland Depot',
+              type: 'address',
+              coordinates: { lat: NaN, lng: NaN },
+            },
+            departureTime: '2026-11-21T08:00:00Z',
+            arrivalTime: '2026-11-21T14:00:00Z',
+            totalDurationMinutes: 360,
+            totalPrice: 450,
+            currency: 'INR',
+            totalTransfers: 0,
+            modes: ['train'],
+            segments: [
+              {
+                segmentId: 'seg-no-coords-1',
+                mode: 'train',
+                provider: 'Regional Express',
+                origin: {
+                  id: 'loc-orig-unloc',
+                  name: 'Remote Research Outpost',
+                  city: 'Deep Reserve',
+                  type: 'address',
+                  coordinates: { lat: NaN, lng: NaN },
+                },
+                destination: {
+                  id: 'loc-dest-unloc',
+                  name: 'Continental Logistics Hub',
+                  city: 'Inland Depot',
+                  type: 'address',
+                  coordinates: { lat: NaN, lng: NaN },
+                },
+                departureTime: '2026-11-21T08:00:00Z',
+                arrivalTime: '2026-11-21T14:00:00Z',
+                durationMinutes: 360,
+                distanceKm: 250,
+                price: 450,
+                currency: 'INR',
+                availability: { status: 'available', remainingUnits: 10, isRealInventory: false },
+              },
+            ],
+            carbonKg: 15,
+            comfortScore: 7,
+            recommendationCategory: 'best_value',
+            aiExplanation: { summary: 'Abstract corridor without valid spatial coordinates', tradeOffs: [], rankReason: 'Test Abstract Corridor', score: 80 },
+          },
+        ],
+        total: 1,
+        source: 'backend_orchestrator',
+      };
+
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(mockJourneyWithoutCoords),
+      });
+    });
+
+    await page.route('**/api/v1/maps/enrich', (route) => route.abort());
+    await page.route('**/api/v1/maps/health', (route) => route.abort());
+
+    const url = 'http://127.0.0.1:5175/plan?origin=DeepReserve&destination=InlandDepot&date=2026-11-21&passengers=1';
+    console.log(`Navigating to: ${url}`);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    console.log('Waiting for spatial-geometry-unavailable overlay...');
+    await page.waitForSelector('[data-testid="spatial-geometry-unavailable"]', { timeout: 20000 });
+    await page.waitForTimeout(2000);
+
+    // Scroll to reveal the map container
+    await page.evaluate(() => window.scrollBy(0, 240));
+    await page.waitForTimeout(1000);
+
+    const shot4Path = path.join(SCREENSHOT_DIR, 'm4_0_4_invalid_geometry_no_null_island.png');
+    await page.screenshot({ path: shot4Path, fullPage: false });
+    console.log(`Saved screenshot 4: ${shot4Path}`);
+    await copyToArtifact(shot4Path, 'm4_0_4_invalid_geometry_no_null_island.png');
+    await page.close();
+  }
+
   await browser.close();
-  console.log('\nAll 3 required M4.0.4 screenshots captured and copied to artifact directory!');
+  console.log('\nAll 4 required M4.0.4.1 screenshots captured and copied to artifact directory!');
 }
 
 run().catch((err) => {
