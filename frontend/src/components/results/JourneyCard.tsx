@@ -160,7 +160,7 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
                       <span className="text-[11px] text-slate-500 font-mono">
                         {formatDuration(seg.durationMinutes)} · {formatTime(seg.departureTime)} - {formatTime(seg.arrivalTime)}
                       </span>
-                      {seg.availability.isRealInventory === false && (
+                      {seg.availability?.isRealInventory === false && (
                         <span className="text-[9px] font-mono text-amber-700 bg-amber-50 px-1 rounded border border-amber-200 mt-0.5">
                           Simulated Seats
                         </span>

@@ -14,9 +14,60 @@ import httpx
 from app.core.config import settings
 from app.services.journey.schemas import CoordinatesSchema
 from app.services.journey.hubs import CITY_HUB_REGISTRY
-from app.services.location.schemas import ReverseGeocodeResponse
+from app.services.location.schemas import ReverseGeocodeResponse, GeocodeResponse
 
 logger = logging.getLogger("kognisync.location.service")
+
+# Comprehensive regional gazetteer for deterministic, offline-safe city/town coordinate resolution
+REGIONAL_GAZETTEER: dict[str, tuple[float, float, str, str | None]] = {
+    # Format: "key": (lat, lng, canonical_name, state)
+    "tumkur": (13.3401, 77.1006, "Tumakuru", "Karnataka"),
+    "tumakuru": (13.3401, 77.1006, "Tumakuru", "Karnataka"),
+    "hubli": (15.3647, 75.1240, "Hubballi", "Karnataka"),
+    "hubballi": (15.3647, 75.1240, "Hubballi", "Karnataka"),
+    "dharwad": (15.4589, 75.0078, "Dharwad", "Karnataka"),
+    "belgaum": (15.8497, 74.4977, "Belagavi", "Karnataka"),
+    "belagavi": (15.8497, 74.4977, "Belagavi", "Karnataka"),
+    "mysore": (12.2958, 76.6394, "Mysuru", "Karnataka"),
+    "mysuru": (12.2958, 76.6394, "Mysuru", "Karnataka"),
+    "shimoga": (13.9299, 75.5681, "Shivamogga", "Karnataka"),
+    "shivamogga": (13.9299, 75.5681, "Shivamogga", "Karnataka"),
+    "davanagere": (14.4644, 75.9218, "Davanagere", "Karnataka"),
+    "hassan": (13.0072, 76.1029, "Hassan", "Karnataka"),
+    "bellary": (15.1394, 76.9214, "Ballari", "Karnataka"),
+    "ballari": (15.1394, 76.9214, "Ballari", "Karnataka"),
+    "mandya": (12.5242, 76.8958, "Mandya", "Karnataka"),
+    "udupi": (13.3409, 74.7421, "Udupi", "Karnataka"),
+    "mangalore": (12.9141, 74.8560, "Mangaluru", "Karnataka"),
+    "mangaluru": (12.9141, 74.8560, "Mangaluru", "Karnataka"),
+    "hosur": (12.7409, 77.8253, "Hosur", "Tamil Nadu"),
+    "salem": (11.6643, 78.1460, "Salem", "Tamil Nadu"),
+    "vellore": (12.9165, 79.1325, "Vellore", "Tamil Nadu"),
+    "coimbatore": (11.0168, 76.9558, "Coimbatore", "Tamil Nadu"),
+    "madurai": (9.9252, 78.1198, "Madurai", "Tamil Nadu"),
+    "tirupati": (13.6288, 79.4192, "Tirupati", "Andhra Pradesh"),
+    "vijayawada": (16.5062, 80.6480, "Vijayawada", "Andhra Pradesh"),
+    "visakhapatnam": (17.6868, 83.2185, "Visakhapatnam", "Andhra Pradesh"),
+    "kozhikode": (11.2588, 75.7804, "Kozhikode", "Kerala"),
+    "calicut": (11.2588, 75.7804, "Kozhikode", "Kerala"),
+    "thiruvananthapuram": (8.5241, 76.9366, "Thiruvananthapuram", "Kerala"),
+    "trivandrum": (8.5241, 76.9366, "Thiruvananthapuram", "Kerala"),
+    "kannur": (11.8745, 75.3704, "Kannur", "Kerala"),
+    "kasaragod": (12.5102, 74.9852, "Kasaragod", "Kerala"),
+    "chandigarh": (30.7333, 76.7794, "Chandigarh", "Chandigarh"),
+    "lucknow": (26.8467, 80.9462, "Lucknow", "Uttar Pradesh"),
+    "varanasi": (25.3176, 82.9739, "Varanasi", "Uttar Pradesh"),
+    "patna": (25.5941, 85.1376, "Patna", "Bihar"),
+    "bhopal": (23.2599, 77.4126, "Bhopal", "Madhya Pradesh"),
+    "indore": (22.7196, 75.8577, "Indore", "Madhya Pradesh"),
+    "surat": (21.1702, 72.8311, "Surat", "Gujarat"),
+    "vadodara": (22.3072, 73.1812, "Vadodara", "Gujarat"),
+    "nagpur": (21.1458, 79.0882, "Nagpur", "Maharashtra"),
+    "bhubaneswar": (20.2961, 85.8245, "Bhubaneswar", "Odisha"),
+    "guwahati": (26.1445, 91.7362, "Guwahati", "Assam"),
+    "amritsar": (31.6340, 74.8723, "Amritsar", "Punjab"),
+    "agra": (27.1767, 78.0081, "Agra", "Uttar Pradesh"),
+}
 
 
 def haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -39,6 +90,151 @@ class LocationService:
 
     def __init__(self, http_client: httpx.AsyncClient | None = None):
         self._http_client = http_client
+        self._forward_cache: dict[str, CoordinatesSchema] = {}
+
+    def forward_geocode_sync(self, query: str) -> CoordinatesSchema | None:
+        """
+        Synchronously resolves a location/city query to coordinates using in-memory cache,
+        regional gazetteer, or city hub registry.
+        """
+        if not query or not query.strip():
+            return None
+        q_norm = query.strip().lower()
+        if q_norm in self._forward_cache:
+            return self._forward_cache[q_norm]
+
+        # 1. Check CITY_HUB_REGISTRY
+        if q_norm in CITY_HUB_REGISTRY:
+            h = CITY_HUB_REGISTRY[q_norm]
+            coords = CoordinatesSchema(lat=h.lat, lng=h.lng)
+            self._forward_cache[q_norm] = coords
+            return coords
+
+        # 2. Check REGIONAL_GAZETTEER
+        if q_norm in REGIONAL_GAZETTEER:
+            entry = REGIONAL_GAZETTEER[q_norm]
+            coords = CoordinatesSchema(lat=entry[0], lng=entry[1])
+            self._forward_cache[q_norm] = coords
+            return coords
+
+        # 3. Substring check in REGIONAL_GAZETTEER
+        for key, entry in REGIONAL_GAZETTEER.items():
+            if key in q_norm or q_norm in key:
+                coords = CoordinatesSchema(lat=entry[0], lng=entry[1])
+                self._forward_cache[q_norm] = coords
+                return coords
+
+        return None
+
+    async def forward_geocode(self, query: str) -> CoordinatesSchema | None:
+        """
+        Asynchronously resolves a location query to WGS-84 coordinates.
+        Checks cache/gazetteer first; queries live OpenStreetMap Nominatim search API if not found.
+        """
+        if not query or not query.strip():
+            return None
+        q_norm = query.strip().lower()
+
+        # 1. Fast local resolution
+        cached = self.forward_geocode_sync(query)
+        if cached:
+            return cached
+
+        # 2. Live OSM Nominatim forward search
+        try:
+            coords = await self._forward_geocode_nominatim(query)
+            if coords:
+                self._forward_cache[q_norm] = coords
+                return coords
+        except Exception:
+            logger.info("OSM Nominatim forward geocoding query '%s' failed or timed out.", query)
+
+        return None
+
+    async def _forward_geocode_nominatim(self, query: str) -> CoordinatesSchema | None:
+        headers = {
+            "User-Agent": "KogniSync-Transit-Orchestrator/1.0 (internal-demo; contact: dev@kognisync.internal)",
+            "Accept": "application/json",
+        }
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": query.strip(),
+            "format": "jsonv2",
+            "limit": "1",
+            "countrycodes": "in",
+        }
+        client = self._http_client
+        should_close = False
+        if client is None:
+            client = httpx.AsyncClient(timeout=httpx.Timeout(2.5, connect=1.5))
+            should_close = True
+
+        try:
+            resp = await client.get(url, params=params, headers=headers)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if isinstance(data, list) and len(data) > 0:
+                hit = data[0]
+                lat = float(hit["lat"])
+                lng = float(hit["lon"])
+                return CoordinatesSchema(lat=lat, lng=lng)
+        except Exception:
+            return None
+        finally:
+            if should_close:
+                await client.aclose()
+        return None
+
+    async def geocode(self, query: str) -> GeocodeResponse | None:
+        """Forward geocodes query returning full structured location details."""
+        if not query or not query.strip():
+            return None
+        q_norm = query.strip().lower()
+
+        # Check gazetteer
+        if q_norm in REGIONAL_GAZETTEER:
+            entry = REGIONAL_GAZETTEER[q_norm]
+            return GeocodeResponse(
+                query=query,
+                name=entry[2],
+                display_name=f"{entry[2]}, {entry[3] or 'India'}",
+                city=entry[2],
+                state=entry[3],
+                country="India",
+                coordinates=CoordinatesSchema(lat=entry[0], lng=entry[1]),
+                provider="regional_gazetteer",
+                is_estimate=False,
+            )
+
+        if q_norm in CITY_HUB_REGISTRY:
+            h = CITY_HUB_REGISTRY[q_norm]
+            return GeocodeResponse(
+                query=query,
+                name=h.city,
+                display_name=f"{h.city}, India",
+                city=h.city,
+                state=None,
+                country="India",
+                coordinates=CoordinatesSchema(lat=h.lat, lng=h.lng),
+                provider="kognisync_city_hub",
+                is_estimate=False,
+            )
+
+        coords = await self.forward_geocode(query)
+        if coords:
+            return GeocodeResponse(
+                query=query,
+                name=query.strip().capitalize(),
+                display_name=f"{query.strip().capitalize()}, India",
+                city=query.strip().capitalize(),
+                state=None,
+                country="India",
+                coordinates=coords,
+                provider="osm_nominatim",
+                is_estimate=False,
+            )
+        return None
 
     async def reverse_geocode(self, lat: float, lng: float) -> ReverseGeocodeResponse:
         """

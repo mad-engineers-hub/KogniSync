@@ -1,6 +1,6 @@
 import { Journey, TravelRequest } from '../types/journey';
 import { Trip } from '../types/trip';
-import { composeMultiModalJourneys } from './orchestrationEngine';
+import { composeMultiModalJourneys, CANONICAL_CITY_ALIASES } from './orchestrationEngine';
 import { generateSvgQrDataUri } from './trips';
 
 export const DEMO_PRESETS: { title: string; subtitle: string; query: string; request: Partial<TravelRequest> }[] = [
@@ -58,6 +58,22 @@ export const DEMO_PRESETS: { title: string; subtitle: string; query: string; req
   },
 ];
 
+function matchesLocationString(queryLoc: string, targetName: string, targetCity: string): boolean {
+  const q = (queryLoc || '').toLowerCase().trim();
+  const n = (targetName || '').toLowerCase().trim();
+  const c = (targetCity || '').toLowerCase().trim();
+  if (!q) return true;
+  if (n.includes(q) || c.includes(q) || q.includes(c) || q.includes(n)) return true;
+
+  const aliases = CANONICAL_CITY_ALIASES[q] || [];
+  for (const alias of aliases) {
+    if (n.includes(alias) || c.includes(alias) || alias.includes(c) || alias.includes(n)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function validateJourneyAgainstRequest(
   journey: Journey,
   request: TravelRequest
@@ -79,20 +95,12 @@ export function validateJourneyAgainstRequest(
   const lastSegDestCity = (journey.segments?.[journey.segments.length - 1]?.destination?.city || '').toLowerCase();
 
   const originMatches =
-    jOrigName.includes(reqOrigin) ||
-    jOrigCity.includes(reqOrigin) ||
-    firstSegOrigName.includes(reqOrigin) ||
-    firstSegOrigCity.includes(reqOrigin) ||
-    reqOrigin.includes(jOrigCity) ||
-    reqOrigin.includes(jOrigName);
+    matchesLocationString(reqOrigin, jOrigName, jOrigCity) ||
+    matchesLocationString(reqOrigin, firstSegOrigName, firstSegOrigCity);
 
   const destMatches =
-    jDestName.includes(reqDest) ||
-    jDestCity.includes(reqDest) ||
-    lastSegDestName.includes(reqDest) ||
-    lastSegDestCity.includes(reqDest) ||
-    reqDest.includes(jDestCity) ||
-    reqDest.includes(jDestName);
+    matchesLocationString(reqDest, jDestName, jDestCity) ||
+    matchesLocationString(reqDest, lastSegDestName, lastSegDestCity);
 
   if (!originMatches) {
     return {
@@ -105,6 +113,60 @@ export function validateJourneyAgainstRequest(
       valid: false,
       reason: `Destination mismatch: journey has '${journey.destination?.name}', expected '${request.destination}'`,
     };
+  }
+
+  // Validate segment geometry continuity and consistency
+  if (journey.segments && journey.segments.length > 0) {
+    const firstSeg = journey.segments[0];
+    const lastSeg = journey.segments[journey.segments.length - 1];
+
+    // 1. First segment origin must be congruent with journey origin (< 5km)
+    if (
+      firstSeg.origin?.coordinates &&
+      journey.origin?.coordinates &&
+      Math.hypot(
+        firstSeg.origin.coordinates.lat - journey.origin.coordinates.lat,
+        firstSeg.origin.coordinates.lng - journey.origin.coordinates.lng
+      ) > 0.05
+    ) {
+      return {
+        valid: false,
+        reason: `First segment origin coordinates diverged from journey origin`,
+      };
+    }
+
+    // 2. Last segment destination must be congruent with journey destination (< 5km)
+    if (
+      lastSeg.destination?.coordinates &&
+      journey.destination?.coordinates &&
+      Math.hypot(
+        lastSeg.destination.coordinates.lat - journey.destination.coordinates.lat,
+        lastSeg.destination.coordinates.lng - journey.destination.coordinates.lng
+      ) > 0.05
+    ) {
+      return {
+        valid: false,
+        reason: `Last segment destination coordinates diverged from journey destination`,
+      };
+    }
+
+    // 3. Adjacent segment spatial continuity (< 10km between adjacent transfer points)
+    for (let i = 0; i < journey.segments.length - 1; i++) {
+      const segA = journey.segments[i];
+      const segB = journey.segments[i + 1];
+      if (segA.destination?.coordinates && segB.origin?.coordinates) {
+        const d = Math.hypot(
+          segA.destination.coordinates.lat - segB.origin.coordinates.lat,
+          segA.destination.coordinates.lng - segB.origin.coordinates.lng
+        );
+        if (d > 0.1) {
+          return {
+            valid: false,
+            reason: `Transfer spatial discontinuity between segment ${i + 1} and ${i + 2}`,
+          };
+        }
+      }
+    }
   }
 
   // Strict budget check

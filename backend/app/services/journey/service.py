@@ -529,7 +529,12 @@ class JourneyOrchestrationService:
         origin_hubs = resolve_hub_context(origin_str, is_origin=True, custom_coordinates=request.origin_coordinates)
         dest_hubs = resolve_hub_context(dest_str, is_origin=False, custom_coordinates=request.destination_coordinates)
 
-        route_distance_km = estimate_corridor_distance_km(origin_hubs.parent_city, dest_hubs.parent_city)
+        route_distance_km = estimate_corridor_distance_km(
+            origin_hubs.parent_city,
+            dest_hubs.parent_city,
+            origin_coords=origin_hubs.user_node.coordinates,
+            dest_coords=dest_hubs.user_node.coordinates,
+        )
         route_slug = f"{slugify(origin_str)}-to-{slugify(dest_str)}"
 
         origin_ops = get_local_transit_operators(origin_hubs.parent_city)

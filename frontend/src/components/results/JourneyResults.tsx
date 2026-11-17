@@ -22,6 +22,11 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
   const [showMap, setShowMap] = useState(true);
   const [selectedJourneyId, setSelectedJourneyId] = useState<string | null>(null);
 
+  // Reset selected journey on new search results
+  React.useEffect(() => {
+    setSelectedJourneyId(null);
+  }, [journeys]);
+
   // Filter journeys by tab
   const filteredJourneys = journeys.filter((j) => {
     if (activeTab === 'all') return true;
@@ -195,6 +200,7 @@ export const JourneyResults: React.FC<JourneyResultsProps> = ({
             journey={activeJourney}
             segments={activeJourney.segments}
             alternativeJourneys={journeys.filter((j) => j.id !== activeJourney.id)}
+            selectedJourneyId={activeJourney.id}
             onSelectJourney={(id) => setSelectedJourneyId(id)}
           />
         </div>

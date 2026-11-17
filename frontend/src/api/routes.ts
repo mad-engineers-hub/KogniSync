@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import { Journey, JourneySegment } from '../types/journey';
 import { EnrichedJourneyRoute, MapsHealthResponse, SegmentRouteGeometry, RouteCoordinate } from '../types/route';
+import { isValidCoordinate } from '../utils/mapCoordinates';
 
 /**
  * Generates client-side interpolated coordinates between two points for offline / fallback resilience.
@@ -53,11 +54,12 @@ export function buildClientFallbackRoute(journey: Journey): EnrichedJourneyRoute
     totalDistanceMeters += distMeters;
     totalDurationSeconds += durSeconds;
 
-    const coords = generateClientFallbackCoords(
-      seg.origin.coordinates,
-      seg.destination.coordinates,
-      seg.mode
-    );
+    const hasValidEndpoints =
+      isValidCoordinate(seg.origin?.coordinates) && isValidCoordinate(seg.destination?.coordinates);
+
+    const coords = hasValidEndpoints
+      ? generateClientFallbackCoords(seg.origin.coordinates, seg.destination.coordinates, seg.mode)
+      : [];
 
     return {
       segment_id: seg.segmentId,
@@ -66,25 +68,31 @@ export function buildClientFallbackRoute(journey: Journey): EnrichedJourneyRoute
       origin_city: seg.origin.city,
       destination_title: seg.destination.name,
       destination_city: seg.destination.city,
-      origin_coords: {
-        latitude: seg.origin.coordinates.lat,
-        longitude: seg.origin.coordinates.lng,
-      },
-      destination_coords: {
-        latitude: seg.destination.coordinates.lat,
-        longitude: seg.destination.coordinates.lng,
-      },
+      origin_coords: isValidCoordinate(seg.origin?.coordinates)
+        ? {
+            latitude: seg.origin.coordinates.lat,
+            longitude: seg.origin.coordinates.lng,
+          }
+        : { latitude: NaN, longitude: NaN },
+      destination_coords: isValidCoordinate(seg.destination?.coordinates)
+        ? {
+            latitude: seg.destination.coordinates.lat,
+            longitude: seg.destination.coordinates.lng,
+          }
+        : { latitude: NaN, longitude: NaN },
       coordinates: coords,
       geojson_geometry: {
         type: 'LineString',
         coordinates: coords.map((c) => [c.longitude, c.latitude] as [number, number]),
       },
       is_live_geometry: false,
-      provenance_notes: 'Client-side interpolated corridor estimate',
+      provenance_notes: hasValidEndpoints
+        ? 'Client-side interpolated corridor estimate'
+        : 'Spatial coordinates unavailable for this segment',
       distance_meters: distMeters,
       duration_seconds: durSeconds,
       source: 'client_fallback',
-      warnings: [],
+      warnings: hasValidEndpoints ? [] : ['Missing or invalid endpoint coordinates for geometry interpolation'],
     };
   });
 

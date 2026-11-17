@@ -74,3 +74,28 @@ class ReverseGeocodeResponse(BaseModel):
         description="True if location resolved via proximity estimation rather than precise street address",
     )
 
+
+class GeocodeResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(..., description="Original search query text")
+    name: str = Field(..., description="Resolved location or city name")
+    display_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("display_name", "displayName"),
+        serialization_alias="displayName",
+        description="Full formatted display name or address",
+    )
+    city: str = Field(..., description="Primary municipality or city")
+    state: str | None = Field(default=None, description="State or province")
+    country: str = Field(default="India", description="Country name")
+    coordinates: CoordinatesSchema = Field(..., description="Resolved WGS-84 coordinates")
+    provider: str = Field(..., description="Geocoding provider (e.g. 'osm_nominatim', 'regional_gazetteer')")
+    is_estimate: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("is_estimate", "isEstimate"),
+        serialization_alias="isEstimate",
+        description="True if matched via gazetteer heuristics rather than precise geocoder hit",
+    )
+
+
