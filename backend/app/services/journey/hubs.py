@@ -435,6 +435,100 @@ def _hub_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return r * c
 
 
+CANONICAL_CITY_ALIASES: dict[str, list[str]] = {
+    "tumkur": ["tumakuru"],
+    "tumakuru": ["tumkur"],
+    "bangalore": ["bengaluru"],
+    "bengaluru": ["bangalore"],
+    "mysore": ["mysuru"],
+    "mysuru": ["mysore"],
+    "hubli": ["hubballi"],
+    "hubballi": ["hubli"],
+    "belgaum": ["belagavi"],
+    "belagavi": ["belgaum"],
+    "shimoga": ["shivamogga"],
+    "shivamogga": ["shimoga"],
+    "bellary": ["ballari"],
+    "ballari": ["bellary"],
+    "davanagere": ["davangere"],
+    "davangere": ["davanagere"],
+    "calicut": ["kozhikode"],
+    "kozhikode": ["calicut"],
+    "trivandrum": ["thiruvananthapuram"],
+    "thiruvananthapuram": ["trivandrum"],
+    "cochin": ["kochi", "ernakulam"],
+    "kochi": ["cochin", "ernakulam"],
+    "ernakulam": ["kochi", "cochin"],
+    "vizag": ["visakhapatnam"],
+    "visakhapatnam": ["vizag"],
+    "madras": ["chennai"],
+    "chennai": ["madras"],
+    "bombay": ["mumbai"],
+    "mumbai": ["bombay"],
+    "calcutta": ["kolkata"],
+    "kolkata": ["calcutta"],
+    "delhi": ["new delhi", "gurgaon", "gurugram", "noida"],
+    "new delhi": ["delhi"],
+}
+
+
+def detect_cross_city_collision(
+    custom_coordinates: CoordinatesSchema | None,
+    target_city_key: str | None,
+    raw_location_str: str,
+) -> tuple[bool, str | None, float | None]:
+    """Detect if custom_coordinates demonstrably conflict with an entirely different registered city hub.
+
+    Only flags as stale collision when coordinates are within urban radius (<= 25 km) of another
+    registered city hub, while preserving legitimate intentional coordinates even if > 45 km from centroid.
+    """
+    if not custom_coordinates:
+        return False, None, None
+
+    raw_lower = (raw_location_str or "").lower().strip()
+    normalized_target = (target_city_key or "").lower().strip()
+
+    def is_target_match(city_key: str, city_name: str) -> bool:
+        if not raw_lower and not normalized_target:
+            return False
+        key_lower = city_key.lower()
+        name_lower = city_name.lower()
+        if key_lower == normalized_target or name_lower == normalized_target:
+            return True
+        if key_lower in raw_lower or raw_lower in key_lower:
+            return True
+        if name_lower in raw_lower or raw_lower in name_lower:
+            return True
+        aliases = CANONICAL_CITY_ALIASES.get(raw_lower, [])
+        if key_lower in aliases or name_lower in aliases:
+            return True
+        target_aliases = CANONICAL_CITY_ALIASES.get(normalized_target, [])
+        if key_lower in target_aliases or name_lower in target_aliases:
+            return True
+        city_aliases = CANONICAL_CITY_ALIASES.get(key_lower, []) + CANONICAL_CITY_ALIASES.get(name_lower, [])
+        for a in city_aliases:
+            if a in raw_lower or a in normalized_target:
+                return True
+        return False
+
+    # 1. Check against registered major city hubs
+    for key, p in CITY_HUB_REGISTRY.items():
+        dist = _hub_distance_km(custom_coordinates.lat, custom_coordinates.lng, p.lat, p.lng)
+        if dist <= 25.0:
+            if not is_target_match(key, p.city):
+                return True, p.city, dist
+
+    # 2. Check against regional gazetteer
+    from app.services.location.service import REGIONAL_GAZETTEER
+    for gaz_key, entry in REGIONAL_GAZETTEER.items():
+        dist = _hub_distance_km(custom_coordinates.lat, custom_coordinates.lng, entry[0], entry[1])
+        if dist <= 25.0:
+            if not is_target_match(gaz_key, entry[2]):
+                return True, entry[2], dist
+
+    return False, None, None
+
+
 def resolve_hub_context(
     location_str: str,
     is_origin: bool,
@@ -462,9 +556,26 @@ def resolve_hub_context(
                         parent_city_key = city
                         is_locality = False
                         break
+            if not parent_city_key:
+                for alias in CANONICAL_CITY_ALIASES.get(lower, []):
+                    if alias in CITY_HUB_REGISTRY:
+                        parent_city_key = alias
+                        is_locality = False
+                        break
+                    if alias in LOCALITY_TO_CITY_MAP:
+                        parent_city_key = LOCALITY_TO_CITY_MAP[alias]
+                        is_locality = True
+                        break
 
-    if not parent_city_key and custom_coordinates:
+    capitalized_raw = raw.capitalize() if raw else ("Bangalore" if is_origin else "Chennai")
+
+    is_stale_collision, conflicting_city, _ = detect_cross_city_collision(
+        custom_coordinates, parent_city_key or lower, raw
+    )
+
+    if not parent_city_key and custom_coordinates and not is_stale_collision:
         # Spatial resolution: resolve to closest registered hub ONLY within metropolitan radius (35km)
+        # and only if raw location is not independently resolvable via gazetteer/geocoding
         closest_city: str | None = None
         min_dist = float("inf")
         for key, p in CITY_HUB_REGISTRY.items():
@@ -473,31 +584,48 @@ def resolve_hub_context(
                 min_dist = dist
                 closest_city = key
         if closest_city and min_dist <= 35.0:
-            parent_city_key = closest_city
-            is_locality = True
-
-    capitalized_raw = raw.capitalize() if raw else ("Bangalore" if is_origin else "Chennai")
+            from app.services.location.service import location_service
+            if not location_service.forward_geocode_sync(raw):
+                parent_city_key = closest_city
+                is_locality = True
 
     if parent_city_key and parent_city_key in CITY_HUB_REGISTRY:
         profile = CITY_HUB_REGISTRY[parent_city_key]
-        user_coords = (
-            custom_coordinates
-            if custom_coordinates
-            else CoordinatesSchema(
+        if custom_coordinates and not is_stale_collision:
+            # Rule 1 & 4: Preserve intentional custom/GPS coordinates
+            user_coords = custom_coordinates
+        else:
+            # Rule 3: Stale collision or missing custom coords -> use canonical centroid
+            user_coords = CoordinatesSchema(
                 lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
                 lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
             )
-        )
     else:
         from app.services.location.service import location_service
         dynamic_city = capitalized_raw
-        geocoded = custom_coordinates or location_service.forward_geocode_sync(raw)
+        geocoded = location_service.forward_geocode_sync(raw)
+
+        if not geocoded and (not custom_coordinates or is_stale_collision):
+            raise ValueError(f"Unable to resolve coordinates for location: '{raw}'. Geocoding returned no match.")
+
         if geocoded:
             def_lat = geocoded.lat
             def_lng = geocoded.lng
+        elif custom_coordinates and not is_stale_collision:
+            def_lat = custom_coordinates.lat
+            def_lng = custom_coordinates.lng
         else:
-            def_lat = 13.0 if is_origin else 15.0
-            def_lng = 77.6 if is_origin else 74.5
+            raise ValueError(f"Unable to resolve coordinates for location: '{raw}'. Geocoding returned no match.")
+
+        if custom_coordinates and not is_stale_collision:
+            # Rule 1 & 4: Preserve intentional coordinates
+            user_coords = custom_coordinates
+        else:
+            # Rule 3: Conflicting stale coordinates cleared -> use geocoded coordinates
+            user_coords = CoordinatesSchema(
+                lat=round(def_lat + (-0.015 if is_origin else 0.015), 4),
+                lng=round(def_lng + (-0.015 if is_origin else 0.015), 4),
+            )
 
         profile = HubProfile(
             city=dynamic_city,
@@ -520,14 +648,6 @@ def resolve_hub_context(
             has_metro=False,
         )
         is_locality = False
-        user_coords = (
-            custom_coordinates
-            if custom_coordinates
-            else CoordinatesSchema(
-                lat=round(def_lat + (-0.015 if is_origin else 0.015), 4),
-                lng=round(def_lng + (-0.015 if is_origin else 0.015), 4),
-            )
-        )
 
     user_node = LocationSchema(
         id=f"loc-usr-{'orig' if is_origin else 'dest'}-{slugify(raw or profile.city)}",

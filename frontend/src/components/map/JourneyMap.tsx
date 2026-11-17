@@ -30,6 +30,9 @@ import {
 import { useJourneyGuidance } from '../../hooks/useJourneyGuidance';
 import { NavigationGuidanceDrawer } from '../navigation/NavigationGuidanceDrawer';
 import { DisruptionEvent, JourneyDisruptionAssessment } from '../../types/disruption';
+import { isValidCoordinate } from '../../utils/mapCoordinates';
+
+export { isValidCoordinate };
 
 export interface JourneyMapProps {
   segments: JourneySegment[];
@@ -75,6 +78,20 @@ const MODE_COLORS: Record<string, { stroke: string; glow: string; weight: number
 
 function getModeStyle(mode: string) {
   return MODE_COLORS[mode] || { stroke: '#2563eb', glow: '#60a5fa', weight: 5 };
+}
+
+function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 export const JourneyMap: React.FC<JourneyMapProps> = ({
@@ -134,6 +151,17 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     const totalP = segments.reduce((sum, s) => sum + (s.price || 0), 0);
     const defaultTime = '2026-11-04T08:00:00Z';
 
+    const origCoords = segments[0]?.origin?.coordinates;
+    const destCoords = segments[segments.length - 1]?.destination?.coordinates;
+
+    const safeOrigCoords = isValidCoordinate(origCoords)
+      ? { lat: origCoords!.lat, lng: origCoords!.lng }
+      : { lat: NaN, lng: NaN };
+
+    const safeDestCoords = isValidCoordinate(destCoords)
+      ? { lat: destCoords!.lat, lng: destCoords!.lng }
+      : { lat: NaN, lng: NaN };
+
     return {
       id: `jny-map-${segments[0]?.origin?.id || 'orig'}-${segments[segments.length - 1]?.destination?.id || 'dest'}`,
       title: `${segments[0]?.origin?.city || 'Origin'} to ${segments[segments.length - 1]?.destination?.city || 'Destination'} Route`,
@@ -142,14 +170,14 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         name: 'Origin',
         city: 'Origin',
         type: 'address',
-        coordinates: { lat: 12.97, lng: 77.59 },
+        coordinates: safeOrigCoords,
       },
       destination: segments[segments.length - 1]?.destination || {
         id: 'dest',
         name: 'Destination',
         city: 'Destination',
         type: 'address',
-        coordinates: { lat: 13.08, lng: 80.27 },
+        coordinates: safeDestCoords,
       },
       departureTime: segments[0]?.departureTime || defaultTime,
       arrivalTime: segments[segments.length - 1]?.arrivalTime || defaultTime,
@@ -185,9 +213,10 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       targetJourney.origin.coordinates.lng,
       targetJourney.destination.coordinates.lat,
       targetJourney.destination.coordinates.lng,
-      segments.map((s) => `${s.segmentId}-${s.origin.coordinates.lat}-${s.destination.coordinates.lat}`).join(':'),
+      segments.map((s) => `${s.segmentId}-${s.origin?.coordinates?.lat}-${s.destination?.coordinates?.lat}`).join(':'),
     ],
     queryFn: () => enrichJourneyRoute(targetJourney),
+    enabled: isValidCoordinate(targetJourney.origin.coordinates) && isValidCoordinate(targetJourney.destination.coordinates),
     staleTime: 60000,
     retry: 1,
   });
@@ -201,13 +230,24 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       const enrichedOrigLng = enrichedRoute.segments[0].origin_coords?.longitude;
       const targetOrigLng = targetJourney.origin.coordinates.lng;
 
+      // Only perform divergence check if target coordinates are valid
+      // Requirement: Do not allow invalid geometry to invalidate otherwise valid Valhalla geometry
       if (
-        enrichedOrigLat !== undefined &&
-        targetOrigLat !== undefined &&
-        Math.hypot(enrichedOrigLat - targetOrigLat, (enrichedOrigLng ?? 0) - (targetOrigLng ?? 0)) > 0.5
+        isValidCoordinate(enrichedOrigLat, enrichedOrigLng) &&
+        isValidCoordinate(targetOrigLat, targetOrigLng)
       ) {
-        // Enriched route origin diverged from active journey origin (stale cache) -> use client fallback
-        return buildClientFallbackRoute(targetJourney);
+        const distKm = calculateHaversineDistanceKm(
+          enrichedOrigLat!,
+          enrichedOrigLng!,
+          targetOrigLat,
+          targetOrigLng
+        );
+        // Distance-based threshold: 45 km allows for terminal/airport access buffers
+        // within a metropolitan corridor, but strictly rejects unrelated-city divergence (e.g. Tumkur vs Bengaluru ~70km)
+        if (distKm > 45) {
+          // Enriched route origin diverged from active journey origin (stale cache) -> use client fallback
+          return buildClientFallbackRoute(targetJourney);
+        }
       }
       return enrichedRoute;
     }
@@ -234,35 +274,41 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     const pts: ProjectedWaypoint[] = [];
     if (!segments.length) return pts;
 
-    // Origin
-    pts.push({
-      lat: segments[0].origin.coordinates.lat,
-      lng: segments[0].origin.coordinates.lng,
-      title: segments[0].origin.name,
-      city: segments[0].origin.city,
-      type: segments[0].origin.type,
-      isHub: false,
-      hubType: 'origin',
-      segmentIndex: 0,
-      xrSceneId: matchXRSceneForHub(segments[0].origin.name) || matchXRSceneForHub(segments[0].origin.city),
-    });
+    // Origin: only include if valid coordinates exist
+    const origCoords = segments[0]?.origin?.coordinates;
+    if (isValidCoordinate(origCoords)) {
+      pts.push({
+        lat: origCoords.lat,
+        lng: origCoords.lng,
+        title: segments[0].origin.name,
+        city: segments[0].origin.city,
+        type: segments[0].origin.type,
+        isHub: false,
+        hubType: 'origin',
+        segmentIndex: 0,
+        xrSceneId: matchXRSceneForHub(segments[0].origin.name) || matchXRSceneForHub(segments[0].origin.city),
+      });
+    }
 
-    // Segment destinations
+    // Segment destinations: only include if valid coordinates exist
     segments.forEach((seg, idx) => {
       const isFinal = idx === segments.length - 1;
-      const xrSceneId = matchXRSceneForHub(seg.destination.name) || matchXRSceneForHub(seg.destination.city);
-      pts.push({
-        lat: seg.destination.coordinates.lat,
-        lng: seg.destination.coordinates.lng,
-        title: seg.destination.name,
-        city: seg.destination.city,
-        type: seg.destination.type,
-        isHub: !isFinal,
-        hubType: isFinal ? 'destination' : idx === 0 ? 'departure_hub' : 'transfer_hub',
-        xrSceneId,
-        transferBufferMinutes: seg.transferBufferMinutes,
-        segmentIndex: idx,
-      });
+      const destCoords = seg.destination?.coordinates;
+      if (isValidCoordinate(destCoords)) {
+        const xrSceneId = matchXRSceneForHub(seg.destination.name) || matchXRSceneForHub(seg.destination.city);
+        pts.push({
+          lat: destCoords.lat,
+          lng: destCoords.lng,
+          title: seg.destination.name,
+          city: seg.destination.city,
+          type: seg.destination.type,
+          isHub: !isFinal,
+          hubType: isFinal ? 'destination' : idx === 0 ? 'departure_hub' : 'transfer_hub',
+          xrSceneId,
+          transferBufferMinutes: seg.transferBufferMinutes,
+          segmentIndex: idx,
+        });
+      }
     });
 
     return pts;
@@ -349,8 +395,12 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         if (alt.id === targetJourney.id) return;
         const altPoints: [number, number][] = [];
         alt.segments.forEach((s) => {
-          altPoints.push([s.origin.coordinates.lat, s.origin.coordinates.lng]);
-          altPoints.push([s.destination.coordinates.lat, s.destination.coordinates.lng]);
+          if (isValidCoordinate(s.origin?.coordinates)) {
+            altPoints.push([s.origin.coordinates.lat, s.origin.coordinates.lng]);
+          }
+          if (isValidCoordinate(s.destination?.coordinates)) {
+            altPoints.push([s.destination.coordinates.lat, s.destination.coordinates.lng]);
+          }
         });
 
         if (altPoints.length >= 2) {
@@ -385,94 +435,105 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       const style = getModeStyle(seg.mode);
       const isActive = effectiveActiveSegmentIndex === idx;
 
-      let latlngs: [number, number][] = [];
+      let rawCoords: [number, number][] = [];
 
       // Prefer GeoJSON geometry LineString coordinates [lng, lat]
       if (enrichedSeg?.geojson_geometry?.coordinates?.length) {
-        latlngs = enrichedSeg.geojson_geometry.coordinates.map((c) => [c[1], c[0]]);
+        rawCoords = enrichedSeg.geojson_geometry.coordinates.map((c) => [c[1], c[0]]);
       } else if (seg.geojsonGeometry?.coordinates?.length) {
-        latlngs = seg.geojsonGeometry.coordinates.map((c) => [c[1], c[0]]);
+        rawCoords = seg.geojsonGeometry.coordinates.map((c) => [c[1], c[0]]);
       } else if (enrichedSeg?.coordinates?.length) {
-        latlngs = enrichedSeg.coordinates.map((c) => [c.latitude, c.longitude]);
+        rawCoords = enrichedSeg.coordinates.map((c) => [c.latitude, c.longitude]);
       } else {
-        latlngs = [
-          [seg.origin.coordinates.lat, seg.origin.coordinates.lng],
-          [seg.destination.coordinates.lat, seg.destination.coordinates.lng],
-        ];
+        const origValid = isValidCoordinate(seg.origin?.coordinates);
+        const destValid = isValidCoordinate(seg.destination?.coordinates);
+        if (origValid && destValid) {
+          rawCoords = [
+            [seg.origin.coordinates.lat, seg.origin.coordinates.lng],
+            [seg.destination.coordinates.lat, seg.destination.coordinates.lng],
+          ];
+        }
       }
 
-      latlngs.forEach((pt) => allLatLangs.push(pt));
+      // Filter to only strictly valid coordinates (eliminates Null Island / NaN / undefined)
+      const latlngs = rawCoords.filter(([lat, lng]) => isValidCoordinate(lat, lng));
 
-      // Active casing / halo glow
-      if (isActive) {
-        L.polyline(latlngs, {
-          color: style.glow,
-          weight: style.weight + 8,
-          opacity: 0.45,
+      // ONLY render polyline if at least 2 valid points exist
+      if (latlngs.length >= 2) {
+        latlngs.forEach((pt) => allLatLangs.push(pt));
+
+        // Active casing / halo glow
+        if (isActive) {
+          L.polyline(latlngs, {
+            color: style.glow,
+            weight: style.weight + 8,
+            opacity: 0.45,
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(featureGroup);
+        }
+
+        // Disrupted segment hazard casing
+        if (disruptedSegmentMap.has(seg.segmentId)) {
+          const imp = disruptedSegmentMap.get(seg.segmentId)!;
+          L.polyline(latlngs, {
+            color: imp.impactLevel === 'critical' ? '#e11d48' : '#d97706',
+            weight: style.weight + 4,
+            dashArray: '8, 8',
+            opacity: 0.95,
+            lineCap: 'round',
+          }).addTo(featureGroup);
+        }
+
+        // Main route polyline
+        const isCompleted = guidance.isSegmentCompleted(seg.segmentId);
+        const line = L.polyline(latlngs, {
+          color: isCompleted ? '#10b981' : style.stroke,
+          weight: isActive ? style.weight + 2 : style.weight,
+          dashArray: isCompleted ? '6, 6' : style.dashArray,
+          opacity: isActive ? 1.0 : isCompleted ? 0.65 : 0.85,
           lineCap: 'round',
           lineJoin: 'round',
         }).addTo(featureGroup);
+
+        const isLive = enrichedSeg?.is_live_geometry ?? seg.isLiveGeometry ?? false;
+        const dist = Math.round((enrichedSeg?.distance_meters ?? (seg.distanceKm * 1000)) / 1000);
+        const dur = Math.round((enrichedSeg?.duration_seconds ?? (seg.durationMinutes * 60)) / 60);
+
+        const popupContent = `
+          <div style="font-family: sans-serif; min-width: 180px; padding: 2px;">
+            <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">
+              ${seg.provider} <span style="font-size: 11px; text-transform: uppercase; color: #64748b;">(${seg.mode})</span>
+            </div>
+            <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
+              ${seg.origin.city} → ${seg.destination.city}
+            </div>
+            <div style="font-size: 11px; font-family: monospace; color: #0f172a; display: flex; gap: 8px; margin-bottom: 6px;">
+              <span><strong>${dist}</strong> km</span>
+              <span>·</span>
+              <span><strong>${dur}</strong> min</span>
+            </div>
+            <div style="display: inline-block; font-size: 10px; font-family: monospace; padding: 2px 6px; border-radius: 4px; ${
+              isLive
+                ? 'background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;'
+                : 'background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;'
+            }">
+              ${isLive ? '✓ Verified Valhalla OSM Route' : 'Corridor Transit Estimate'}
+            </div>
+          </div>
+        `;
+
+        line.bindPopup(popupContent);
+        line.on('click', () => {
+          setActiveSegmentIndex(idx);
+          if (onSegmentClick) onSegmentClick(seg.segmentId);
+        });
       }
-
-      // Disrupted segment hazard casing
-      if (disruptedSegmentMap.has(seg.segmentId)) {
-        const imp = disruptedSegmentMap.get(seg.segmentId)!;
-        L.polyline(latlngs, {
-          color: imp.impactLevel === 'critical' ? '#e11d48' : '#d97706',
-          weight: style.weight + 4,
-          dashArray: '8, 8',
-          opacity: 0.95,
-          lineCap: 'round',
-        }).addTo(featureGroup);
-      }
-
-      // Main route polyline
-      const isCompleted = guidance.isSegmentCompleted(seg.segmentId);
-      const line = L.polyline(latlngs, {
-        color: isCompleted ? '#10b981' : style.stroke,
-        weight: isActive ? style.weight + 2 : style.weight,
-        dashArray: isCompleted ? '6, 6' : style.dashArray,
-        opacity: isActive ? 1.0 : isCompleted ? 0.65 : 0.85,
-        lineCap: 'round',
-        lineJoin: 'round',
-      }).addTo(featureGroup);
-
-      const isLive = enrichedSeg?.is_live_geometry ?? seg.isLiveGeometry ?? false;
-      const dist = Math.round((enrichedSeg?.distance_meters ?? (seg.distanceKm * 1000)) / 1000);
-      const dur = Math.round((enrichedSeg?.duration_seconds ?? (seg.durationMinutes * 60)) / 60);
-
-      const popupContent = `
-        <div style="font-family: sans-serif; min-width: 180px; padding: 2px;">
-          <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">
-            ${seg.provider} <span style="font-size: 11px; text-transform: uppercase; color: #64748b;">(${seg.mode})</span>
-          </div>
-          <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
-            ${seg.origin.city} → ${seg.destination.city}
-          </div>
-          <div style="font-size: 11px; font-family: monospace; color: #0f172a; display: flex; gap: 8px; margin-bottom: 6px;">
-            <span><strong>${dist}</strong> km</span>
-            <span>·</span>
-            <span><strong>${dur}</strong> min</span>
-          </div>
-          <div style="display: inline-block; font-size: 10px; font-family: monospace; padding: 2px 6px; border-radius: 4px; ${
-            isLive
-              ? 'background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;'
-              : 'background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;'
-          }">
-            ${isLive ? '✓ Verified Valhalla OSM Route' : 'Corridor Transit Estimate'}
-          </div>
-        </div>
-      `;
-
-      line.bindPopup(popupContent);
-      line.on('click', () => {
-        setActiveSegmentIndex(idx);
-        if (onSegmentClick) onSegmentClick(seg.segmentId);
-      });
     });
 
     // 3. Draw Grounded Markers (Origin, Destination, Transfer Hubs)
     waypoints.forEach((wp) => {
+      if (!isValidCoordinate(wp.lat, wp.lng)) return;
       const isOrigin = wp.hubType === 'origin';
       const isDest = wp.hubType === 'destination';
       const hasXR = !!wp.xrSceneId;
@@ -579,7 +640,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
     uniqueEvents.forEach((ev) => {
       const pt = ev.point || ev.affectedLocations?.[0]?.coordinates;
-      if (!pt) return;
+      if (!pt || !isValidCoordinate(pt.lat, pt.lng)) return;
 
       const isCrit = ev.severity === 'critical';
       const isSim = ev.provenance === 'simulated';
@@ -638,42 +699,50 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     // 4. Draw Foreground User Location (GPS / Demo Position) if active
     if (guidance.locationState.coords) {
       const { latitude, longitude } = guidance.locationState.coords;
-      const isLive = guidance.locationState.status === 'live_position';
-      const userMarkerHtml = `
-        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px;">
-          <div style="position: absolute; width: 24px; height: 24px; border-radius: 9999px; background: ${isLive ? '#2563eb' : '#6366f1'}; opacity: 0.45; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-          <div style="position: relative; width: 16px; height: 16px; border-radius: 9999px; background: ${isLive ? '#2563eb' : '#6366f1'}; border: 2.5px solid #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.35);"></div>
-        </div>
-      `;
-      const userIcon = L.divIcon({
-        className: 'user-gps-location-marker',
-        html: userMarkerHtml,
-        iconSize: [24, 24],
-        iconAnchor: [12, 12],
-      });
-      L.marker([latitude, longitude], { icon: userIcon, zIndexOffset: 3000 })
-        .bindTooltip(isLive ? 'Current GPS Location' : 'Demo Guidance Location', { direction: 'top', offset: [0, -8] })
-        .addTo(featureGroup);
+      if (isValidCoordinate(latitude, longitude)) {
+        const isLive = guidance.locationState.status === 'live_position';
+        const userMarkerHtml = `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px;">
+            <div style="position: absolute; width: 24px; height: 24px; border-radius: 9999px; background: ${isLive ? '#2563eb' : '#6366f1'}; opacity: 0.45; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 16px; height: 16px; border-radius: 9999px; background: ${isLive ? '#2563eb' : '#6366f1'}; border: 2.5px solid #ffffff; box-shadow: 0 2px 6px rgba(0,0,0,0.35);"></div>
+          </div>
+        `;
+        const userIcon = L.divIcon({
+          className: 'user-gps-location-marker',
+          html: userMarkerHtml,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12],
+        });
+        L.marker([latitude, longitude], { icon: userIcon, zIndexOffset: 3000 })
+          .bindTooltip(isLive ? 'Current GPS Location' : 'Demo Guidance Location', { direction: 'top', offset: [0, -8] })
+          .addTo(featureGroup);
 
-      if (guidance.locationState.accuracyMeters && isLive) {
-        L.circle([latitude, longitude], {
-          radius: guidance.locationState.accuracyMeters,
-          color: '#2563eb',
-          fillColor: '#60a5fa',
-          fillOpacity: 0.15,
-          weight: 1,
-        }).addTo(featureGroup);
+        if (guidance.locationState.accuracyMeters && isLive) {
+          L.circle([latitude, longitude], {
+            radius: guidance.locationState.accuracyMeters,
+            color: '#2563eb',
+            fillColor: '#60a5fa',
+            fillOpacity: 0.15,
+            weight: 1,
+          }).addTo(featureGroup);
+        }
       }
     }
 
-    // 5. Fit Bounds with comfortable padding
-    if (allLatLangs.length > 0) {
-      const boundsObj = L.latLngBounds(allLatLangs as L.LatLngTuple[]);
-      map.fitBounds(boundsObj, {
-        padding: [45, 45],
-        maxZoom: 14,
-        animate: true,
-      });
+    // 5. Fit Bounds with comfortable padding on valid points
+    const validBoundsPoints = allLatLangs.filter((pt) => {
+      const [lat, lng] = pt as [number, number];
+      return isValidCoordinate(lat, lng);
+    });
+    if (validBoundsPoints.length > 0) {
+      const boundsObj = L.latLngBounds(validBoundsPoints as L.LatLngTuple[]);
+      if (boundsObj.isValid()) {
+        map.fitBounds(boundsObj, {
+          padding: [45, 45],
+          maxZoom: 14,
+          animate: true,
+        });
+      }
     }
   }, [
     effectiveRoute,
@@ -749,7 +818,28 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       : isGoogleSource
       ? 'Google Routes Live'
       : 'Live Route Geometry'
+    : providerSource === 'client_fallback'
+    ? 'Client Fallback Simulation'
     : 'Deterministic Corridor';
+
+  // Check if any valid spatial coordinates exist to display on the map
+  const hasValidSpatialGeometry = useMemo(() => {
+    // 1. Check if any segment has valid geometry coordinates or valid origin/dest
+    const anyValidSegment = segments.some((seg, idx) => {
+      const enrichedSeg = effectiveRoute?.segments?.[idx];
+      if (enrichedSeg?.geojson_geometry?.coordinates?.some((c) => isValidCoordinate(c[1], c[0]))) return true;
+      if (seg.geojsonGeometry?.coordinates?.some((c) => isValidCoordinate(c[1], c[0]))) return true;
+      if (enrichedSeg?.coordinates?.some((c) => isValidCoordinate(c.latitude, c.longitude))) return true;
+      if (isValidCoordinate(seg.origin?.coordinates) && isValidCoordinate(seg.destination?.coordinates)) return true;
+      return false;
+    });
+    if (anyValidSegment) return true;
+
+    // 2. Check waypoints
+    if (waypoints.some((wp) => isValidCoordinate(wp.lat, wp.lng))) return true;
+
+    return false;
+  }, [segments, effectiveRoute, waypoints]);
 
   return (
     <div
@@ -927,6 +1017,29 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
                   type="button"
                   onClick={() => setViewMode('schematic')}
                   className="font-bold underline ml-1 text-amber-900 hover:text-amber-950 cursor-pointer"
+                >
+                  Switch to Waypoints View
+                </button>
+              </div>
+            )}
+
+            {/* Spatial Geometry Unavailable Overlay */}
+            {!hasValidSpatialGeometry && (
+              <div
+                data-testid="spatial-geometry-unavailable"
+                className="absolute inset-0 z-[1000] bg-slate-900/90 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center"
+              >
+                <div className="w-12 h-12 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center mb-3 text-amber-400">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-bold text-white mb-1">Spatial Geometry Unavailable</h4>
+                <p className="text-xs text-slate-400 max-w-sm mb-4 font-mono">
+                  Geographic coordinates are unavailable for this route corridor. You can inspect the waypoint topology in schematic view.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('schematic')}
+                  className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-mono text-xs font-semibold shadow-sm transition-colors cursor-pointer"
                 >
                   Switch to Waypoints View
                 </button>

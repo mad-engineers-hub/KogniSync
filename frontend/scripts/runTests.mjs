@@ -13,6 +13,9 @@ const tests = [
   'src/tests/navigationGuidance.test.ts',
   'src/tests/disruptionIntelligence.test.ts',
   'src/tests/dynamicJourneyMapSync.test.ts',
+  'src/tests/fallbackOriginSync.test.ts',
+  'src/tests/gpsCollisionDetector.test.ts',
+  'src/tests/nullIslandAvoidance.test.ts',
 ];
 
 for (const testPath of tests) {
