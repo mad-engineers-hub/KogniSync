@@ -505,6 +505,10 @@ def detect_cross_city_collision(
         target_aliases = CANONICAL_CITY_ALIASES.get(normalized_target, [])
         if key_lower in target_aliases or name_lower in target_aliases:
             return True
+        city_aliases = CANONICAL_CITY_ALIASES.get(key_lower, []) + CANONICAL_CITY_ALIASES.get(name_lower, [])
+        for a in city_aliases:
+            if a in raw_lower or a in normalized_target:
+                return True
         return False
 
     # 1. Check against registered major city hubs
@@ -552,9 +556,26 @@ def resolve_hub_context(
                         parent_city_key = city
                         is_locality = False
                         break
+            if not parent_city_key:
+                for alias in CANONICAL_CITY_ALIASES.get(lower, []):
+                    if alias in CITY_HUB_REGISTRY:
+                        parent_city_key = alias
+                        is_locality = False
+                        break
+                    if alias in LOCALITY_TO_CITY_MAP:
+                        parent_city_key = LOCALITY_TO_CITY_MAP[alias]
+                        is_locality = True
+                        break
 
-    if not parent_city_key and custom_coordinates:
+    capitalized_raw = raw.capitalize() if raw else ("Bangalore" if is_origin else "Chennai")
+
+    is_stale_collision, conflicting_city, _ = detect_cross_city_collision(
+        custom_coordinates, parent_city_key or lower, raw
+    )
+
+    if not parent_city_key and custom_coordinates and not is_stale_collision:
         # Spatial resolution: resolve to closest registered hub ONLY within metropolitan radius (35km)
+        # and only if raw location is not independently resolvable via gazetteer/geocoding
         closest_city: str | None = None
         min_dist = float("inf")
         for key, p in CITY_HUB_REGISTRY.items():
@@ -563,14 +584,10 @@ def resolve_hub_context(
                 min_dist = dist
                 closest_city = key
         if closest_city and min_dist <= 35.0:
-            parent_city_key = closest_city
-            is_locality = True
-
-    capitalized_raw = raw.capitalize() if raw else ("Bangalore" if is_origin else "Chennai")
-
-    is_stale_collision, conflicting_city, _ = detect_cross_city_collision(
-        custom_coordinates, parent_city_key or lower, raw
-    )
+            from app.services.location.service import location_service
+            if not location_service.forward_geocode_sync(raw):
+                parent_city_key = closest_city
+                is_locality = True
 
     if parent_city_key and parent_city_key in CITY_HUB_REGISTRY:
         profile = CITY_HUB_REGISTRY[parent_city_key]

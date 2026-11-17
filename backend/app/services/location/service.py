@@ -110,6 +110,14 @@ class LocationService:
             self._forward_cache[q_norm] = coords
             return coords
 
+        from app.services.journey.hubs import CANONICAL_CITY_ALIASES
+        for alias in CANONICAL_CITY_ALIASES.get(q_norm, []):
+            if alias in CITY_HUB_REGISTRY:
+                h = CITY_HUB_REGISTRY[alias]
+                coords = CoordinatesSchema(lat=h.lat, lng=h.lng)
+                self._forward_cache[q_norm] = coords
+                return coords
+
         # 2. Check REGIONAL_GAZETTEER
         if q_norm in REGIONAL_GAZETTEER:
             entry = REGIONAL_GAZETTEER[q_norm]

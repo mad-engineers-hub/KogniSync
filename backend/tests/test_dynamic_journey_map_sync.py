@@ -129,3 +129,41 @@ def test_maps_enrich_reflects_dynamic_origin():
     assert len(coords) >= 2
     assert abs(coords[0]["latitude"] - 13.3401) < 0.001
     assert abs(coords[0]["longitude"] - 77.1006) < 0.001
+
+
+def test_resolve_hub_context_stale_collision_detection():
+    """Verify that stale coordinates belonging to another city (e.g. Bangalore coords with Tumkur query)
+    are discarded in favor of geocoded Tumkur coordinates."""
+    from app.services.journey.hubs import detect_cross_city_collision
+    stale_blr = CoordinatesSchema(lat=12.9716, lng=77.5946)
+    is_stale, conflict_city, dist = detect_cross_city_collision(stale_blr, "tumkur", "Tumkur")
+    assert is_stale is True
+    assert conflict_city == "Bangalore"
+
+    hub = resolve_hub_context("Tumkur", is_origin=True, custom_coordinates=stale_blr)
+    assert abs(hub.user_node.coordinates.lat - 13.34) < 0.05
+    assert abs(hub.user_node.coordinates.lng - 77.10) < 0.05
+    assert abs(hub.user_node.coordinates.lat - 12.9716) > 0.3
+
+
+def test_resolve_hub_context_preserves_intentional_distant_gps():
+    """Verify that intentional GPS coordinates > 45km from centroid (e.g. Palolem in Goa, Sira in Tumkur)
+    are strictly preserved when no cross-city collision exists."""
+    # Sira, Tumkur (~45 km from Tumkur centroid)
+    sira_coords = CoordinatesSchema(lat=13.7447, lng=76.9077)
+    hub_sira = resolve_hub_context("Tumkur", is_origin=True, custom_coordinates=sira_coords)
+    assert hub_sira.user_node.coordinates.lat == 13.7447
+    assert hub_sira.user_node.coordinates.lng == 76.9077
+
+    # Palolem, Goa (~55 km from Goa centroid)
+    palolem_coords = CoordinatesSchema(lat=15.0100, lng=74.0232)
+    hub_palolem = resolve_hub_context("Goa", is_origin=False, custom_coordinates=palolem_coords)
+    assert hub_palolem.user_node.coordinates.lat == 15.0100
+    assert hub_palolem.user_node.coordinates.lng == 74.0232
+
+
+def test_resolve_hub_context_unresolved_location_raises_value_error():
+    """Verify that unknown locations with failed geocoding explicitly raise ValueError instead of defaulting."""
+    with pytest.raises(ValueError, match="Unable to resolve coordinates for location"):
+        resolve_hub_context("NonExistentCityXYZ999", is_origin=True)
+

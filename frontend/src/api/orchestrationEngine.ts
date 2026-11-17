@@ -375,6 +375,10 @@ export function detectCrossCityCollision(
     if (aliases.includes(keyLower) || aliases.includes(nameLower)) return true;
     const targetAliases = CANONICAL_CITY_ALIASES[normalizedTarget] || [];
     if (targetAliases.includes(keyLower) || targetAliases.includes(nameLower)) return true;
+    const cityAliases = (CANONICAL_CITY_ALIASES[keyLower] || []).concat(CANONICAL_CITY_ALIASES[nameLower] || []);
+    for (const a of cityAliases) {
+      if (rawLower.includes(a) || normalizedTarget.includes(a)) return true;
+    }
     return false;
   };
 
