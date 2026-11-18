@@ -31,8 +31,30 @@ import { useJourneyGuidance } from '../../hooks/useJourneyGuidance';
 import { NavigationGuidanceDrawer } from '../navigation/NavigationGuidanceDrawer';
 import { DisruptionEvent, JourneyDisruptionAssessment } from '../../types/disruption';
 import { isValidCoordinate } from '../../utils/mapCoordinates';
+import {
+  computeCorridorMetrics,
+  getViewportHeightClass,
+  type CorridorMetrics,
+} from '../../utils/corridorMetrics';
 
-export { isValidCoordinate };
+export { isValidCoordinate, computeCorridorMetrics, getViewportHeightClass, type CorridorMetrics };
+
+export interface RenderedMarkerRecord {
+  markerId: string;
+  label: string;
+  lat: number;
+  lng: number;
+  category: 'origin' | 'departure_hub' | 'transfer_hub' | 'arrival_hub' | 'destination';
+  journeyId: string;
+  coordinateSource: string;
+  city: string;
+}
+
+declare global {
+  interface Window {
+    __KOGNISYNC_RENDERED_MARKERS__?: RenderedMarkerRecord[];
+  }
+}
 
 export interface JourneyMapProps {
   segments: JourneySegment[];
@@ -94,6 +116,7 @@ function calculateHaversineDistanceKm(lat1: number, lon1: number, lat2: number, 
   return R * c;
 }
 
+
 export const JourneyMap: React.FC<JourneyMapProps> = ({
   segments,
   journey,
@@ -142,6 +165,9 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const layersGroupRef = useRef<L.FeatureGroup | null>(null);
+  const isInitialFitRef = useRef<boolean>(true);
+  const prevJourneyIdRef = useRef<string | null>(null);
+  const fitDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Synthesize or use real Journey object for backend route enrichment
   const targetJourney: Journey = useMemo(() => {
@@ -204,6 +230,12 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     };
   }, [journey, segments]);
 
+  // Determine corridor span and geographic characteristics for adaptive viewport sizing (Finding A)
+  const corridorMetrics = useMemo(() => computeCorridorMetrics(segments), [segments]);
+
+  // Adaptive viewport height based on corridor characteristics (Finding A)
+  const viewportHeightClass = useMemo(() => getViewportHeightClass(corridorMetrics), [corridorMetrics]);
+
   // Query enriched route geometry from backend Valhalla / Geo engine
   const { data: enrichedRoute } = useQuery<EnrichedJourneyRoute>({
     queryKey: [
@@ -223,7 +255,11 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
   // Effective route geometry (server enriched with client fallback)
   const effectiveRoute = useMemo<EnrichedJourneyRoute>(() => {
-    if (enrichedRoute && enrichedRoute.segments?.length > 0) {
+    if (
+      enrichedRoute &&
+      enrichedRoute.journey_id === targetJourney.id &&
+      enrichedRoute.segments?.length > 0
+    ) {
       // Validate that enriched route origin is geographically congruent with targetJourney
       const enrichedOrigLat = enrichedRoute.segments[0].origin_coords?.latitude;
       const targetOrigLat = targetJourney.origin.coordinates.lat;
@@ -330,10 +366,10 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           maxZoom: 19,
         });
 
-        // Configurable Basemap Tile Layer (defaulting to CARTO Positron with OSM attribution)
+        // Configurable Basemap Tile Layer (defaulting to standard OpenStreetMap)
         const tileUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_URL) ||
-          'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-        const tileSubdomains = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_SUBDOMAINS) || 'abcd';
+          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+        const tileSubdomains = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_SUBDOMAINS) || 'abc';
 
         const tileLayer = L.tileLayer(tileUrl, {
           subdomains: tileSubdomains,
@@ -369,13 +405,55 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   // Clean cleanup on component unmount
   useEffect(() => {
     return () => {
+      if (fitDebounceTimerRef.current) {
+        clearTimeout(fitDebounceTimerRef.current);
+        fitDebounceTimerRef.current = null;
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
         layersGroupRef.current = null;
       }
+      if (typeof window !== 'undefined' && 'window.__KOGNISYNC_RENDERED_MARKERS__' in window) {
+        delete window.__KOGNISYNC_RENDERED_MARKERS__;
+      }
     };
   }, []);
+
+  // Clear telemetry if switching out of geographic view
+  useEffect(() => {
+    if (viewMode !== 'geographic') {
+      if (typeof window !== 'undefined' && 'window.__KOGNISYNC_RENDERED_MARKERS__' in window) {
+        delete window.__KOGNISYNC_RENDERED_MARKERS__;
+      }
+    }
+  }, [viewMode]);
+
+  // Synchronize Leaflet viewport with responsive container size changes (Finding B)
+  useEffect(() => {
+    if (viewMode !== 'geographic' || !mapContainerRef.current) return;
+    const container = mapContainerRef.current;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const observer = new ResizeObserver(() => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (
+          mapInstanceRef.current &&
+          (mapInstanceRef.current as any)._loaded &&
+          mapInstanceRef.current.getContainer()
+        ) {
+          mapInstanceRef.current.invalidateSize({ pan: false });
+        }
+      }, 75);
+    });
+
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      if (resizeTimer) clearTimeout(resizeTimer);
+    };
+  }, [viewMode]);
 
   // -------------------------------------------------------------------------
   // LEAFLET LAYERS UPDATE (POLYLINES & MARKERS)
@@ -383,10 +461,20 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   useEffect(() => {
     const map = mapInstanceRef.current;
     const featureGroup = layersGroupRef.current;
-    if (!map || !featureGroup || viewMode !== 'geographic') return;
+    const container = mapContainerRef.current;
+    if (!map || !featureGroup || viewMode !== 'geographic' || !container) return;
+
+    // Reset initial fit if targetJourney changes
+    if (prevJourneyIdRef.current !== targetJourney.id) {
+      isInitialFitRef.current = true;
+    }
+
+    // Defensive invalidation: ensure Leaflet container dimensions match rendered DOM (Finding B)
+    map.invalidateSize({ pan: false });
 
     featureGroup.clearLayers();
 
+    const renderedMarkers: RenderedMarkerRecord[] = [];
     const allLatLangs: L.LatLngExpression[] = [];
 
     // 1. Draw Alternative Journeys (Muted lines)
@@ -532,11 +620,33 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     });
 
     // 3. Draw Grounded Markers (Origin, Destination, Transfer Hubs)
-    waypoints.forEach((wp) => {
+    waypoints.forEach((wp, idx) => {
       if (!isValidCoordinate(wp.lat, wp.lng)) return;
       const isOrigin = wp.hubType === 'origin';
       const isDest = wp.hubType === 'destination';
       const hasXR = !!wp.xrSceneId;
+
+      const markerId = `marker-${targetJourney.id}-${wp.hubType}-${idx}`;
+      const coordSource = isOrigin
+        ? targetJourney.origin?.coordinates
+          ? 'journey_origin_node'
+          : 'segment_origin'
+        : isDest
+        ? targetJourney.destination?.coordinates
+          ? 'journey_dest_node'
+          : 'segment_destination'
+        : 'transit_transfer_hub';
+
+      renderedMarkers.push({
+        markerId,
+        label: wp.title,
+        lat: wp.lat,
+        lng: wp.lng,
+        category: wp.hubType,
+        journeyId: targetJourney.id,
+        coordinateSource: coordSource,
+        city: wp.city,
+      });
 
       let iconHtml = '';
       if (isOrigin) {
@@ -573,8 +683,23 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       }
 
       const customIcon = L.divIcon({
-        className: 'custom-leaflet-marker',
-        html: iconHtml,
+        className: `custom-leaflet-marker marker-${wp.hubType}`,
+        html: `
+          <div
+            data-testid="map-marker-${wp.hubType}"
+            data-marker-id="${markerId}"
+            data-marker-category="${wp.hubType}"
+            data-journey-id="${targetJourney.id}"
+            data-city="${wp.city}"
+            data-lat="${wp.lat}"
+            data-lng="${wp.lng}"
+            data-label="${wp.title}"
+            data-source="${coordSource}"
+            style="position: relative; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;"
+          >
+            ${iconHtml}
+          </div>
+        `,
         iconSize: [28, 28],
         iconAnchor: [14, 14],
         popupAnchor: [0, -14],
@@ -630,6 +755,18 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         }
       });
     });
+
+    // Record rendered markers in telemetry registry for testing/dev environments (Finding C)
+    if (typeof window !== 'undefined') {
+      const isTestOrDev =
+        Boolean(import.meta.env?.DEV) ||
+        Boolean((window as any).__KOGNISYNC_TEST_ENV__) ||
+        (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
+
+      if (isTestOrDev) {
+        window.__KOGNISYNC_RENDERED_MARKERS__ = renderedMarkers;
+      }
+    }
 
     // 3B. Draw Active Disruption Incident Markers
     const activeEvents: DisruptionEvent[] = [
@@ -729,7 +866,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       }
     }
 
-    // 5. Fit Bounds with comfortable padding on valid points
+    // 5. Fit Bounds with comfortable padding on valid points (Findings B & D)
     const validBoundsPoints = allLatLangs.filter((pt) => {
       const [lat, lng] = pt as [number, number];
       return isValidCoordinate(lat, lng);
@@ -737,13 +874,36 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     if (validBoundsPoints.length > 0) {
       const boundsObj = L.latLngBounds(validBoundsPoints as L.LatLngTuple[]);
       if (boundsObj.isValid()) {
+        const isInitialFit = isInitialFitRef.current;
+        const shouldAnimate = !isInitialFit && prevJourneyIdRef.current === targetJourney.id;
+
+        if (fitDebounceTimerRef.current) {
+          clearTimeout(fitDebounceTimerRef.current);
+          fitDebounceTimerRef.current = null;
+        }
+
+        // Cancel any in-flight animations to avoid competing animations (Finding B)
+        map.stop();
+
+        // Asymmetric padding: 75px bottom padding ensures clear margin above bottom legend and attribution
         map.fitBounds(boundsObj, {
-          padding: [45, 45],
+          paddingTopLeft: [45, 45],
+          paddingBottomRight: [45, 75],
           maxZoom: 14,
-          animate: true,
+          animate: shouldAnimate,
         });
+
+        isInitialFitRef.current = false;
+        prevJourneyIdRef.current = targetJourney.id;
       }
     }
+
+    return () => {
+      if (fitDebounceTimerRef.current) {
+        clearTimeout(fitDebounceTimerRef.current);
+        fitDebounceTimerRef.current = null;
+      }
+    };
   }, [
     effectiveRoute,
     segments,
@@ -773,9 +933,16 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
   const handleFitRoute = () => {
     if (layersGroupRef.current && mapInstanceRef.current) {
+      mapInstanceRef.current.stop();
+      mapInstanceRef.current.invalidateSize({ pan: false });
       const b = layersGroupRef.current.getBounds();
       if (b.isValid()) {
-        mapInstanceRef.current.fitBounds(b, { padding: [45, 45], maxZoom: 14, animate: true });
+        mapInstanceRef.current.fitBounds(b, {
+          paddingTopLeft: [45, 45],
+          paddingBottomRight: [45, 75],
+          maxZoom: 14,
+          animate: true,
+        });
       }
     }
   };
@@ -949,7 +1116,10 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       )}
 
       {/* Map Canvas / Visualization Viewport */}
-      <div className="relative h-80 sm:h-96 w-full bg-slate-900 flex flex-col items-center justify-center overflow-hidden">
+      <div
+        data-testid="journey-map-viewport"
+        className={`relative ${viewportHeightClass} w-full bg-slate-900 flex flex-col items-center justify-center overflow-hidden transition-all duration-300`}
+      >
         {viewMode === 'geographic' && !leafletError ? (
           /* =========================================================================
              MODE A: Leaflet Interactive OpenStreetMap / Valhalla Map
