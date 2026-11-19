@@ -43,8 +43,8 @@ class LocationSchema(BaseModel):
 class SegmentAvailabilitySchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     status: Literal["available", "limited", "waitlist", "sold_out"] = "available"
-    remaining_units: int = Field(
-        default=20,
+    remaining_units: int | None = Field(
+        default=None,
         validation_alias=AliasChoices("remaining_units", "remainingUnits"),
         serialization_alias="remainingUnits",
     )

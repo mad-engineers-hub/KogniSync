@@ -19,9 +19,15 @@ export interface CityHubProfile {
   lat: number;
   lng: number;
   railwayHub: { name: string; code?: string; lat: number; lng: number };
-  airportHub: { name: string; code?: string; lat: number; lng: number };
+  airportHub?: { name: string; code?: string; lat: number; lng: number };
   busHub: { name: string; lat: number; lng: number };
-  metroHub: { name: string; lat: number; lng: number; hasMetro: boolean };
+  metroHub?: { name: string; lat: number; lng: number; hasMetro: boolean };
+  hasMetro: boolean;
+  hasAirport: boolean;
+  hasLocalAirport?: boolean;
+  isAirportGateway?: boolean;
+  airportGatewayCity?: string;
+  airportCity?: string;
 }
 
 export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
@@ -33,6 +39,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Kempegowda International Airport (BLR)', code: 'BLR', lat: 13.1986, lng: 77.7066 },
     busHub: { name: 'Majestic Bus Terminal (KSRTC/BMTC)', lat: 12.9774, lng: 77.5713 },
     metroHub: { name: 'Nadaprabhu Kempegowda Majestic Metro', lat: 12.9756, lng: 77.5728, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   chennai: {
     city: 'Chennai',
@@ -42,6 +50,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Chennai International Airport (MAA)', code: 'MAA', lat: 12.9941, lng: 80.1709 },
     busHub: { name: 'Koyambedu Bus Terminal (CMBT)', lat: 13.0682, lng: 80.2052 },
     metroHub: { name: 'Central Metro Interchange Hub', lat: 13.0818, lng: 80.2735, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   mumbai: {
     city: 'Mumbai',
@@ -51,6 +61,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Chhatrapati Shivaji International Airport (BOM)', code: 'BOM', lat: 19.0896, lng: 72.8656 },
     busHub: { name: 'Dadar Intercity Bus Terminal', lat: 19.0178, lng: 72.8478 },
     metroHub: { name: 'Andheri Metro Interchange', lat: 19.1197, lng: 72.8464, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   delhi: {
     city: 'Delhi',
@@ -60,6 +72,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Indira Gandhi International Airport (DEL)', code: 'DEL', lat: 28.5562, lng: 77.1000 },
     busHub: { name: 'ISBT Kashmere Gate Terminal', lat: 28.6675, lng: 77.2289 },
     metroHub: { name: 'Rajiv Chowk Metro Hub', lat: 28.6328, lng: 77.2197, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   goa: {
     city: 'Goa',
@@ -68,7 +82,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     railwayHub: { name: 'Madgaon Railway Junction', code: 'MAO', lat: 15.2736, lng: 73.9582 },
     airportHub: { name: 'Goa Dabolim Airport (GOI)', code: 'GOI', lat: 15.3808, lng: 73.8314 },
     busHub: { name: 'Panaji KADAMBA Bus Stand', lat: 15.4989, lng: 73.8278 },
-    metroHub: { name: 'Goa Coastal Rapid EV Transit', lat: 15.4950, lng: 73.8300, hasMetro: false },
+    hasMetro: false,
+    hasAirport: true,
   },
   udupi: {
     city: 'Udupi',
@@ -77,7 +92,12 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     railwayHub: { name: 'Udupi Railway Station', code: 'UD', lat: 13.3409, lng: 74.7421 },
     airportHub: { name: 'Mangalore International Airport (IXE)', code: 'IXE', lat: 12.9613, lng: 74.8901 },
     busHub: { name: 'Udupi Central Bus Stand', lat: 13.3415, lng: 74.7473 },
-    metroHub: { name: 'Coastal Green Rapid EV Shuttle', lat: 13.3420, lng: 74.7450, hasMetro: false },
+    hasMetro: false,
+    hasAirport: true,
+    hasLocalAirport: false,
+    isAirportGateway: true,
+    airportGatewayCity: 'Mangalore',
+    airportCity: 'Mangalore',
   },
   mangalore: {
     city: 'Mangalore',
@@ -86,7 +106,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     railwayHub: { name: 'Mangaluru Central Railway Station', code: 'MAQ', lat: 12.8631, lng: 74.8427 },
     airportHub: { name: 'Mangalore International Airport (IXE)', code: 'IXE', lat: 12.9613, lng: 74.8901 },
     busHub: { name: 'KSRTC Bejai Bus Stand', lat: 12.8872, lng: 74.8492 },
-    metroHub: { name: 'Mangaluru Coastal EV Express', lat: 12.8700, lng: 74.8500, hasMetro: false },
+    hasMetro: false,
+    hasAirport: true,
   },
   hyderabad: {
     city: 'Hyderabad',
@@ -96,6 +117,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Rajiv Gandhi International Airport (HYD)', code: 'HYD', lat: 17.2403, lng: 78.4294 },
     busHub: { name: 'MGBS Central Bus Station', lat: 17.3789, lng: 78.4812 },
     metroHub: { name: 'Ameerpet Metro Interchange', lat: 17.4375, lng: 78.4483, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   pune: {
     city: 'Pune',
@@ -105,6 +128,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Pune International Airport (PNQ)', code: 'PNQ', lat: 18.5822, lng: 73.9197 },
     busHub: { name: 'Shivaji Nagar Bus Terminus', lat: 18.5314, lng: 73.8553 },
     metroHub: { name: 'Civil Court Metro Interchange', lat: 18.5308, lng: 73.8567, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   kolkata: {
     city: 'Kolkata',
@@ -114,6 +139,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Netaji Subhash Chandra Bose Airport (CCU)', code: 'CCU', lat: 22.6547, lng: 88.4467 },
     busHub: { name: 'Esplanade Bus Terminus', lat: 22.5647, lng: 88.3517 },
     metroHub: { name: 'Esplanade Metro Interchange', lat: 22.5640, lng: 88.3510, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   jaipur: {
     city: 'Jaipur',
@@ -123,6 +150,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Jaipur International Airport (JAI)', code: 'JAI', lat: 26.8289, lng: 75.8056 },
     busHub: { name: 'Sindhi Camp Central Bus Stand', lat: 26.9239, lng: 75.7981 },
     metroHub: { name: 'Sindhi Camp Metro Station', lat: 26.9230, lng: 75.7980, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   ahmedabad: {
     city: 'Ahmedabad',
@@ -132,6 +161,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Sardar Vallabhbhai Patel Airport (AMD)', code: 'AMD', lat: 23.0772, lng: 72.6347 },
     busHub: { name: 'Geeta Mandir Central Bus Terminus', lat: 23.0125, lng: 72.5936 },
     metroHub: { name: 'Old High Court Metro Interchange', lat: 23.0360, lng: 72.5620, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   kochi: {
     city: 'Kochi',
@@ -141,6 +172,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     airportHub: { name: 'Cochin International Airport (COK)', code: 'COK', lat: 10.1518, lng: 76.4019 },
     busHub: { name: 'KSRTC Central Bus Stand Ernakulam', lat: 9.9723, lng: 76.2872 },
     metroHub: { name: 'MG Road Metro Station', lat: 9.9730, lng: 76.2820, hasMetro: true },
+    hasMetro: true,
+    hasAirport: true,
   },
   mysore: {
     city: 'Mysore',
@@ -149,7 +182,8 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     railwayHub: { name: 'Mysuru Junction Railway Station', code: 'MYS', lat: 12.3163, lng: 76.6455 },
     airportHub: { name: 'Mysore Mandakalli Airport (MYQ)', code: 'MYQ', lat: 12.2300, lng: 76.6500 },
     busHub: { name: 'Mysore KSRTC Suburb Bus Stand', lat: 12.3106, lng: 76.6567 },
-    metroHub: { name: 'Mysuru City Bus Transit Hub', lat: 12.3080, lng: 76.6530, hasMetro: false },
+    hasMetro: false,
+    hasAirport: true,
   },
 };
 
@@ -419,9 +453,15 @@ export interface ResolvedHubContext {
   parentCity: string;
   userNode: Location;
   railwayHub: Location;
-  airportHub: Location;
+  airportHub?: Location;
   busHub: Location;
-  metroHub: Location;
+  metroHub?: Location;
+  hasAirport: boolean;
+  hasMetro: boolean;
+  hasLocalAirport?: boolean;
+  isAirportGateway?: boolean;
+  airportGatewayCity?: string;
+  airportCity?: string;
 }
 
 export function resolveHubContext(
@@ -479,8 +519,8 @@ export function resolveHubContext(
     } else {
       // Rule 3: Stale collision cleared or missing custom coords -> use canonical centroid
       effectiveCoords = {
-        lat: round4(profile.lat + (isOrigin ? -0.015 : 0.015)),
-        lng: round4(profile.lng + (isOrigin ? -0.015 : 0.015)),
+        lat: profile.lat,
+        lng: profile.lng,
       };
     }
   } else {
@@ -521,9 +561,9 @@ export function resolveHubContext(
       lat: defLat,
       lng: defLng,
       railwayHub: { name: `${dynamicCity} Railway Station`, lat: round4(defLat + 0.005), lng: round4(defLng + 0.005) },
-      airportHub: { name: `${dynamicCity} Regional Airport`, lat: round4(defLat + 0.12), lng: round4(defLng + 0.08) },
       busHub: { name: `${dynamicCity} Central Bus Stand`, lat: round4(defLat - 0.005), lng: round4(defLng - 0.002) },
-      metroHub: { name: `${dynamicCity} Transit Center`, lat: defLat, lng: defLng, hasMetro: false },
+      hasMetro: false,
+      hasAirport: false,
     };
     isLocality = false;
   }
@@ -545,14 +585,21 @@ export function resolveHubContext(
     coordinates: { lat: profile.railwayHub.lat, lng: profile.railwayHub.lng },
   };
 
-  const airportHub: Location = {
-    id: `loc-hub-air-${slugify(profile.city)}`,
-    name: profile.airportHub.name,
-    city: profile.city,
-    code: profile.airportHub.code,
-    type: 'airport',
-    coordinates: { lat: profile.airportHub.lat, lng: profile.airportHub.lng },
-  };
+  const airportCity = profile.airportCity
+    || (profile.airportHub as any)?.city
+    || (profile.isAirportGateway ? profile.airportGatewayCity : undefined)
+    || profile.city;
+
+  const airportHub: Location | undefined = (profile.hasAirport && profile.airportHub)
+    ? {
+        id: `loc-hub-air-${slugify(airportCity)}`,
+        name: profile.airportHub.name,
+        city: airportCity,
+        code: profile.airportHub.code,
+        type: 'airport',
+        coordinates: { lat: profile.airportHub.lat, lng: profile.airportHub.lng },
+      }
+    : undefined;
 
   const busHub: Location = {
     id: `loc-hub-bus-${slugify(profile.city)}`,
@@ -562,13 +609,15 @@ export function resolveHubContext(
     coordinates: { lat: profile.busHub.lat, lng: profile.busHub.lng },
   };
 
-  const metroHub: Location = {
-    id: `loc-hub-metro-${slugify(profile.city)}`,
-    name: profile.metroHub.name,
-    city: profile.city,
-    type: 'metro_station',
-    coordinates: { lat: profile.metroHub.lat, lng: profile.metroHub.lng },
-  };
+  const metroHub: Location | undefined = (profile.hasMetro && profile.metroHub)
+    ? {
+        id: `loc-hub-metro-${slugify(profile.city)}`,
+        name: profile.metroHub.name,
+        city: profile.city,
+        type: 'metro_station',
+        coordinates: { lat: profile.metroHub.lat, lng: profile.metroHub.lng },
+      }
+    : undefined;
 
   return {
     rawLocation: raw,
@@ -579,6 +628,12 @@ export function resolveHubContext(
     airportHub,
     busHub,
     metroHub,
+    hasAirport: profile.hasAirport,
+    hasMetro: profile.hasMetro,
+    hasLocalAirport: profile.hasLocalAirport ?? profile.hasAirport,
+    isAirportGateway: profile.isAirportGateway ?? false,
+    airportGatewayCity: profile.airportGatewayCity,
+    airportCity: profile.hasAirport ? airportCity : undefined,
   };
 }
 
@@ -723,7 +778,6 @@ export function getLocalTransitOperators(cityName: string) {
       cab: { provider: 'GoaMiles Express Taxi', vehicleName: 'Airport Shuttle Sedan' },
       rapido: { provider: 'Goa Coastal Bike Taxi', vehicleName: 'Rapid Motorbike Pilot' },
       bus: { provider: 'Kadamba Transport Shuttle', vehicleName: 'Kadamba EV Feeder' },
-      metro: { provider: 'Goa Coastal Rapid EV Shuttle', vehicleName: 'Zero-Emission EV Transit' },
     };
   }
   if (c.includes('udupi') || c.includes('mangalore')) {
@@ -731,7 +785,6 @@ export function getLocalTransitOperators(cityName: string) {
       cab: { provider: 'Coastal Express Taxi (Udupi/Mangalore)', vehicleName: 'Inter-City Sedan' },
       rapido: { provider: 'Coastal Auto QuickSync', vehicleName: 'Rapid City Auto' },
       bus: { provider: 'Udupi-Manipal Express City Bus', vehicleName: 'City Feeder Bus' },
-      metro: { provider: 'Coastal Green Rapid EV Shuttle', vehicleName: 'Zero-Emission EV Shuttle' },
     };
   }
   if (c.includes('hyderabad')) {
@@ -750,13 +803,44 @@ export function getLocalTransitOperators(cityName: string) {
       metro: { provider: 'Pune Metro Aqua Line', vehicleName: 'Metro Electric Transit' },
     };
   }
+  if (c.includes('kolkata')) {
+    return {
+      cab: { provider: 'KogniSync Priority SyncCab (Kolkata)', vehicleName: 'Yellow City Sedan' },
+      rapido: { provider: 'Rapido QuickSync Kolkata', vehicleName: 'Rapido Auto / Bike' },
+      bus: { provider: 'CSTC Electric City Feeder', vehicleName: 'City Transit Bus' },
+      metro: { provider: 'Kolkata Metro Blue Line', vehicleName: 'Metro Electric Transit' },
+    };
+  }
+  if (c.includes('jaipur')) {
+    return {
+      cab: { provider: 'KogniSync Priority SyncCab (Jaipur)', vehicleName: 'Pink City Sedan' },
+      rapido: { provider: 'Rapido QuickSync Jaipur', vehicleName: 'Rapido Auto / Bike' },
+      bus: { provider: 'JCTSL City Feeder', vehicleName: 'City Transit Bus' },
+      metro: { provider: 'Jaipur Metro Pink Line', vehicleName: 'Metro Electric Transit' },
+    };
+  }
+  if (c.includes('ahmedabad')) {
+    return {
+      cab: { provider: 'KogniSync Priority SyncCab (Ahmedabad)', vehicleName: 'City Express Sedan' },
+      rapido: { provider: 'Rapido QuickSync Ahmedabad', vehicleName: 'Rapido Auto / Bike' },
+      bus: { provider: 'AMTS Electric Feeder', vehicleName: 'City Transit Bus' },
+      metro: { provider: 'Gujarat Metro Red Line', vehicleName: 'Metro Electric Transit' },
+    };
+  }
+  if (c.includes('kochi')) {
+    return {
+      cab: { provider: 'KogniSync Priority SyncCab (Kochi)', vehicleName: 'Airport Taxi Sedan' },
+      rapido: { provider: 'Rapido QuickSync Kochi', vehicleName: 'Rapido Auto / Bike' },
+      bus: { provider: 'KSRTC Kochi City Circular', vehicleName: 'Low-Floor Electric Bus' },
+      metro: { provider: 'Kochi Metro Rail Transit', vehicleName: 'Metro Electric Transit' },
+    };
+  }
 
-  // Generic clean fallback
+  // Generic clean fallback for regional cities without verified metro
   return {
     cab: { provider: `KogniSync Priority SyncCab (${cityName})`, vehicleName: 'Priority City Sedan' },
     rapido: { provider: `Rapido QuickSync ${cityName}`, vehicleName: 'Rapido Auto / Bike' },
     bus: { provider: `${cityName} City Feeder Bus`, vehicleName: 'City Transit Line' },
-    metro: { provider: `${cityName} Rapid EV Shuttle`, vehicleName: 'Zero-Emission EV Transit' },
   };
 }
 
@@ -833,7 +917,7 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       mode: TransportMode;
       provider: string;
       vehicleName: string;
-      vehicleNumber: string;
+      vehicleNumber?: string;
       durationMin: number;
       price: number;
       distanceKm: number;
@@ -855,9 +939,63 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
     };
   }
 
-  const archetypes: ArchetypeDef[] = [
-    // 1. FASTEST: Priority Cab -> Flight (or express link) -> Priority Cab
-    {
+  // Infrastructure validity checks for multimodal archetypes
+  const hasFlightInfrastructure = Boolean(
+    originHubs.hasAirport &&
+    destHubs.hasAirport &&
+    originHubs.airportHub &&
+    destHubs.airportHub
+  );
+  const hasOriginMetro = Boolean(
+    originHubs.hasMetro &&
+    originHubs.metroHub &&
+    originOps.metro
+  );
+  const hasDestMetro = Boolean(
+    destHubs.hasMetro &&
+    destHubs.metroHub &&
+    destOps.metro
+  );
+
+  const archetypes: ArchetypeDef[] = [];
+
+  // 1. FASTEST: Priority Cab -> Flight -> Priority Cab (gated by verified airport infrastructure)
+  if (hasFlightInfrastructure) {
+    const origAirDistRaw = computeDistanceKm(
+      originHubs.userNode.coordinates.lat,
+      originHubs.userNode.coordinates.lng,
+      originHubs.airportHub!.coordinates.lat,
+      originHubs.airportHub!.coordinates.lng
+    );
+    const destAirDistRaw = computeDistanceKm(
+      destHubs.airportHub!.coordinates.lat,
+      destHubs.airportHub!.coordinates.lng,
+      destHubs.userNode.coordinates.lat,
+      destHubs.userNode.coordinates.lng
+    );
+    const firstMileAirDist = Math.max(10, Math.round(origAirDistRaw * 1.25 * 10) / 10);
+    const firstMileAirDur = Math.max(20, Math.round((firstMileAirDist / 45) * 60));
+    const firstMileAirPrice = Math.round(200 + firstMileAirDist * 18);
+
+    const lastMileAirDist = Math.max(8, Math.round(destAirDistRaw * 1.25 * 10) / 10);
+    const lastMileAirDur = Math.max(20, Math.round((lastMileAirDist / 45) * 60));
+    const lastMileAirPrice = Math.round(150 + lastMileAirDist * 18);
+
+    const airCorridorDist = Math.max(
+      50,
+      Math.round(
+        computeDistanceKm(
+          originHubs.airportHub!.coordinates.lat,
+          originHubs.airportHub!.coordinates.lng,
+          destHubs.airportHub!.coordinates.lat,
+          destHubs.airportHub!.coordinates.lng
+        )
+      )
+    );
+    const calibratedFlightDur = Math.round(45 + (airCorridorDist / 750) * 60);
+    const calibratedFlightPrice = Math.round(1800 + airCorridorDist * 2.3);
+
+    archetypes.push({
       category: 'fastest' as RecommendationCategory,
       title: 'SyncAir Multi-Modal Link (Air + Priority SyncCab)',
       summaryTemplate: `Fastest door-to-door arrival connecting ${originHubs.userNode.name} to ${destHubs.userNode.name} via commercial air express and synchronized priority cabs.`,
@@ -867,234 +1005,230 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
         provider: originOps.cab.provider,
         vehicleName: originOps.cab.vehicleName,
         hubType: 'air' as const,
-        durationMin: 35,
-        price: 650,
-        distanceKm: 34,
-        carbonKg: 5.2,
+        durationMin: firstMileAirDur,
+        price: firstMileAirPrice,
+        distanceKm: firstMileAirDist,
+        carbonKg: Math.round(firstMileAirDist * 0.15 * 10) / 10,
         comfortScore: 8.8,
         transferBufferMin: 50, // 50 min airport check-in and boarding buffer
       },
       mainTransport: {
         mode: 'flight' as TransportMode,
         provider: 'IndiGo Air Express',
-        vehicleName: 'Airbus A321neo',
-        vehicleNumber: `6E-${Math.abs(routeDistanceKm * 3 + 120) % 900 + 100}`,
-        durationMin: flightDurationMin,
-        price: flightPrice,
-        distanceKm: routeDistanceKm,
-        carbonKg: Number((routeDistanceKm * 0.082).toFixed(1)),
+        vehicleName: 'Commercial Aircraft (Estimated Flight Corridor)',
+        vehicleNumber: undefined,
+        durationMin: calibratedFlightDur,
+        price: calibratedFlightPrice,
+        distanceKm: airCorridorDist,
+        carbonKg: Number((airCorridorDist * 0.082).toFixed(1)),
         comfortScore: 8.5,
-        seatClass: 'Economy Flex',
-        notes: `Direct flight corridor from ${originHubs.airportHub.code || originHubs.parentCity} to ${destHubs.airportHub.code || destHubs.parentCity}. Priority gate sync.`,
+        seatClass: 'Economy (Estimated)',
+        notes: `Estimated commercial flight corridor from ${originHubs.airportHub?.code || originHubs.parentCity} to ${destHubs.airportHub?.code || destHubs.parentCity}. Ungrounded in live carrier inventory; schedule, fare, and availability are non-bookable estimates.`,
         transferBufferMin: 25, // 25 min baggage & pickup buffer
       },
       lastMile: {
         mode: 'cab' as TransportMode,
         provider: destOps.cab.provider,
         vehicleName: destOps.cab.vehicleName,
-        durationMin: 30,
-        price: 450,
-        distanceKm: 18,
-        carbonKg: 2.8,
+        durationMin: lastMileAirDur,
+        price: lastMileAirPrice,
+        distanceKm: lastMileAirDist,
+        carbonKg: Math.round(lastMileAirDist * 0.15 * 10) / 10,
         comfortScore: 8.9,
       },
-    },
+    });
+  }
 
-    // 2. BEST VALUE: Rapido / Auto -> Vande Bharat Superfast Rail -> Rapido / Auto
-    {
-      category: 'best_value' as RecommendationCategory,
-      title: `${originHubs.parentCity} - ${destHubs.parentCity} Vande Bharat + Rapido QuickSync`,
-      summaryTemplate: `Optimal Pareto balance: avoid urban congestion with Rapido quick transfers and 160 km/h high-speed electric rail.`,
-      rankReason: `Ranked #1 for Best Overall Value. Outstanding speed-to-cost ratio connecting ${originHubs.userNode.name} to ${destHubs.userNode.name}.`,
-      firstMile: {
-        mode: 'rapido' as TransportMode,
-        provider: originOps.rapido.provider,
-        vehicleName: originOps.rapido.vehicleName,
-        hubType: 'rail' as const,
-        durationMin: 25,
-        price: 180,
-        distanceKm: 12,
-        carbonKg: 1.6,
-        comfortScore: 8.2,
-        transferBufferMin: 15,
-      },
-      mainTransport: {
-        mode: 'train' as TransportMode,
-        provider: 'Indian Railways Vande Bharat',
-        vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Vande Bharat Express`,
-        vehicleNumber: `${20000 + (Math.abs(routeDistanceKm * 7) % 999)}`,
-        durationMin: trainVandeBharatDurationMin,
-        price: trainVandeBharatPrice,
-        distanceKm: routeDistanceKm,
-        carbonKg: Number((routeDistanceKm * 0.024).toFixed(1)),
-        comfortScore: 9.3,
-        seatClass: 'AC Chair Car (CC)',
-        notes: 'Includes reserved ergonomic seating, onboard refreshments, and high-speed rail corridor.',
-        transferBufferMin: 15,
-      },
-      lastMile: {
-        mode: 'rapido' as TransportMode,
-        provider: destOps.rapido.provider,
-        vehicleName: destOps.rapido.vehicleName,
-        durationMin: 25,
-        price: 220,
-        distanceKm: 11,
-        carbonKg: 1.5,
-        comfortScore: 8.2,
-      },
+  // 2. BEST VALUE: Rapido / Auto -> Vande Bharat Superfast Rail -> Rapido / Auto
+  archetypes.push({
+    category: 'best_value' as RecommendationCategory,
+    title: `${originHubs.parentCity} - ${destHubs.parentCity} Vande Bharat + Rapido QuickSync`,
+    summaryTemplate: `Optimal Pareto balance: avoid urban congestion with Rapido quick transfers and 160 km/h high-speed electric rail.`,
+    rankReason: `Ranked #1 for Best Overall Value. Outstanding speed-to-cost ratio connecting ${originHubs.userNode.name} to ${destHubs.userNode.name}.`,
+    firstMile: {
+      mode: 'rapido' as TransportMode,
+      provider: originOps.rapido.provider,
+      vehicleName: originOps.rapido.vehicleName,
+      hubType: 'rail' as const,
+      durationMin: 25,
+      price: 180,
+      distanceKm: 12,
+      carbonKg: 1.6,
+      comfortScore: 8.2,
+      transferBufferMin: 15,
     },
+    mainTransport: {
+      mode: 'train' as TransportMode,
+      provider: 'Indian Railways Vande Bharat',
+      vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Vande Bharat Express (Estimated Schedule)`,
+      vehicleNumber: undefined,
+      durationMin: trainVandeBharatDurationMin,
+      price: trainVandeBharatPrice,
+      distanceKm: routeDistanceKm,
+      carbonKg: Number((routeDistanceKm * 0.024).toFixed(1)),
+      comfortScore: 9.3,
+      seatClass: 'AC Chair Car (CC)',
+      notes: 'High-speed electric rail corridor estimate (160 km/h design speed). Ungrounded in live timetable; requires IRCTC verification.',
+      transferBufferMin: 15,
+    },
+    lastMile: {
+      mode: 'rapido' as TransportMode,
+      provider: destOps.rapido.provider,
+      vehicleName: destOps.rapido.vehicleName,
+      durationMin: 25,
+      price: 220,
+      distanceKm: 11,
+      carbonKg: 1.5,
+      comfortScore: 8.2,
+    },
+  });
 
-    // 3. CHEAPEST: Public Transit Feeder -> Superfast Rail / Bus -> Public Transit Feeder
-    {
-      category: 'cheapest' as RecommendationCategory,
-      title: 'Economy Multi-Transit Link (City Feeder + Superfast Rail)',
-      summaryTemplate: `Maximum savings with synchronized public transit feeder lines connecting to intercity express rail.`,
-      rankReason: 'Ranked #1 for Economy. Lowest complete door-to-door journey fare.',
-      firstMile: {
-        mode: 'bus' as TransportMode,
-        provider: originOps.bus.provider,
-        vehicleName: originOps.bus.vehicleName,
-        hubType: 'rail' as const,
-        durationMin: 40,
-        price: 45,
-        distanceKm: 14,
-        carbonKg: 1.2,
-        comfortScore: 6.8,
-        transferBufferMin: 15,
-      },
-      mainTransport: {
-        mode: 'train' as TransportMode,
-        provider: 'Indian Railways Superfast',
-        vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Superfast Express`,
-        vehicleNumber: `${12000 + (Math.abs(routeDistanceKm * 5) % 999)}`,
-        durationMin: trainCheapestDurationMin,
-        price: trainCheapestPrice,
-        distanceKm: routeDistanceKm,
-        carbonKg: Number((routeDistanceKm * 0.026).toFixed(1)),
-        comfortScore: 7.8,
-        seatClass: 'Sleeper (SL) / 2S Reserved',
-        notes: 'Punctual intercity service with confirmed reserved seating.',
-        transferBufferMin: 15,
-      },
-      lastMile: {
-        mode: 'bus' as TransportMode,
-        provider: destOps.bus.provider,
-        vehicleName: destOps.bus.vehicleName,
-        durationMin: 35,
-        price: 40,
-        distanceKm: 10,
-        carbonKg: 1.1,
-        comfortScore: 6.8,
-      },
+  // 3. CHEAPEST: Public Transit Feeder -> Superfast Rail / Bus -> Public Transit Feeder
+  archetypes.push({
+    category: 'cheapest' as RecommendationCategory,
+    title: 'Economy Multi-Transit Link (City Feeder + Superfast Rail)',
+    summaryTemplate: `Maximum savings with synchronized public transit feeder lines connecting to intercity express rail.`,
+    rankReason: 'Ranked #1 for Economy. Lowest complete door-to-door journey fare.',
+    firstMile: {
+      mode: 'bus' as TransportMode,
+      provider: originOps.bus.provider,
+      vehicleName: originOps.bus.vehicleName,
+      hubType: 'rail' as const,
+      durationMin: 40,
+      price: 45,
+      distanceKm: 14,
+      carbonKg: 1.2,
+      comfortScore: 6.8,
+      transferBufferMin: 15,
     },
+    mainTransport: {
+      mode: 'train' as TransportMode,
+      provider: 'Indian Railways Superfast',
+      vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Superfast Express (Estimated Schedule)`,
+      vehicleNumber: undefined,
+      durationMin: trainCheapestDurationMin,
+      price: trainCheapestPrice,
+      distanceKm: routeDistanceKm,
+      carbonKg: Number((routeDistanceKm * 0.026).toFixed(1)),
+      comfortScore: 7.8,
+      seatClass: 'Sleeper (SL) / 2S Reserved',
+      notes: 'Estimated intercity rail transit. Schedule, fare, and seat availability require IRCTC timetable verification.',
+      transferBufferMin: 15,
+    },
+    lastMile: {
+      mode: 'bus' as TransportMode,
+      provider: destOps.bus.provider,
+      vehicleName: destOps.bus.vehicleName,
+      durationMin: 35,
+      price: 40,
+      distanceKm: 10,
+      carbonKg: 1.1,
+      comfortScore: 6.8,
+    },
+  });
 
-    // 4. GREENEST: Metro / EV Shuttle -> 100% Electric Rail -> Metro / EV Shuttle
-    {
-      category: 'greenest' as RecommendationCategory,
-      title: '100% Electrified Net-Zero Transit Corridor',
-      summaryTemplate: `Lowest carbon footprint available: zero-emission urban lines synchronized with 100% electrified rail.`,
-      rankReason: 'Ranked #1 for Eco-Friendly. Emits up to 70% lower greenhouse gases than highway or air transit.',
-      firstMile: {
-        mode: 'metro' as TransportMode,
-        provider: originOps.metro.provider,
-        vehicleName: originOps.metro.vehicleName,
-        hubType: 'metro' as const,
-        durationMin: 25,
-        price: 40,
-        distanceKm: 11,
-        carbonKg: 0.6,
-        comfortScore: 8.5,
-        transferBufferMin: 15,
-      },
-      mainTransport: {
-        mode: 'train' as TransportMode,
-        provider: 'Indian Railways 100% Electric',
-        vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} 100% Electric Rail`,
-        vehicleNumber: `${20600 + (Math.abs(routeDistanceKm * 3) % 99)}`,
-        durationMin: trainGreenestDurationMin,
-        price: trainGreenestPrice,
-        distanceKm: routeDistanceKm,
-        carbonKg: Number((routeDistanceKm * 0.016).toFixed(1)),
-        comfortScore: 9.1,
-        seatClass: 'Executive Chair Car',
-        notes: '100% solar and electrified rail corridor verified with minimal carbon emissions.',
-        transferBufferMin: 15,
-      },
-      lastMile: {
-        mode: 'metro' as TransportMode,
-        provider: destOps.metro.provider,
-        vehicleName: destOps.metro.vehicleName,
-        durationMin: 20,
-        price: 45,
-        distanceKm: 9,
-        carbonKg: 0.5,
-        comfortScore: 8.5,
-      },
+  // 4. GREENEST: Metro / EV Bus -> Low-Carbon Rail -> Metro / EV Bus
+  archetypes.push({
+    category: 'greenest' as RecommendationCategory,
+    title: 'Eco-Transit Corridor (Low-Carbon Rail + Public Transit Feeder)',
+    summaryTemplate: `Lowest carbon footprint available: low-emission urban transit synchronized with rail transit corridor (corridor timetable and electrification require verification).`,
+    rankReason: 'Ranked #1 for Eco-Friendly. Emits up to 70% lower greenhouse gases than highway or air transit.',
+    firstMile: {
+      mode: hasOriginMetro ? ('metro' as TransportMode) : ('bus' as TransportMode),
+      provider: hasOriginMetro ? originOps.metro!.provider : (originOps.bus?.provider || `${originHubs.parentCity} City Feeder Bus`),
+      vehicleName: hasOriginMetro ? originOps.metro!.vehicleName : (originOps.bus?.vehicleName || 'Electric City Feeder Bus'),
+      hubType: 'rail' as const,
+      durationMin: hasOriginMetro ? 25 : 30,
+      price: hasOriginMetro ? 40 : 35,
+      distanceKm: hasOriginMetro ? 11 : 12,
+      carbonKg: hasOriginMetro ? 0.6 : 0.8,
+      comfortScore: hasOriginMetro ? 8.5 : 7.2,
+      transferBufferMin: 15,
     },
+    mainTransport: {
+      mode: 'train' as TransportMode,
+      provider: 'Indian Railways Low-Carbon Rail',
+      vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Low-Carbon Rail Corridor (Estimated)`,
+      vehicleNumber: undefined,
+      durationMin: trainGreenestDurationMin,
+      price: trainGreenestPrice,
+      distanceKm: routeDistanceKm,
+      carbonKg: Number((routeDistanceKm * 0.016).toFixed(1)),
+      comfortScore: 9.1,
+      seatClass: 'Executive Chair Car',
+      notes: 'Low-carbon rail corridor estimate. Schedule, fare, and electrification status require IRCTC verification.',
+      transferBufferMin: 15,
+    },
+    lastMile: {
+      mode: hasDestMetro ? ('metro' as TransportMode) : ('bus' as TransportMode),
+      provider: hasDestMetro ? destOps.metro!.provider : (destOps.bus?.provider || `${destHubs.parentCity} City Feeder Bus`),
+      vehicleName: hasDestMetro ? destOps.metro!.vehicleName : (destOps.bus?.vehicleName || 'Electric City Feeder Bus'),
+      durationMin: hasDestMetro ? 20 : 25,
+      price: hasDestMetro ? 45 : 35,
+      distanceKm: hasDestMetro ? 9 : 10,
+      carbonKg: hasDestMetro ? 0.5 : 0.7,
+      comfortScore: hasDestMetro ? 8.5 : 7.2,
+    },
+  });
 
-    // 5. COMFORTABLE: Executive Sedan -> Shatabdi 1st AC -> Executive Sedan
-    {
-      category: 'comfortable' as RecommendationCategory,
-      title: 'Executive Comfort SyncPass (Chauffeur + 1st AC Rail)',
-      summaryTemplate: `First-class travel experience with dedicated door-to-station executive sedan pickup and spacious 1st AC carriage.`,
-      rankReason: 'Ranked #1 for Comfort. Features dedicated chauffeur transfers, lounge access, and premium legroom.',
-      firstMile: {
-        mode: 'cab' as TransportMode,
-        provider: `KogniSync Executive Chauffeur (${originHubs.parentCity})`,
-        vehicleName: 'Luxury Electric Sedan',
-        hubType: 'rail' as const,
-        durationMin: 25,
-        price: 450,
-        distanceKm: 13,
-        carbonKg: 3.4,
-        comfortScore: 9.8,
-        transferBufferMin: 20,
-      },
-      mainTransport: {
-        mode: 'train' as TransportMode,
-        provider: 'Indian Railways Shatabdi',
-        vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Executive Express`,
-        vehicleNumber: `${12000 + (Math.abs(routeDistanceKm * 2) % 999)}`,
-        durationMin: trainComfortDurationMin,
-        price: trainComfortPrice,
-        distanceKm: routeDistanceKm,
-        carbonKg: Number((routeDistanceKm * 0.026).toFixed(1)),
-        comfortScore: 9.7,
-        seatClass: 'Executive AC Chair (1st Class)',
-        notes: 'Includes hot meals, refreshment service, and station VIP lounge access.',
-        transferBufferMin: 20,
-      },
-      lastMile: {
-        mode: 'cab' as TransportMode,
-        provider: `KogniSync Executive Chauffeur (${destHubs.parentCity})`,
-        vehicleName: 'Luxury Electric Sedan',
-        durationMin: 25,
-        price: 500,
-        distanceKm: 12,
-        carbonKg: 3.2,
-        comfortScore: 9.8,
-      },
+  // 5. COMFORTABLE: Executive Sedan -> Shatabdi 1st AC -> Executive Sedan
+  archetypes.push({
+    category: 'comfortable' as RecommendationCategory,
+    title: 'Executive Comfort SyncPass (Chauffeur + 1st AC Rail)',
+    summaryTemplate: `First-class travel experience with dedicated door-to-station executive sedan pickup and spacious 1st AC carriage.`,
+    rankReason: 'Ranked #1 for Comfort. Features dedicated chauffeur transfers, lounge access, and premium legroom.',
+    firstMile: {
+      mode: 'cab' as TransportMode,
+      provider: `KogniSync Executive Chauffeur (${originHubs.parentCity})`,
+      vehicleName: 'Luxury Electric Sedan',
+      hubType: 'rail' as const,
+      durationMin: 25,
+      price: 450,
+      distanceKm: 13,
+      carbonKg: 3.4,
+      comfortScore: 9.8,
+      transferBufferMin: 20,
     },
-  ];
+    mainTransport: {
+      mode: 'train' as TransportMode,
+      provider: 'Indian Railways Shatabdi',
+      vehicleName: `${originHubs.parentCity} - ${destHubs.parentCity} Executive Express (Estimated Schedule)`,
+      vehicleNumber: undefined,
+      durationMin: trainComfortDurationMin,
+      price: trainComfortPrice,
+      distanceKm: routeDistanceKm,
+      carbonKg: Number((routeDistanceKm * 0.026).toFixed(1)),
+      comfortScore: 9.7,
+      seatClass: 'Executive AC Chair (1st Class)',
+      notes: 'Premium day-express rail corridor estimate. Seat availability and schedule require IRCTC verification.',
+      transferBufferMin: 20,
+    },
+    lastMile: {
+      mode: 'cab' as TransportMode,
+      provider: `KogniSync Executive Chauffeur (${destHubs.parentCity})`,
+      vehicleName: 'Luxury Electric Sedan',
+      durationMin: 25,
+      price: 500,
+      distanceKm: 12,
+      carbonKg: 3.2,
+      comfortScore: 9.8,
+    },
+  });
 
   // 2. Compose each archetype into a complete journey with backward timing anchored to deadline
   const journeys: Journey[] = archetypes.map((arch, archIdx) => {
     // Select the appropriate hubs based on archetype's main mode
     const depHub = arch.firstMile.hubType === 'air'
-      ? originHubs.airportHub
+      ? originHubs.airportHub!
       : arch.firstMile.hubType === 'bus'
         ? originHubs.busHub
-        : arch.firstMile.hubType === 'metro'
-          ? originHubs.metroHub
-          : originHubs.railwayHub;
+        : originHubs.railwayHub;
 
     const arrHub = arch.firstMile.hubType === 'air'
-      ? destHubs.airportHub
+      ? destHubs.airportHub!
       : arch.firstMile.hubType === 'bus'
         ? destHubs.busHub
-        : arch.firstMile.hubType === 'metro'
-          ? destHubs.metroHub
-          : destHubs.railwayHub;
+        : destHubs.railwayHub;
 
     // Anchor arrival safely before user's deadline
     const arrivalBufferMin = 15 + (archIdx * 5); // 15 to 35 min buffer
@@ -1134,6 +1268,20 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       },
     });
 
+    const leg1Note =
+      arch.firstMile.mode === 'cab' && depHub.type === 'airport'
+        ? (originHubs.isAirportGateway
+            ? `Ground transfer to external regional airport gateway: ${depHub.name} (${originHubs.airportGatewayCity || depHub.city}). Estimated road transit: ${arch.firstMile.durationMin}m with ${arch.firstMile.transferBufferMin}m terminal buffer.`
+            : `Airport express transfer connecting ${originHubs.userNode.name} to ${depHub.name}. Estimated road transit: ${arch.firstMile.durationMin}m with ${arch.firstMile.transferBufferMin}m terminal buffer.`)
+        : `Feeder pickup at ${originHubs.userNode.name}. Planning assumption: ${arch.firstMile.transferBufferMin}m transfer buffer at ${depHub.name}.`;
+
+    const leg3Note =
+      arch.lastMile.mode === 'cab' && arrHub.type === 'airport'
+        ? (destHubs.isAirportGateway
+            ? `Ground transfer from external regional airport gateway: ${arrHub.name} (${destHubs.airportGatewayCity || arrHub.city}). Estimated road transit: ${arch.lastMile.durationMin}m.`
+            : `Airport arrival transfer connecting ${arrHub.name} to ${destHubs.userNode.name}. Estimated road transit: ${arch.lastMile.durationMin}m.`)
+        : `Final transfer to ${destHubs.userNode.name}. Estimated connection from ${arrHub.name}.`;
+
     // Build ordered segments
     const segment1: JourneySegment = {
       segmentId: `seg-${routeSlug}-${arch.category}-01`,
@@ -1148,12 +1296,12 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       durationMinutes: arch.firstMile.durationMin,
       price: arch.firstMile.price,
       currency: 'INR',
-      availability: { status: 'available', remainingUnits: 45, isRealInventory: false },
+      availability: { status: 'available', remainingUnits: undefined, isRealInventory: false },
       distanceKm: arch.firstMile.distanceKm,
       carbonKg: arch.firstMile.carbonKg,
       comfortScore: arch.firstMile.comfortScore,
       transferBufferMinutes: arch.firstMile.transferBufferMin,
-      notes: `Direct pickup at ${originHubs.userNode.name}. Sync transfer buffer: ${arch.firstMile.transferBufferMin}m.`,
+      notes: leg1Note,
       provenance: buildFallbackSegmentProvenance(arch.firstMile.provider),
     };
 
@@ -1171,13 +1319,13 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       durationMinutes: arch.mainTransport.durationMin,
       price: arch.mainTransport.price,
       currency: 'INR',
-      availability: { status: 'available', remainingUnits: 18, isRealInventory: false },
+      availability: { status: 'available', remainingUnits: undefined, isRealInventory: false },
       distanceKm: arch.mainTransport.distanceKm,
       carbonKg: arch.mainTransport.carbonKg,
       comfortScore: arch.mainTransport.comfortScore,
       seatClass: arch.mainTransport.seatClass,
       transferBufferMinutes: arch.mainTransport.transferBufferMin,
-      notes: arch.mainTransport.notes,
+      notes: `${arch.mainTransport.notes} Planning assumption: ${arch.mainTransport.transferBufferMin}m transfer buffer at ${arrHub.name}.`,
       provenance: buildFallbackSegmentProvenance(arch.mainTransport.provider),
     };
 
@@ -1194,11 +1342,11 @@ export function composeMultiModalJourneys(request: TravelRequest): Journey[] {
       durationMinutes: arch.lastMile.durationMin,
       price: arch.lastMile.price,
       currency: 'INR',
-      availability: { status: 'available', remainingUnits: 99, isRealInventory: false },
+      availability: { status: 'available', remainingUnits: undefined, isRealInventory: false },
       distanceKm: arch.lastMile.distanceKm,
       carbonKg: arch.lastMile.carbonKg,
       comfortScore: arch.lastMile.comfortScore,
-      notes: `Final transfer to ${destHubs.userNode.name}. Driver will meet at ${arrHub.name} arrival exit.`,
+      notes: leg3Note,
       provenance: buildFallbackSegmentProvenance(arch.lastMile.provider),
     };
 

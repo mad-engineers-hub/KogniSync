@@ -26,17 +26,22 @@ class HubProfile:
     railway_code: str | None
     railway_lat: float
     railway_lng: float
-    airport_name: str
+    airport_name: str | None
     airport_code: str | None
-    airport_lat: float
-    airport_lng: float
+    airport_lat: float | None
+    airport_lng: float | None
     bus_name: str
     bus_lat: float
     bus_lng: float
-    metro_name: str
-    metro_lat: float
-    metro_lng: float
+    metro_name: str | None
+    metro_lat: float | None
+    metro_lng: float | None
     has_metro: bool
+    has_airport: bool = True
+    has_local_airport: bool = True
+    is_airport_gateway: bool = False
+    airport_gateway_city: str | None = None
+    airport_city: str | None = None
 
 
 CITY_HUB_REGISTRY: dict[str, HubProfile] = {
@@ -135,10 +140,11 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         bus_name="Panaji KADAMBA Bus Stand",
         bus_lat=15.4989,
         bus_lng=73.8278,
-        metro_name="Goa Coastal Rapid EV Transit",
-        metro_lat=15.4950,
-        metro_lng=73.8300,
+        metro_name=None,
+        metro_lat=None,
+        metro_lng=None,
         has_metro=False,
+        has_airport=True,
     ),
     "udupi": HubProfile(
         city="Udupi",
@@ -155,10 +161,15 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         bus_name="Udupi Central Bus Stand",
         bus_lat=13.3415,
         bus_lng=74.7473,
-        metro_name="Coastal Green Rapid EV Shuttle",
-        metro_lat=13.3420,
-        metro_lng=74.7450,
+        metro_name=None,
+        metro_lat=None,
+        metro_lng=None,
         has_metro=False,
+        has_airport=True,
+        has_local_airport=False,
+        is_airport_gateway=True,
+        airport_gateway_city="Mangalore",
+        airport_city="Mangalore",
     ),
     "mangalore": HubProfile(
         city="Mangalore",
@@ -175,10 +186,11 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         bus_name="KSRTC Bejai Bus Stand",
         bus_lat=12.8872,
         bus_lng=74.8492,
-        metro_name="Mangaluru Coastal EV Express",
-        metro_lat=12.8700,
-        metro_lng=74.8500,
+        metro_name=None,
+        metro_lat=None,
+        metro_lng=None,
         has_metro=False,
+        has_airport=True,
     ),
     "hyderabad": HubProfile(
         city="Hyderabad",
@@ -315,10 +327,11 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         bus_name="Mysore KSRTC Suburb Bus Stand",
         bus_lat=12.3106,
         bus_lng=76.6567,
-        metro_name="Mysuru City Bus Transit Hub",
-        metro_lat=12.3080,
-        metro_lng=76.6530,
+        metro_name=None,
+        metro_lat=None,
+        metro_lng=None,
         has_metro=False,
+        has_airport=True,
     ),
 }
 
@@ -416,9 +429,15 @@ class ResolvedHubContext:
     parent_city: str
     user_node: LocationSchema
     railway_hub: LocationSchema
-    airport_hub: LocationSchema
+    airport_hub: LocationSchema | None
     bus_hub: LocationSchema
-    metro_hub: LocationSchema
+    metro_hub: LocationSchema | None
+    has_airport: bool = False
+    has_metro: bool = False
+    has_local_airport: bool = False
+    is_airport_gateway: bool = False
+    airport_gateway_city: str | None = None
+    airport_city: str | None = None
 
 
 def _hub_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -597,8 +616,8 @@ def resolve_hub_context(
         else:
             # Rule 3: Stale collision or missing custom coords -> use canonical centroid
             user_coords = CoordinatesSchema(
-                lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
-                lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
+                lat=profile.lat,
+                lng=profile.lng,
             )
     else:
         from app.services.location.service import location_service
@@ -635,17 +654,18 @@ def resolve_hub_context(
             railway_code=None,
             railway_lat=round(def_lat + 0.005, 4),
             railway_lng=round(def_lng + 0.005, 4),
-            airport_name=f"{dynamic_city} Regional Airport",
+            airport_name=None,
             airport_code=None,
-            airport_lat=round(def_lat + 0.12, 4),
-            airport_lng=round(def_lng + 0.08, 4),
+            airport_lat=None,
+            airport_lng=None,
             bus_name=f"{dynamic_city} Central Bus Stand",
             bus_lat=round(def_lat - 0.005, 4),
             bus_lng=round(def_lng - 0.002, 4),
-            metro_name=f"{dynamic_city} Transit Center",
-            metro_lat=def_lat,
-            metro_lng=def_lng,
+            metro_name=None,
+            metro_lat=None,
+            metro_lng=None,
             has_metro=False,
+            has_airport=False,
         )
         is_locality = False
 
@@ -666,14 +686,22 @@ def resolve_hub_context(
         coordinates=CoordinatesSchema(lat=profile.railway_lat, lng=profile.railway_lng),
     )
 
-    airport_hub = LocationSchema(
-        id=f"loc-hub-air-{slugify(profile.city)}",
-        name=profile.airport_name,
-        city=profile.city,
-        code=profile.airport_code,
-        type="airport",
-        coordinates=CoordinatesSchema(lat=profile.airport_lat, lng=profile.airport_lng),
+    airport_city = (
+        getattr(profile, "airport_city", None)
+        or (profile.airport_gateway_city if getattr(profile, "is_airport_gateway", False) else None)
+        or profile.city
     )
+
+    airport_hub: LocationSchema | None = None
+    if profile.has_airport and profile.airport_name and profile.airport_lat is not None and profile.airport_lng is not None:
+        airport_hub = LocationSchema(
+            id=f"loc-hub-air-{slugify(airport_city)}",
+            name=profile.airport_name,
+            city=airport_city,
+            code=profile.airport_code,
+            type="airport",
+            coordinates=CoordinatesSchema(lat=profile.airport_lat, lng=profile.airport_lng),
+        )
 
     bus_hub = LocationSchema(
         id=f"loc-hub-bus-{slugify(profile.city)}",
@@ -683,13 +711,15 @@ def resolve_hub_context(
         coordinates=CoordinatesSchema(lat=profile.bus_lat, lng=profile.bus_lng),
     )
 
-    metro_hub = LocationSchema(
-        id=f"loc-hub-metro-{slugify(profile.city)}",
-        name=profile.metro_name,
-        city=profile.city,
-        type="metro_station",
-        coordinates=CoordinatesSchema(lat=profile.metro_lat, lng=profile.metro_lng),
-    )
+    metro_hub: LocationSchema | None = None
+    if profile.has_metro and profile.metro_name and profile.metro_lat is not None and profile.metro_lng is not None:
+        metro_hub = LocationSchema(
+            id=f"loc-hub-metro-{slugify(profile.city)}",
+            name=profile.metro_name,
+            city=profile.city,
+            type="metro_station",
+            coordinates=CoordinatesSchema(lat=profile.metro_lat, lng=profile.metro_lng),
+        )
 
     return ResolvedHubContext(
         raw_location=raw,
@@ -700,6 +730,12 @@ def resolve_hub_context(
         airport_hub=airport_hub,
         bus_hub=bus_hub,
         metro_hub=metro_hub,
+        has_airport=profile.has_airport,
+        has_metro=profile.has_metro,
+        has_local_airport=getattr(profile, "has_local_airport", profile.has_airport),
+        is_airport_gateway=getattr(profile, "is_airport_gateway", False),
+        airport_gateway_city=getattr(profile, "airport_gateway_city", None),
+        airport_city=airport_city if profile.has_airport else None,
     )
 
 
@@ -812,19 +848,17 @@ def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
             "cab": {"provider": "GoaMiles Express Taxi", "vehicle_name": "Airport Shuttle Sedan"},
             "rapido": {"provider": "Goa Coastal Bike Taxi", "vehicle_name": "Rapid Motorbike Pilot"},
             "bus": {"provider": "Kadamba Transport Shuttle", "vehicle_name": "Kadamba EV Feeder"},
-            "metro": {"provider": "Goa Coastal Rapid EV Shuttle", "vehicle_name": "Zero-Emission EV Transit"},
         }
     if "udupi" in c or "mangalore" in c:
         return {
             "cab": {"provider": "Coastal Express Taxi (Udupi/Mangalore)", "vehicle_name": "Inter-City Sedan"},
             "rapido": {"provider": "Coastal Auto QuickSync", "vehicle_name": "Rapid City Auto"},
             "bus": {"provider": "Udupi-Manipal Express City Bus", "vehicle_name": "City Feeder Bus"},
-            "metro": {"provider": "Coastal Green Rapid EV Shuttle", "vehicle_name": "Zero-Emission EV Shuttle"},
         }
     if "hyderabad" in c:
         return {
             "cab": {"provider": "KogniSync MetroCab (Hyderabad)", "vehicle_name": "Airport Express Sedan"},
-            "rapido": {"provider": "Rapido QuickSync Hyderabad", "vehicle_name": "Rapido Auto / Bike"},
+            "rapido": {"provider": "Rapido QuickSync Hyderabad", "vehicle_name": "Rapid Auto / Bike"},
             "bus": {"provider": "TSRTC Pushpak Airport Liner", "vehicle_name": "Electric AC Liner"},
             "metro": {"provider": "Hyderabad Metro Red Line", "vehicle_name": "Metro Electric Transit"},
         }
@@ -835,10 +869,37 @@ def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
             "bus": {"provider": "PMPML Rainbow BRTS Feeder", "vehicle_name": "BRTS Electric Bus"},
             "metro": {"provider": "Pune Metro Aqua Line", "vehicle_name": "Metro Electric Transit"},
         }
+    if "kolkata" in c:
+        return {
+            "cab": {"provider": "KogniSync Priority SyncCab (Kolkata)", "vehicle_name": "Yellow City Sedan"},
+            "rapido": {"provider": "Rapido QuickSync Kolkata", "vehicle_name": "Rapido Auto / Bike"},
+            "bus": {"provider": "CSTC Electric City Feeder", "vehicle_name": "City Transit Bus"},
+            "metro": {"provider": "Kolkata Metro Blue Line", "vehicle_name": "Metro Electric Transit"},
+        }
+    if "jaipur" in c:
+        return {
+            "cab": {"provider": "KogniSync Priority SyncCab (Jaipur)", "vehicle_name": "Pink City Sedan"},
+            "rapido": {"provider": "Rapido QuickSync Jaipur", "vehicle_name": "Rapido Auto / Bike"},
+            "bus": {"provider": "JCTSL City Feeder", "vehicle_name": "City Transit Bus"},
+            "metro": {"provider": "Jaipur Metro Pink Line", "vehicle_name": "Metro Electric Transit"},
+        }
+    if "ahmedabad" in c:
+        return {
+            "cab": {"provider": "KogniSync Priority SyncCab (Ahmedabad)", "vehicle_name": "City Express Sedan"},
+            "rapido": {"provider": "Rapido QuickSync Ahmedabad", "vehicle_name": "Rapido Auto / Bike"},
+            "bus": {"provider": "AMTS Electric Feeder", "vehicle_name": "City Transit Bus"},
+            "metro": {"provider": "Gujarat Metro Red Line", "vehicle_name": "Metro Electric Transit"},
+        }
+    if "kochi" in c:
+        return {
+            "cab": {"provider": "KogniSync Priority SyncCab (Kochi)", "vehicle_name": "Airport Taxi Sedan"},
+            "rapido": {"provider": "Rapido QuickSync Kochi", "vehicle_name": "Rapido Auto / Bike"},
+            "bus": {"provider": "KSRTC Kochi City Circular", "vehicle_name": "Low-Floor Electric Bus"},
+            "metro": {"provider": "Kochi Metro Rail Transit", "vehicle_name": "Metro Electric Transit"},
+        }
 
     return {
         "cab": {"provider": f"KogniSync Priority SyncCab ({city_name})", "vehicle_name": "Priority City Sedan"},
         "rapido": {"provider": f"Rapido QuickSync {city_name}", "vehicle_name": "Rapido Auto / Bike"},
         "bus": {"provider": f"{city_name} City Feeder Bus", "vehicle_name": "City Transit Line"},
-        "metro": {"provider": f"{city_name} Rapid EV Shuttle", "vehicle_name": "Zero-Emission EV Transit"},
     }
