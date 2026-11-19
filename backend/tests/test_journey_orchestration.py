@@ -439,12 +439,17 @@ def test_13_udupi_to_chennai_infrastructure_validity():
     from app.services.journey.hubs import resolve_hub_context
 
     hub_udupi = resolve_hub_context("Udupi", is_origin=True)
+    assert hub_udupi.user_node.city == "Udupi", "Udupi user node city must be Udupi"
+    assert hub_udupi.parent_city == "Udupi"
     assert hub_udupi.metro_hub is None, "Udupi has no operational metro system"
     assert not hub_udupi.has_metro, "Udupi has_metro must be False"
     # Udupi airport references Mangalore (IXE) as regional gateway, not a fake "Udupi Regional Airport"
     assert "udupi regional airport" not in (hub_udupi.airport_hub.name.lower() if hub_udupi.airport_hub else "")
     assert hub_udupi.airport_hub is not None
     assert hub_udupi.airport_hub.code == "IXE"
+    assert hub_udupi.airport_hub.name == "Mangalore International Airport (IXE)"
+    assert hub_udupi.airport_hub.city == "Mangalore", "IXE airport location city must be Mangalore"
+    assert hub_udupi.airport_city == "Mangalore"
     assert hub_udupi.has_local_airport is False, "Udupi must not have a local physical airport"
     assert hub_udupi.is_airport_gateway is True, "Udupi must be marked as using an external airport gateway"
     assert hub_udupi.airport_gateway_city == "Mangalore"
@@ -483,20 +488,71 @@ def test_13_udupi_to_chennai_infrastructure_validity():
     # Fastest journey: Air corridor via IXE (Mangalore), realistic feeder distance (>50km), no invented vehicle numbers
     fastest = next((j for j in data["journeys"] if j["recommendationCategory"] == "fastest"), None)
     assert fastest is not None
+    assert fastest["origin"]["city"] == "Udupi", "Traveller origin city must remain Udupi"
+    assert fastest["destination"]["city"] == "Chennai"
     assert fastest["segments"][1]["mode"] == "flight"
     assert fastest["segments"][1].get("vehicleNumber") is None, "Flight vehicleNumber must be None"
     assert fastest["segments"][1]["availability"]["remainingUnits"] is None
+    # Serialized flight segment endpoints must use airport actual city (Mangalore -> Chennai)
+    assert fastest["segments"][1]["origin"]["city"] == "Mangalore", "Flight origin airport city must be Mangalore"
+    assert fastest["segments"][1]["origin"]["name"] == "Mangalore International Airport (IXE)"
+    assert fastest["segments"][1]["origin"]["code"] == "IXE"
+    assert fastest["segments"][1]["destination"]["city"] == "Chennai"
+    assert fastest["segments"][1]["destination"]["code"] == "MAA"
+
     feeder_air = fastest["segments"][0]
     assert feeder_air["mode"] == "cab"
+    assert feeder_air["origin"]["city"] == "Udupi", "Feeder starts at Udupi"
+    assert feeder_air["destination"]["city"] == "Mangalore", "Feeder destination airport city must be Mangalore"
+    assert feeder_air["destination"]["name"] == "Mangalore International Airport (IXE)"
+    assert feeder_air["destination"]["code"] == "IXE"
+    assert feeder_air["destination"]["coordinates"]["lat"] == 12.9613
+    assert feeder_air["destination"]["coordinates"]["lng"] == 74.8901
     assert feeder_air["distanceKm"] == 56.4, f"Udupi to IXE feeder estimated road distance must be 56.4km, got {feeder_air['distanceKm']}"
     assert feeder_air["durationMinutes"] == 75, f"Udupi to IXE feeder estimated road duration must be 75min, got {feeder_air['durationMinutes']}"
     assert feeder_air["price"] == 1215.0, f"Udupi to IXE feeder cab fare must be ₹1,215, got {feeder_air['price']}"
     assert "Ground transfer to external regional airport gateway: Mangalore International Airport (IXE)" in feeder_air["notes"]
     assert feeder_air["availability"]["remainingUnits"] is None
 
+    # Reverse journey (Chennai -> Udupi): verify last-mile gateway transfer to Udupi
+    resp_rev = client.post("/api/v1/journeys/search", json={
+        "origin": "Chennai",
+        "destination": "Udupi",
+        "departure_date": "2026-11-21",
+        "passengers_count": 1,
+    })
+    assert resp_rev.status_code == 200
+    fastest_rev = next((j for j in resp_rev.json()["journeys"] if j["recommendationCategory"] == "fastest"), None)
+    assert fastest_rev is not None
+    assert fastest_rev["origin"]["city"] == "Chennai"
+    assert fastest_rev["destination"]["city"] == "Udupi", "Traveller destination city must remain Udupi"
+    assert fastest_rev["segments"][1]["destination"]["city"] == "Mangalore", "Flight destination airport city must be Mangalore"
+    assert fastest_rev["segments"][1]["destination"]["code"] == "IXE"
+    assert fastest_rev["segments"][2]["origin"]["city"] == "Mangalore", "Last-mile feeder origin airport city must be Mangalore"
+    assert fastest_rev["segments"][2]["destination"]["city"] == "Udupi", "Last-mile feeder destination city must be Udupi"
+    assert "Ground transfer from external regional airport gateway: Mangalore International Airport (IXE)" in fastest_rev["segments"][2]["notes"]
+
 
 def test_14_bangalore_to_delhi_retains_flight_and_metro():
     """Verify Bangalore -> Delhi correctly retains commercial flight and operational metro lines (M4.1.1)."""
+    from app.services.journey.hubs import resolve_hub_context
+
+    hub_blr = resolve_hub_context("Bangalore", is_origin=True)
+    assert hub_blr.user_node.city == "Bangalore"
+    assert hub_blr.airport_hub is not None
+    assert hub_blr.airport_hub.city == "Bangalore", "Local airport city must match host city"
+    assert hub_blr.airport_hub.code == "BLR"
+    assert hub_blr.has_local_airport is True
+    assert hub_blr.is_airport_gateway is False
+
+    hub_del = resolve_hub_context("Delhi", is_origin=False)
+    assert hub_del.user_node.city == "Delhi"
+    assert hub_del.airport_hub is not None
+    assert hub_del.airport_hub.city == "Delhi", "Local airport city must match host city"
+    assert hub_del.airport_hub.code == "DEL"
+    assert hub_del.has_local_airport is True
+    assert hub_del.is_airport_gateway is False
+
     payload = {
         "origin": "Bangalore",
         "destination": "Delhi",
@@ -510,11 +566,17 @@ def test_14_bangalore_to_delhi_retains_flight_and_metro():
     assert data["totalCandidates"] == 5, "Authorized air corridor must produce all 5 archetypes"
     fastest = next((j for j in data["journeys"] if j["recommendationCategory"] == "fastest"), None)
     assert fastest is not None
+    assert fastest["origin"]["city"] == "Bangalore"
+    assert fastest["destination"]["city"] == "Delhi"
     flight_seg = fastest["segments"][1]
     assert flight_seg["mode"] == "flight"
     assert flight_seg.get("vehicleNumber") is None, "Commercial flight vehicleNumber must be None for ungrounded inventory"
     assert flight_seg["availability"]["remainingUnits"] is None, "Ungrounded flight remainingUnits must be None"
+    assert flight_seg["origin"]["city"] == "Bangalore"
+    assert flight_seg["origin"]["code"] == "BLR"
     assert "Kempegowda" in flight_seg["origin"]["name"]
+    assert flight_seg["destination"]["city"] == "Delhi"
+    assert flight_seg["destination"]["code"] == "DEL"
     assert "Indira Gandhi" in flight_seg["destination"]["name"]
 
     greenest = next((j for j in data["journeys"] if j["recommendationCategory"] == "greenest"), None)

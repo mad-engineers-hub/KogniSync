@@ -27,6 +27,7 @@ export interface CityHubProfile {
   hasLocalAirport?: boolean;
   isAirportGateway?: boolean;
   airportGatewayCity?: string;
+  airportCity?: string;
 }
 
 export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
@@ -96,6 +97,7 @@ export const CITY_HUB_REGISTRY: Record<string, CityHubProfile> = {
     hasLocalAirport: false,
     isAirportGateway: true,
     airportGatewayCity: 'Mangalore',
+    airportCity: 'Mangalore',
   },
   mangalore: {
     city: 'Mangalore',
@@ -459,6 +461,7 @@ export interface ResolvedHubContext {
   hasLocalAirport?: boolean;
   isAirportGateway?: boolean;
   airportGatewayCity?: string;
+  airportCity?: string;
 }
 
 export function resolveHubContext(
@@ -582,11 +585,16 @@ export function resolveHubContext(
     coordinates: { lat: profile.railwayHub.lat, lng: profile.railwayHub.lng },
   };
 
+  const airportCity = profile.airportCity
+    || (profile.airportHub as any)?.city
+    || (profile.isAirportGateway ? profile.airportGatewayCity : undefined)
+    || profile.city;
+
   const airportHub: Location | undefined = (profile.hasAirport && profile.airportHub)
     ? {
-        id: `loc-hub-air-${slugify(profile.city)}`,
+        id: `loc-hub-air-${slugify(airportCity)}`,
         name: profile.airportHub.name,
-        city: profile.city,
+        city: airportCity,
         code: profile.airportHub.code,
         type: 'airport',
         coordinates: { lat: profile.airportHub.lat, lng: profile.airportHub.lng },
@@ -625,6 +633,7 @@ export function resolveHubContext(
     hasLocalAirport: profile.hasLocalAirport ?? profile.hasAirport,
     isAirportGateway: profile.isAirportGateway ?? false,
     airportGatewayCity: profile.airportGatewayCity,
+    airportCity: profile.hasAirport ? airportCity : undefined,
   };
 }
 

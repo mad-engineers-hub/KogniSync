@@ -41,6 +41,7 @@ class HubProfile:
     has_local_airport: bool = True
     is_airport_gateway: bool = False
     airport_gateway_city: str | None = None
+    airport_city: str | None = None
 
 
 CITY_HUB_REGISTRY: dict[str, HubProfile] = {
@@ -168,6 +169,7 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         has_local_airport=False,
         is_airport_gateway=True,
         airport_gateway_city="Mangalore",
+        airport_city="Mangalore",
     ),
     "mangalore": HubProfile(
         city="Mangalore",
@@ -435,6 +437,7 @@ class ResolvedHubContext:
     has_local_airport: bool = False
     is_airport_gateway: bool = False
     airport_gateway_city: str | None = None
+    airport_city: str | None = None
 
 
 def _hub_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -683,12 +686,18 @@ def resolve_hub_context(
         coordinates=CoordinatesSchema(lat=profile.railway_lat, lng=profile.railway_lng),
     )
 
+    airport_city = (
+        getattr(profile, "airport_city", None)
+        or (profile.airport_gateway_city if getattr(profile, "is_airport_gateway", False) else None)
+        or profile.city
+    )
+
     airport_hub: LocationSchema | None = None
     if profile.has_airport and profile.airport_name and profile.airport_lat is not None and profile.airport_lng is not None:
         airport_hub = LocationSchema(
-            id=f"loc-hub-air-{slugify(profile.city)}",
+            id=f"loc-hub-air-{slugify(airport_city)}",
             name=profile.airport_name,
-            city=profile.city,
+            city=airport_city,
             code=profile.airport_code,
             type="airport",
             coordinates=CoordinatesSchema(lat=profile.airport_lat, lng=profile.airport_lng),
@@ -726,6 +735,7 @@ def resolve_hub_context(
         has_local_airport=getattr(profile, "has_local_airport", profile.has_airport),
         is_airport_gateway=getattr(profile, "is_airport_gateway", False),
         airport_gateway_city=getattr(profile, "airport_gateway_city", None),
+        airport_city=airport_city if profile.has_airport else None,
     )
 
 

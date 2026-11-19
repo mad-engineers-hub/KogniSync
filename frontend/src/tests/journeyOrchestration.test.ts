@@ -331,8 +331,22 @@ const flightSeg = blrDelFastest.segments[1];
 assert.strictEqual(flightSeg.mode, 'flight', 'Second leg must be commercial flight');
 assert.strictEqual(flightSeg.vehicleNumber, undefined, 'Flight segment must not have invented flight numbers');
 assert.strictEqual(flightSeg.availability.remainingUnits, undefined, 'Ungrounded flight must not have invented seat inventory');
+assert.strictEqual(flightSeg.origin.city, 'Bangalore', 'Flight origin city must match airport city');
+assert.strictEqual(flightSeg.destination.city, 'Delhi', 'Flight destination city must match airport city');
 assert(flightSeg.origin.name.includes('Kempegowda'), 'Flight origin must be Kempegowda');
 assert(flightSeg.destination.name.includes('Indira Gandhi'), 'Flight destination must be Indira Gandhi');
+
+const hubBlr = resolveHubContext('Bangalore', true);
+assert.strictEqual(hubBlr.userNode.city, 'Bangalore');
+assert.strictEqual(hubBlr.airportHub?.city, 'Bangalore');
+assert.strictEqual(hubBlr.hasLocalAirport, true);
+assert.strictEqual(hubBlr.isAirportGateway, false);
+
+const hubDel = resolveHubContext('Delhi', false);
+assert.strictEqual(hubDel.userNode.city, 'Delhi');
+assert.strictEqual(hubDel.airportHub?.city, 'Delhi');
+assert.strictEqual(hubDel.hasLocalAirport, true);
+assert.strictEqual(hubDel.isAirportGateway, false);
 
 const blrDelGreenest = blrDelJourneys.find(j => j.recommendationCategory === 'greenest');
 assert(blrDelGreenest, 'Greenest archetype must be present');
@@ -347,9 +361,16 @@ console.log('✓ Bangalore -> Delhi retained commercial flight and operational m
 // ============================================================================
 console.log('\n--- Test 15: M4.1.1 Udupi/Mangalore Gateway Physical Credibility ---');
 const hubUdupi = resolveHubContext('Udupi', true);
+assert.strictEqual(hubUdupi.userNode.city, 'Udupi', 'Udupi user node city must be Udupi');
 assert.strictEqual(hubUdupi.hasLocalAirport, false, 'Udupi has no physical airport in city limits');
 assert.strictEqual(hubUdupi.isAirportGateway, true, 'Udupi uses external regional airport gateway');
 assert.strictEqual(hubUdupi.airportGatewayCity, 'Mangalore', 'Udupi gateway city is Mangalore');
+assert.strictEqual(hubUdupi.airportCity, 'Mangalore', 'Udupi airportCity must be Mangalore');
+assert.strictEqual(hubUdupi.airportHub?.city, 'Mangalore', 'IXE airport location city must be Mangalore');
+assert.strictEqual(hubUdupi.airportHub?.name, 'Mangalore International Airport (IXE)');
+assert.strictEqual(hubUdupi.airportHub?.code, 'IXE', 'IXE airport code must be preserved');
+assert.strictEqual(hubUdupi.airportHub?.coordinates.lat, 12.9613);
+assert.strictEqual(hubUdupi.airportHub?.coordinates.lng, 74.8901);
 assert.strictEqual(hubUdupi.userNode.coordinates.lat, 13.3409);
 assert.strictEqual(hubUdupi.userNode.coordinates.lng, 74.7421);
 
@@ -359,8 +380,16 @@ assert.strictEqual(gcDist, 45.1, `Expected 45.1 km great-circle distance, got ${
 
 const udupiFastest = udupiJourneys.find(j => j.recommendationCategory === 'fastest');
 assert(udupiFastest, 'Fastest flight option must be present for Chennai -> Udupi');
+assert.strictEqual(udupiFastest.destination.city, 'Udupi', 'Traveller destination city must be Udupi');
+// Flight segment endpoint cities
+assert.strictEqual(udupiFastest.segments[1].origin.city, 'Chennai');
+assert.strictEqual(udupiFastest.segments[1].destination.city, 'Mangalore', 'Flight destination airport city must be Mangalore');
+assert.strictEqual(udupiFastest.segments[1].destination.code, 'IXE');
+
 const lastMileToUdupi = udupiFastest.segments[2];
 assert.strictEqual(lastMileToUdupi.mode, 'cab', 'Last mile from IXE to Udupi must be cab');
+assert.strictEqual(lastMileToUdupi.origin.city, 'Mangalore', 'Feeder origin airport city must be Mangalore');
+assert.strictEqual(lastMileToUdupi.destination.city, 'Udupi', 'Feeder destination city must be Udupi');
 assert.strictEqual(lastMileToUdupi.distanceKm, 56.4, `Feeder distance IXE -> Udupi must be 56.4km, got ${lastMileToUdupi.distanceKm}`);
 assert.strictEqual(lastMileToUdupi.durationMinutes, 75, `Feeder duration IXE -> Udupi must be 75min, got ${lastMileToUdupi.durationMinutes}`);
 assert.strictEqual(lastMileToUdupi.price, 1165, `Feeder price IXE -> Udupi must be 1165, got ${lastMileToUdupi.price}`);
@@ -368,10 +397,29 @@ assert(lastMileToUdupi.notes?.includes('Ground transfer from external regional a
 assert.strictEqual(udupiFastest.segments[1].vehicleNumber, undefined, 'Flight vehicle number must be undefined');
 assert.strictEqual(udupiFastest.segments[1].availability.remainingUnits, undefined, 'Flight remaining units must be undefined');
 
+// Udupi -> Chennai outbound journey verification
+const udupiToChennaiJourneys = composeMultiModalJourneys({
+  origin: 'Udupi',
+  destination: 'Chennai',
+  departureDate: '2026-11-21',
+  passengersCount: 1,
+  weights: { cost: 0.1, duration: 0.9, comfort: 0.0, carbon: 0.0 },
+});
+const udupiToCheFastest = udupiToChennaiJourneys.find(j => j.recommendationCategory === 'fastest');
+assert(udupiToCheFastest, 'Udupi -> Chennai fastest journey must exist');
+assert.strictEqual(udupiToCheFastest.origin.city, 'Udupi');
+assert.strictEqual(udupiToCheFastest.destination.city, 'Chennai');
+assert.strictEqual(udupiToCheFastest.segments[0].origin.city, 'Udupi');
+assert.strictEqual(udupiToCheFastest.segments[0].destination.city, 'Mangalore', 'First mile destination must be Mangalore IXE');
+assert.strictEqual(udupiToCheFastest.segments[0].destination.name, 'Mangalore International Airport (IXE)');
+assert.strictEqual(udupiToCheFastest.segments[1].origin.city, 'Mangalore', 'Flight leg origin must be Mangalore IXE');
+assert.strictEqual(udupiToCheFastest.segments[1].destination.city, 'Chennai');
+assert(udupiToCheFastest.segments[0].notes?.includes('Ground transfer to external regional airport gateway: Mangalore International Airport (IXE)'));
+
 const udupiGreenest = udupiJourneys.find(j => j.recommendationCategory === 'greenest');
 assert(udupiGreenest, 'Greenest option must be present');
 assert(udupiGreenest.title.includes('Eco-Transit Corridor'), 'Greenest title must be Eco-Transit Corridor');
-console.log('✓ Udupi gateway physical credibility verified (gateway semantics, 45.1km GC, 56.4km road, 75min duration, ₹1,165 fare, ungrounded vehicle numbers undefined).');
+console.log('✓ Udupi gateway physical credibility verified (gateway semantics, Mangalore airport city, 45.1km GC, 56.4km road, 75min duration, ₹1,165 fare, ungrounded vehicle numbers undefined).');
 
 console.log('\n=================================================================');
 console.log('ALL 15 TESTS PASSED SUCCESSFULLY! ✓');
