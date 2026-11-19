@@ -46,6 +46,7 @@ from app.services.journey.connection_validator import (
     ConnectionEvaluationResult,
 )
 from app.services.journey.hubs import (
+    _hub_distance_km,
     build_iso_date,
     estimate_corridor_distance_km,
     get_local_transit_operators,
@@ -567,10 +568,65 @@ class JourneyOrchestrationService:
             if not p.is_available():
                 provider_status[p.provider_id] = "unconfigured_fallback_deterministic"
 
-        # 5 Multimodal Archetype definitions
-        archetypes: list[ArchetypeDefinition] = [
-            # 1. FASTEST
-            {
+        # Infrastructure validity checks for multimodal archetypes
+        has_flight_infrastructure = bool(
+            origin_hubs.has_airport
+            and dest_hubs.has_airport
+            and origin_hubs.airport_hub is not None
+            and dest_hubs.airport_hub is not None
+        )
+        has_origin_metro = bool(
+            origin_hubs.has_metro
+            and origin_hubs.metro_hub is not None
+            and "metro" in origin_ops
+        )
+        has_dest_metro = bool(
+            dest_hubs.has_metro
+            and dest_hubs.metro_hub is not None
+            and "metro" in dest_ops
+        )
+
+        # Multimodal Archetype definitions
+        archetypes: list[ArchetypeDefinition] = []
+
+        # 1. FASTEST (SyncAir) - Gated strictly by verified commercial airport infrastructure
+        if has_flight_infrastructure:
+            # Geographically credible airport feeder calculation based on actual node coordinates
+            orig_air_dist_raw = _hub_distance_km(
+                origin_hubs.user_node.coordinates.lat,
+                origin_hubs.user_node.coordinates.lng,
+                origin_hubs.airport_hub.coordinates.lat,
+                origin_hubs.airport_hub.coordinates.lng,
+            )
+            dest_air_dist_raw = _hub_distance_km(
+                dest_hubs.airport_hub.coordinates.lat,
+                dest_hubs.airport_hub.coordinates.lng,
+                dest_hubs.user_node.coordinates.lat,
+                dest_hubs.user_node.coordinates.lng,
+            )
+            first_mile_air_dist = max(10.0, round(orig_air_dist_raw * 1.25, 1))
+            first_mile_air_dur = max(20, round((first_mile_air_dist / 45.0) * 60))
+            first_mile_air_price = round(200.0 + first_mile_air_dist * 18.0)
+
+            last_mile_air_dist = max(8.0, round(dest_air_dist_raw * 1.25, 1))
+            last_mile_air_dur = max(20, round((last_mile_air_dist / 45.0) * 60))
+            last_mile_air_price = round(150.0 + last_mile_air_dist * 18.0)
+
+            air_corridor_dist = max(
+                50,
+                round(
+                    _hub_distance_km(
+                        origin_hubs.airport_hub.coordinates.lat,
+                        origin_hubs.airport_hub.coordinates.lng,
+                        dest_hubs.airport_hub.coordinates.lat,
+                        dest_hubs.airport_hub.coordinates.lng,
+                    )
+                ),
+            )
+            calibrated_flight_dur = round(45 + (air_corridor_dist / 750.0) * 60)
+            calibrated_flight_price = round(1800 + air_corridor_dist * 2.3)
+
+            archetypes.append({
                 "category": "fastest",
                 "title": "SyncAir Multi-Modal Link (Air + Priority SyncCab)",
                 "summary": f"Fastest door-to-door arrival connecting {origin_hubs.user_node.name} to {dest_hubs.user_node.name} via commercial air express and synchronized priority cabs.",
@@ -580,221 +636,224 @@ class JourneyOrchestrationService:
                     "provider": origin_ops["cab"]["provider"],
                     "vehicle_name": origin_ops["cab"]["vehicle_name"],
                     "hub": origin_hubs.airport_hub,
-                    "duration_min": 35,
-                    "price": 650.0,
-                    "distance_km": 34.0,
-                    "carbon_kg": 5.2,
+                    "duration_min": first_mile_air_dur,
+                    "price": float(first_mile_air_price),
+                    "distance_km": float(first_mile_air_dist),
+                    "carbon_kg": round(first_mile_air_dist * 0.15, 1),
                     "comfort_score": 8.8,
                     "transfer_buffer_min": 50,
                 },
                 "main_transport": {
                     "mode": "flight",
                     "provider": "IndiGo Air Express",
-                    "vehicle_name": "Airbus A321neo",
-                    "vehicle_number": f"6E-{abs(route_distance_km * 3 + 120) % 900 + 100}",
+                    "vehicle_name": "Commercial Aircraft (Estimated Flight Corridor)",
+                    "vehicle_number": None,
                     "dep_hub": origin_hubs.airport_hub,
                     "arr_hub": dest_hubs.airport_hub,
-                    "duration_min": flight_duration_min,
-                    "price": float(flight_price),
-                    "distance_km": float(route_distance_km),
-                    "carbon_kg": round(route_distance_km * 0.082, 1),
+                    "duration_min": calibrated_flight_dur,
+                    "price": float(calibrated_flight_price),
+                    "distance_km": float(air_corridor_dist),
+                    "carbon_kg": round(air_corridor_dist * 0.082, 1),
                     "comfort_score": 8.5,
-                    "seat_class": "Economy Flex",
-                    "notes": f"Direct flight corridor from {origin_hubs.airport_hub.code or origin_hubs.parent_city} to {dest_hubs.airport_hub.code or dest_hubs.parent_city}. Priority gate sync.",
+                    "seat_class": "Economy (Estimated)",
+                    "notes": f"Estimated commercial flight corridor from {origin_hubs.airport_hub.code or origin_hubs.parent_city} to {dest_hubs.airport_hub.code or dest_hubs.parent_city}. Ungrounded in live carrier inventory; schedule, fare, and availability are non-bookable estimates.",
                     "transfer_buffer_min": 25,
                 },
                 "last_mile": {
                     "mode": "cab",
                     "provider": dest_ops["cab"]["provider"],
                     "vehicle_name": dest_ops["cab"]["vehicle_name"],
-                    "duration_min": 30,
-                    "price": 450.0,
-                    "distance_km": 18.0,
-                    "carbon_kg": 2.8,
+                    "duration_min": last_mile_air_dur,
+                    "price": float(last_mile_air_price),
+                    "distance_km": float(last_mile_air_dist),
+                    "carbon_kg": round(last_mile_air_dist * 0.15, 1),
                     "comfort_score": 8.9,
                 },
+            })
+
+        # 2. BEST VALUE
+        archetypes.append({
+            "category": "best_value",
+            "title": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Vande Bharat + Rapido QuickSync",
+            "summary": "Optimal Pareto balance: avoid urban congestion with Rapido quick transfers and 160 km/h high-speed electric rail.",
+            "rank_reason": f"Ranked #1 for Best Overall Value. Outstanding speed-to-cost ratio connecting {origin_hubs.user_node.name} to {dest_hubs.user_node.name}.",
+            "first_mile": {
+                "mode": "rapido",
+                "provider": origin_ops["rapido"]["provider"],
+                "vehicle_name": origin_ops["rapido"]["vehicle_name"],
+                "hub": origin_hubs.railway_hub,
+                "duration_min": 25,
+                "price": 180.0,
+                "distance_km": 12.0,
+                "carbon_kg": 1.6,
+                "comfort_score": 8.2,
+                "transfer_buffer_min": 15,
             },
-            # 2. BEST VALUE
-            {
-                "category": "best_value",
-                "title": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Vande Bharat + Rapido QuickSync",
-                "summary": "Optimal Pareto balance: avoid urban congestion with Rapido quick transfers and 160 km/h high-speed electric rail.",
-                "rank_reason": f"Ranked #1 for Best Overall Value. Outstanding speed-to-cost ratio connecting {origin_hubs.user_node.name} to {dest_hubs.user_node.name}.",
-                "first_mile": {
-                    "mode": "rapido",
-                    "provider": origin_ops["rapido"]["provider"],
-                    "vehicle_name": origin_ops["rapido"]["vehicle_name"],
-                    "hub": origin_hubs.railway_hub,
-                    "duration_min": 25,
-                    "price": 180.0,
-                    "distance_km": 12.0,
-                    "carbon_kg": 1.6,
-                    "comfort_score": 8.2,
-                    "transfer_buffer_min": 15,
-                },
-                "main_transport": {
-                    "mode": "train",
-                    "provider": "Indian Railways Vande Bharat",
-                    "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Vande Bharat Express",
-                    "vehicle_number": str(20000 + (abs(route_distance_km * 7) % 999)),
-                    "dep_hub": origin_hubs.railway_hub,
-                    "arr_hub": dest_hubs.railway_hub,
-                    "duration_min": train_vande_bharat_duration_min,
-                    "price": float(train_vande_bharat_price),
-                    "distance_km": float(route_distance_km),
-                    "carbon_kg": round(route_distance_km * 0.024, 1),
-                    "comfort_score": 9.3,
-                    "seat_class": "AC Chair Car (CC)",
-                    "notes": "Includes reserved ergonomic seating, onboard refreshments, and high-speed rail corridor.",
-                    "transfer_buffer_min": 15,
-                },
-                "last_mile": {
-                    "mode": "rapido",
-                    "provider": dest_ops["rapido"]["provider"],
-                    "vehicle_name": dest_ops["rapido"]["vehicle_name"],
-                    "duration_min": 25,
-                    "price": 220.0,
-                    "distance_km": 11.0,
-                    "carbon_kg": 1.5,
-                    "comfort_score": 8.2,
-                },
+            "main_transport": {
+                "mode": "train",
+                "provider": "Indian Railways Vande Bharat",
+                "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Vande Bharat Express (Estimated Schedule)",
+                "vehicle_number": None,
+                "dep_hub": origin_hubs.railway_hub,
+                "arr_hub": dest_hubs.railway_hub,
+                "duration_min": train_vande_bharat_duration_min,
+                "price": float(train_vande_bharat_price),
+                "distance_km": float(route_distance_km),
+                "carbon_kg": round(route_distance_km * 0.024, 1),
+                "comfort_score": 9.3,
+                "seat_class": "AC Chair Car (CC)",
+                "notes": "High-speed electric rail corridor estimate (160 km/h design speed). Ungrounded in live timetable; requires IRCTC verification.",
+                "transfer_buffer_min": 15,
             },
-            # 3. CHEAPEST
-            {
-                "category": "cheapest",
-                "title": "Economy Multi-Transit Link (City Feeder + Superfast Rail)",
-                "summary": "Maximum savings with synchronized public transit feeder lines connecting to intercity express rail.",
-                "rank_reason": "Ranked #1 for Economy. Lowest complete door-to-door journey fare.",
-                "first_mile": {
-                    "mode": "bus",
-                    "provider": origin_ops["bus"]["provider"],
-                    "vehicle_name": origin_ops["bus"]["vehicle_name"],
-                    "hub": origin_hubs.railway_hub,
-                    "duration_min": 40,
-                    "price": 45.0,
-                    "distance_km": 14.0,
-                    "carbon_kg": 1.2,
-                    "comfort_score": 6.8,
-                    "transfer_buffer_min": 15,
-                },
-                "main_transport": {
-                    "mode": "train",
-                    "provider": "Indian Railways Superfast",
-                    "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Superfast Express",
-                    "vehicle_number": str(12000 + (abs(route_distance_km * 5) % 999)),
-                    "dep_hub": origin_hubs.railway_hub,
-                    "arr_hub": dest_hubs.railway_hub,
-                    "duration_min": train_cheapest_duration_min,
-                    "price": float(train_cheapest_price),
-                    "distance_km": float(route_distance_km),
-                    "carbon_kg": round(route_distance_km * 0.026, 1),
-                    "comfort_score": 7.8,
-                    "seat_class": "Sleeper (SL) / 2S Reserved",
-                    "notes": "Punctual intercity service with confirmed reserved seating.",
-                    "transfer_buffer_min": 15,
-                },
-                "last_mile": {
-                    "mode": "bus",
-                    "provider": dest_ops["bus"]["provider"],
-                    "vehicle_name": dest_ops["bus"]["vehicle_name"],
-                    "duration_min": 35,
-                    "price": 40.0,
-                    "distance_km": 10.0,
-                    "carbon_kg": 1.1,
-                    "comfort_score": 6.8,
-                },
+            "last_mile": {
+                "mode": "rapido",
+                "provider": dest_ops["rapido"]["provider"],
+                "vehicle_name": dest_ops["rapido"]["vehicle_name"],
+                "duration_min": 25,
+                "price": 220.0,
+                "distance_km": 11.0,
+                "carbon_kg": 1.5,
+                "comfort_score": 8.2,
             },
-            # 4. GREENEST
-            {
-                "category": "greenest",
-                "title": "100% Electrified Net-Zero Transit Corridor",
-                "summary": "Lowest carbon footprint available: zero-emission urban lines synchronized with 100% electrified rail.",
-                "rank_reason": "Ranked #1 for Eco-Friendly. Emits up to 70% lower greenhouse gases than highway or air transit.",
-                "first_mile": {
-                    "mode": "metro",
-                    "provider": origin_ops["metro"]["provider"],
-                    "vehicle_name": origin_ops["metro"]["vehicle_name"],
-                    "hub": origin_hubs.metro_hub,
-                    "duration_min": 25,
-                    "price": 40.0,
-                    "distance_km": 11.0,
-                    "carbon_kg": 0.6,
-                    "comfort_score": 8.5,
-                    "transfer_buffer_min": 15,
-                },
-                "main_transport": {
-                    "mode": "train",
-                    "provider": "Indian Railways 100% Electric",
-                    "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} 100% Electric Rail",
-                    "vehicle_number": str(20600 + (abs(route_distance_km * 3) % 99)),
-                    "dep_hub": origin_hubs.railway_hub,
-                    "arr_hub": dest_hubs.railway_hub,
-                    "duration_min": train_greenest_duration_min,
-                    "price": float(train_greenest_price),
-                    "distance_km": float(route_distance_km),
-                    "carbon_kg": round(route_distance_km * 0.016, 1),
-                    "comfort_score": 9.1,
-                    "seat_class": "Executive Chair Car",
-                    "notes": "100% solar and electrified rail corridor verified with minimal carbon emissions.",
-                    "transfer_buffer_min": 15,
-                },
-                "last_mile": {
-                    "mode": "metro",
-                    "provider": dest_ops["metro"]["provider"],
-                    "vehicle_name": dest_ops["metro"]["vehicle_name"],
-                    "duration_min": 20,
-                    "price": 45.0,
-                    "distance_km": 9.0,
-                    "carbon_kg": 0.5,
-                    "comfort_score": 8.5,
-                },
+        })
+
+        # 3. CHEAPEST
+        archetypes.append({
+            "category": "cheapest",
+            "title": "Economy Multi-Transit Link (City Feeder + Superfast Rail)",
+            "summary": "Maximum savings with synchronized public transit feeder lines connecting to intercity express rail.",
+            "rank_reason": "Ranked #1 for Economy. Lowest complete door-to-door journey fare.",
+            "first_mile": {
+                "mode": "bus",
+                "provider": origin_ops["bus"]["provider"],
+                "vehicle_name": origin_ops["bus"]["vehicle_name"],
+                "hub": origin_hubs.railway_hub,
+                "duration_min": 40,
+                "price": 45.0,
+                "distance_km": 14.0,
+                "carbon_kg": 1.2,
+                "comfort_score": 6.8,
+                "transfer_buffer_min": 15,
             },
-            # 5. COMFORTABLE
-            {
-                "category": "comfortable",
-                "title": "Executive Comfort SyncPass (Chauffeur + 1st AC Rail)",
-                "summary": "First-class travel experience with dedicated door-to-station executive sedan pickup and spacious 1st AC carriage.",
-                "rank_reason": "Ranked #1 for Comfort. Features dedicated chauffeur transfers, lounge access, and premium legroom.",
-                "first_mile": {
-                    "mode": "cab",
-                    "provider": f"KogniSync Executive Chauffeur ({origin_hubs.parent_city})",
-                    "vehicle_name": "Luxury Electric Sedan",
-                    "hub": origin_hubs.railway_hub,
-                    "duration_min": 25,
-                    "price": 450.0,
-                    "distance_km": 13.0,
-                    "carbon_kg": 3.4,
-                    "comfort_score": 9.8,
-                    "transfer_buffer_min": 20,
-                },
-                "main_transport": {
-                    "mode": "train",
-                    "provider": "Indian Railways Shatabdi",
-                    "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Executive Express",
-                    "vehicle_number": str(12000 + (abs(route_distance_km * 2) % 999)),
-                    "dep_hub": origin_hubs.railway_hub,
-                    "arr_hub": dest_hubs.railway_hub,
-                    "duration_min": train_comfort_duration_min,
-                    "price": float(train_comfort_price),
-                    "distance_km": float(route_distance_km),
-                    "carbon_kg": round(route_distance_km * 0.026, 1),
-                    "comfort_score": 9.7,
-                    "seat_class": "Executive AC Chair (1st Class)",
-                    "notes": "Includes hot meals, refreshment service, and station VIP lounge access.",
-                    "transfer_buffer_min": 20,
-                },
-                "last_mile": {
-                    "mode": "cab",
-                    "provider": f"KogniSync Executive Chauffeur ({dest_hubs.parent_city})",
-                    "vehicle_name": "Luxury Electric Sedan",
-                    "duration_min": 25,
-                    "price": 500.0,
-                    "distance_km": 12.0,
-                    "carbon_kg": 3.2,
-                    "comfort_score": 9.8,
-                },
+            "main_transport": {
+                "mode": "train",
+                "provider": "Indian Railways Superfast",
+                "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Superfast Express (Estimated Schedule)",
+                "vehicle_number": None,
+                "dep_hub": origin_hubs.railway_hub,
+                "arr_hub": dest_hubs.railway_hub,
+                "duration_min": train_cheapest_duration_min,
+                "price": float(train_cheapest_price),
+                "distance_km": float(route_distance_km),
+                "carbon_kg": round(route_distance_km * 0.026, 1),
+                "comfort_score": 7.8,
+                "seat_class": "Sleeper (SL) / 2S Reserved",
+                "notes": "Estimated intercity rail transit. Schedule, fare, and seat availability require IRCTC timetable verification.",
+                "transfer_buffer_min": 15,
             },
-        ]
+            "last_mile": {
+                "mode": "bus",
+                "provider": dest_ops["bus"]["provider"],
+                "vehicle_name": dest_ops["bus"]["vehicle_name"],
+                "duration_min": 35,
+                "price": 40.0,
+                "distance_km": 10.0,
+                "carbon_kg": 1.1,
+                "comfort_score": 6.8,
+            },
+        })
+
+        # 4. GREENEST
+        archetypes.append({
+            "category": "greenest",
+            "title": "Eco-Transit Corridor (Low-Carbon Rail + Public Transit Feeder)",
+            "summary": "Lowest carbon footprint available: low-emission urban transit synchronized with rail transit corridor (corridor timetable and electrification require verification).",
+            "rank_reason": "Ranked #1 for Eco-Friendly. Emits up to 70% lower greenhouse gases than highway or air transit.",
+            "first_mile": {
+                "mode": "metro" if has_origin_metro else "bus",
+                "provider": origin_ops["metro"]["provider"] if has_origin_metro else origin_ops.get("bus", {}).get("provider", f"{origin_hubs.parent_city} City Feeder Bus"),
+                "vehicle_name": origin_ops["metro"]["vehicle_name"] if has_origin_metro else origin_ops.get("bus", {}).get("vehicle_name", "Electric City Feeder Bus"),
+                "hub": origin_hubs.railway_hub,
+                "duration_min": 25 if has_origin_metro else 30,
+                "price": 40.0 if has_origin_metro else 35.0,
+                "distance_km": 11.0 if has_origin_metro else 12.0,
+                "carbon_kg": 0.6 if has_origin_metro else 0.8,
+                "comfort_score": 8.5 if has_origin_metro else 7.2,
+                "transfer_buffer_min": 15,
+            },
+            "main_transport": {
+                "mode": "train",
+                "provider": "Indian Railways Low-Carbon Rail",
+                "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Low-Carbon Rail Corridor (Estimated)",
+                "vehicle_number": None,
+                "dep_hub": origin_hubs.railway_hub,
+                "arr_hub": dest_hubs.railway_hub,
+                "duration_min": train_greenest_duration_min,
+                "price": float(train_greenest_price),
+                "distance_km": float(route_distance_km),
+                "carbon_kg": round(route_distance_km * 0.016, 1),
+                "comfort_score": 9.1,
+                "seat_class": "Executive Chair Car",
+                "notes": "Low-carbon rail corridor estimate. Schedule, fare, and electrification status require IRCTC verification.",
+                "transfer_buffer_min": 15,
+            },
+            "last_mile": {
+                "mode": "metro" if has_dest_metro else "bus",
+                "provider": dest_ops["metro"]["provider"] if has_dest_metro else dest_ops.get("bus", {}).get("provider", f"{dest_hubs.parent_city} City Feeder Bus"),
+                "vehicle_name": dest_ops["metro"]["vehicle_name"] if has_dest_metro else dest_ops.get("bus", {}).get("vehicle_name", "Electric City Feeder Bus"),
+                "duration_min": 20 if has_dest_metro else 25,
+                "price": 45.0 if has_dest_metro else 35.0,
+                "distance_km": 9.0 if has_dest_metro else 10.0,
+                "carbon_kg": 0.5 if has_dest_metro else 0.7,
+                "comfort_score": 8.5 if has_dest_metro else 7.2,
+            },
+        })
+
+        # 5. COMFORTABLE
+        archetypes.append({
+            "category": "comfortable",
+            "title": "Executive Comfort SyncPass (Chauffeur + 1st AC Rail)",
+            "summary": "First-class travel experience with dedicated door-to-station executive sedan pickup and spacious 1st AC carriage.",
+            "rank_reason": "Ranked #1 for Comfort. Features dedicated chauffeur transfers, lounge access, and premium legroom.",
+            "first_mile": {
+                "mode": "cab",
+                "provider": f"KogniSync Executive Chauffeur ({origin_hubs.parent_city})",
+                "vehicle_name": "Luxury Electric Sedan",
+                "hub": origin_hubs.railway_hub,
+                "duration_min": 25,
+                "price": 450.0,
+                "distance_km": 13.0,
+                "carbon_kg": 3.4,
+                "comfort_score": 9.8,
+                "transfer_buffer_min": 20,
+            },
+            "main_transport": {
+                "mode": "train",
+                "provider": "Indian Railways Shatabdi",
+                "vehicle_name": f"{origin_hubs.parent_city} - {dest_hubs.parent_city} Executive Express (Estimated Schedule)",
+                "vehicle_number": None,
+                "dep_hub": origin_hubs.railway_hub,
+                "arr_hub": dest_hubs.railway_hub,
+                "duration_min": train_comfort_duration_min,
+                "price": float(train_comfort_price),
+                "distance_km": float(route_distance_km),
+                "carbon_kg": round(route_distance_km * 0.026, 1),
+                "comfort_score": 9.7,
+                "seat_class": "Executive AC Chair (1st Class)",
+                "notes": "Premium day-express rail corridor estimate. Seat availability and schedule require IRCTC verification.",
+                "transfer_buffer_min": 20,
+            },
+            "last_mile": {
+                "mode": "cab",
+                "provider": f"KogniSync Executive Chauffeur ({dest_hubs.parent_city})",
+                "vehicle_name": "Luxury Electric Sedan",
+                "duration_min": 25,
+                "price": 500.0,
+                "distance_km": 12.0,
+                "carbon_kg": 3.2,
+                "comfort_score": 9.8,
+            },
+        })
 
         # Collect unique segment queries across all archetypes to resolve concurrently and deduplicate
         dedup_tasks: dict[
@@ -953,6 +1012,23 @@ class JourneyOrchestrationService:
                 baseline_distance_km=fm["distance_km"],
                 baseline_carbon_kg=fm["carbon_kg"],
             )
+            if fm["mode"] == "cab" and getattr(dep_hub, "type", "") == "airport":
+                if getattr(origin_hubs, "is_airport_gateway", False):
+                    leg1_note = (
+                        f"Ground transfer to external regional airport gateway: {dep_hub.name} "
+                        f"({origin_hubs.airport_gateway_city or dep_hub.city}). "
+                        f"Estimated road transit: {dur1}m with {fm['transfer_buffer_min']}m terminal buffer."
+                    )
+                else:
+                    leg1_note = (
+                        f"Airport express transfer connecting {origin_hubs.user_node.name} to {dep_hub.name}. "
+                        f"Estimated road transit: {dur1}m with {fm['transfer_buffer_min']}m terminal buffer."
+                    )
+            else:
+                leg1_note = (
+                    f"Feeder pickup at {origin_hubs.user_node.name}. "
+                    f"Planning assumption: {fm['transfer_buffer_min']}m transfer buffer at {dep_hub.name}."
+                )
             segment1 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-01",
                 sequence=1,
@@ -966,12 +1042,12 @@ class JourneyOrchestrationService:
                 duration_minutes=dur1,
                 price=fm["price"],
                 currency="INR",
-                availability=SegmentAvailabilitySchema(status="available", remaining_units=45, is_real_inventory=False),
+                availability=SegmentAvailabilitySchema(status="available", remaining_units=None, is_real_inventory=False),
                 distance_km=dist1,
                 carbon_kg=carbon1,
                 comfort_score=fm["comfort_score"],
                 transfer_buffer_minutes=fm["transfer_buffer_min"],
-                notes=f"Direct pickup at {origin_hubs.user_node.name}. Planning assumption: {fm['transfer_buffer_min']}m transfer buffer at {dep_hub.name}.",
+                notes=leg1_note,
                 provenance=prov1,
                 encoded_polyline=geom1.get("encoded_polyline"),
                 geojson_geometry=geom1.get("geojson_geometry"),
@@ -1004,7 +1080,7 @@ class JourneyOrchestrationService:
                 duration_minutes=dur2,
                 price=mt["price"],
                 currency="INR",
-                availability=SegmentAvailabilitySchema(status="available", remaining_units=18, is_real_inventory=False),
+                availability=SegmentAvailabilitySchema(status="available", remaining_units=None, is_real_inventory=False),
                 distance_km=dist2,
                 carbon_kg=carbon2,
                 comfort_score=mt["comfort_score"],
@@ -1029,6 +1105,23 @@ class JourneyOrchestrationService:
                 baseline_distance_km=lm["distance_km"],
                 baseline_carbon_kg=lm["carbon_kg"],
             )
+            if lm["mode"] == "cab" and getattr(arr_hub, "type", "") == "airport":
+                if getattr(dest_hubs, "is_airport_gateway", False):
+                    leg3_note = (
+                        f"Ground transfer from external regional airport gateway: {arr_hub.name} "
+                        f"({dest_hubs.airport_gateway_city or arr_hub.city}). "
+                        f"Estimated road transit: {dur3}m."
+                    )
+                else:
+                    leg3_note = (
+                        f"Airport arrival transfer connecting {arr_hub.name} to {dest_hubs.user_node.name}. "
+                        f"Estimated road transit: {dur3}m."
+                    )
+            else:
+                leg3_note = (
+                    f"Final transfer to {dest_hubs.user_node.name}. "
+                    f"Estimated connection from {arr_hub.name}."
+                )
             segment3 = JourneySegmentSchema(
                 segment_id=f"seg-{route_slug}-{cat}-03",
                 sequence=3,
@@ -1042,11 +1135,11 @@ class JourneyOrchestrationService:
                 duration_minutes=dur3,
                 price=lm["price"],
                 currency="INR",
-                availability=SegmentAvailabilitySchema(status="available", remaining_units=99, is_real_inventory=False),
+                availability=SegmentAvailabilitySchema(status="available", remaining_units=None, is_real_inventory=False),
                 distance_km=dist3,
                 carbon_kg=carbon3,
                 comfort_score=lm["comfort_score"],
-                notes=f"Final transfer to {dest_hubs.user_node.name}. Driver will meet at {arr_hub.name} arrival exit.",
+                notes=leg3_note,
                 provenance=prov3,
                 encoded_polyline=geom3.get("encoded_polyline"),
                 geojson_geometry=geom3.get("geojson_geometry"),

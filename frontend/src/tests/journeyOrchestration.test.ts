@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { composeMultiModalJourneys } from '../api/orchestrationEngine';
+import { composeMultiModalJourneys, resolveHubContext, computeDistanceKm } from '../api/orchestrationEngine';
 import { validateJourneyAgainstRequest } from '../api/mockData';
 import { TravelRequest } from '../types/journey';
 
@@ -262,4 +262,117 @@ console.log(`✓ validateJourneyAgainstRequest correctly rejected mismatched des
 
 console.log('\n=================================================================');
 console.log('ALL 12 TESTS PASSED SUCCESSFULLY! ✓');
+console.log('=================================================================');
+
+// ============================================================================
+// TEST 13: M4.1.1 Infrastructure Validity Guards & Hub Typology (Tumkur -> Goa)
+// ============================================================================
+console.log('\n--- Test 13: M4.1.1 Tumkur -> Goa Infrastructure Validity ---');
+const tumkurGoaReq: TravelRequest = {
+  origin: 'Tumkur',
+  destination: 'Goa',
+  departureDate: '2026-11-21',
+  passengersCount: 1,
+  weights: { cost: 0.25, duration: 0.25, comfort: 0.25, carbon: 0.25 },
+};
+
+const tgJourneys = composeMultiModalJourneys(tumkurGoaReq);
+// SyncAir excluded -> exactly 4 grounded candidates
+assert.strictEqual(tgJourneys.length, 4, `Expected 4 candidates for Tumkur -> Goa, got ${tgJourneys.length}`);
+for (const j of tgJourneys) {
+  // Zero flight segments
+  for (const seg of j.segments) {
+    assert.strictEqual(seg.availability.remainingUnits, undefined, `Segment ${seg.segmentId} remainingUnits must be undefined`);
+    assert.strictEqual(seg.availability.isRealInventory, false, `Segment ${seg.segmentId} isRealInventory must be false`);
+    assert.notStrictEqual(seg.mode, 'flight', `Journey ${j.id} must not contain flight segments`);
+    assert(!seg.origin.name.toLowerCase().includes('regional airport'), `Spurious airport found in ${seg.origin.name}`);
+    assert(!seg.destination.name.toLowerCase().includes('regional airport'), `Spurious airport found in ${seg.destination.name}`);
+    assert(!seg.origin.name.toLowerCase().includes('transit center'), `Spurious transit center found in ${seg.origin.name}`);
+    assert(!seg.destination.name.toLowerCase().includes('transit center'), `Spurious transit center found in ${seg.destination.name}`);
+    assert.notStrictEqual(seg.mode, 'metro', `Journey ${j.id} must not contain metro segment in non-metro corridor`);
+  }
+  // Intercity train segments must depart strictly from railway_station
+  const trainSegs = j.segments.filter(s => s.mode === 'train');
+  for (const ts of trainSegs) {
+    assert.strictEqual(ts.vehicleNumber, undefined, `Train ${ts.segmentId} vehicleNumber must be undefined (no invented train numbers)`);
+    assert.strictEqual(ts.origin.type, 'railway_station', `Train must depart from railway station, got ${ts.origin.type}`);
+    assert.strictEqual(ts.destination.type, 'railway_station', `Train must arrive at railway station, got ${ts.destination.type}`);
+    assert(ts.origin.name.includes('Railway Station') || ts.origin.name.includes('Junction'));
+  }
+}
+
+// Greenest journey must fall back to bus feeder
+const tgGreenest = tgJourneys.find(j => j.recommendationCategory === 'greenest');
+assert(tgGreenest, 'Greenest archetype must be present');
+assert.strictEqual(tgGreenest.segments[0].mode, 'bus', 'Tumkur first mile feeder must be bus');
+assert.strictEqual(tgGreenest.segments[0].destination.type, 'railway_station', 'First mile destination must be railway station');
+assert.strictEqual(tgGreenest.segments[1].mode, 'train', 'Main transit must be train');
+assert.strictEqual(tgGreenest.segments[1].origin.type, 'railway_station', 'Train origin must be railway station');
+assert.strictEqual(tgGreenest.segments[2].mode, 'bus', 'Goa last mile feeder must be bus');
+console.log('✓ Tumkur -> Goa infrastructure validity verified (zero synthetic airport/metro, railway anchoring, bus fallback).');
+
+// ============================================================================
+// TEST 14: M4.1.1 Retains Flight & Metro on Verified Metropolitan Corridors
+// ============================================================================
+console.log('\n--- Test 14: M4.1.1 Bangalore -> Delhi Retains Flight & Metro ---');
+const blrDelReq: TravelRequest = {
+  origin: 'Bangalore',
+  destination: 'Delhi',
+  departureDate: '2026-11-21',
+  passengersCount: 1,
+  weights: { cost: 0.25, duration: 0.25, comfort: 0.25, carbon: 0.25 },
+};
+
+const blrDelJourneys = composeMultiModalJourneys(blrDelReq);
+assert.strictEqual(blrDelJourneys.length, 5, `Expected 5 candidates for Bangalore -> Delhi, got ${blrDelJourneys.length}`);
+const blrDelFastest = blrDelJourneys.find(j => j.recommendationCategory === 'fastest');
+assert(blrDelFastest, 'Fastest/SyncAir archetype must be present');
+const flightSeg = blrDelFastest.segments[1];
+assert.strictEqual(flightSeg.mode, 'flight', 'Second leg must be commercial flight');
+assert.strictEqual(flightSeg.vehicleNumber, undefined, 'Flight segment must not have invented flight numbers');
+assert.strictEqual(flightSeg.availability.remainingUnits, undefined, 'Ungrounded flight must not have invented seat inventory');
+assert(flightSeg.origin.name.includes('Kempegowda'), 'Flight origin must be Kempegowda');
+assert(flightSeg.destination.name.includes('Indira Gandhi'), 'Flight destination must be Indira Gandhi');
+
+const blrDelGreenest = blrDelJourneys.find(j => j.recommendationCategory === 'greenest');
+assert(blrDelGreenest, 'Greenest archetype must be present');
+assert.strictEqual(blrDelGreenest.segments[0].mode, 'metro', 'Bangalore first mile must use Namma Metro');
+assert.strictEqual(blrDelGreenest.segments[1].mode, 'train', 'Main transit must be train');
+assert.strictEqual(blrDelGreenest.segments[1].origin.type, 'railway_station', 'Train must depart from railway station');
+assert.strictEqual(blrDelGreenest.segments[2].mode, 'metro', 'Delhi last mile must use Delhi Metro');
+console.log('✓ Bangalore -> Delhi retained commercial flight and operational metro lines.');
+
+// ============================================================================
+// TEST 15: M4.1.1 Udupi/Mangalore Gateway Physical Credibility
+// ============================================================================
+console.log('\n--- Test 15: M4.1.1 Udupi/Mangalore Gateway Physical Credibility ---');
+const hubUdupi = resolveHubContext('Udupi', true);
+assert.strictEqual(hubUdupi.hasLocalAirport, false, 'Udupi has no physical airport in city limits');
+assert.strictEqual(hubUdupi.isAirportGateway, true, 'Udupi uses external regional airport gateway');
+assert.strictEqual(hubUdupi.airportGatewayCity, 'Mangalore', 'Udupi gateway city is Mangalore');
+assert.strictEqual(hubUdupi.userNode.coordinates.lat, 13.3409);
+assert.strictEqual(hubUdupi.userNode.coordinates.lng, 74.7421);
+
+// Great-circle distance calculation
+const gcDist = computeDistanceKm(13.3409, 74.7421, 12.9613, 74.8901);
+assert.strictEqual(gcDist, 45.1, `Expected 45.1 km great-circle distance, got ${gcDist}`);
+
+const udupiFastest = udupiJourneys.find(j => j.recommendationCategory === 'fastest');
+assert(udupiFastest, 'Fastest flight option must be present for Chennai -> Udupi');
+const lastMileToUdupi = udupiFastest.segments[2];
+assert.strictEqual(lastMileToUdupi.mode, 'cab', 'Last mile from IXE to Udupi must be cab');
+assert.strictEqual(lastMileToUdupi.distanceKm, 56.4, `Feeder distance IXE -> Udupi must be 56.4km, got ${lastMileToUdupi.distanceKm}`);
+assert.strictEqual(lastMileToUdupi.durationMinutes, 75, `Feeder duration IXE -> Udupi must be 75min, got ${lastMileToUdupi.durationMinutes}`);
+assert.strictEqual(lastMileToUdupi.price, 1165, `Feeder price IXE -> Udupi must be 1165, got ${lastMileToUdupi.price}`);
+assert(lastMileToUdupi.notes?.includes('Ground transfer from external regional airport gateway'), 'Notes must indicate external gateway transfer');
+assert.strictEqual(udupiFastest.segments[1].vehicleNumber, undefined, 'Flight vehicle number must be undefined');
+assert.strictEqual(udupiFastest.segments[1].availability.remainingUnits, undefined, 'Flight remaining units must be undefined');
+
+const udupiGreenest = udupiJourneys.find(j => j.recommendationCategory === 'greenest');
+assert(udupiGreenest, 'Greenest option must be present');
+assert(udupiGreenest.title.includes('Eco-Transit Corridor'), 'Greenest title must be Eco-Transit Corridor');
+console.log('✓ Udupi gateway physical credibility verified (gateway semantics, 45.1km GC, 56.4km road, 75min duration, ₹1,165 fare, ungrounded vehicle numbers undefined).');
+
+console.log('\n=================================================================');
+console.log('ALL 15 TESTS PASSED SUCCESSFULLY! ✓');
 console.log('=================================================================');
