@@ -17,6 +17,7 @@ const tests = [
   'src/tests/gpsCollisionDetector.test.ts',
   'src/tests/nullIslandAvoidance.test.ts',
   'src/tests/mapViewportMarkerSync.test.ts',
+  'src/tests/mapViewportPersistence.test.ts',
 ];
 
 for (const testPath of tests) {
