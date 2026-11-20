@@ -36,6 +36,7 @@ import {
   getViewportHeightClass,
   type CorridorMetrics,
 } from '../../utils/corridorMetrics';
+import { MapViewportManager, type ViewportSnapshot } from '../../utils/mapViewportManager';
 
 export { isValidCoordinate, computeCorridorMetrics, getViewportHeightClass, type CorridorMetrics };
 
@@ -53,6 +54,7 @@ export interface RenderedMarkerRecord {
 declare global {
   interface Window {
     __KOGNISYNC_RENDERED_MARKERS__?: RenderedMarkerRecord[];
+    __KOGNISYNC_VIEWPORT_TELEMETRY__?: ViewportSnapshot;
   }
 }
 
@@ -168,6 +170,9 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   const isInitialFitRef = useRef<boolean>(true);
   const prevJourneyIdRef = useRef<string | null>(null);
   const fitDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Viewport persistence manager: preserves user zoom/pan across ordinary re-renders
+  const viewportManagerRef = useRef<MapViewportManager>(new MapViewportManager());
 
   // Synthesize or use real Journey object for backend route enrichment
   const targetJourney: Journey = useMemo(() => {
@@ -383,12 +388,15 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         const featureGroup = L.featureGroup().addTo(map);
         layersGroupRef.current = featureGroup;
         mapInstanceRef.current = map;
+
+        // Attach viewport manager to map to track manual zoom and pan
+        viewportManagerRef.current.attachMap(map);
       }
 
-      // Invalidate size to ensure proper tile loading
+      // Invalidate size to ensure proper tile loading without altering viewport
       setTimeout(() => {
         if (mapInstanceRef.current) {
-          mapInstanceRef.current.invalidateSize();
+          viewportManagerRef.current.onResize(mapInstanceRef.current);
         }
       }, 150);
     } catch (err) {
@@ -414,8 +422,14 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         mapInstanceRef.current = null;
         layersGroupRef.current = null;
       }
-      if (typeof window !== 'undefined' && 'window.__KOGNISYNC_RENDERED_MARKERS__' in window) {
-        delete window.__KOGNISYNC_RENDERED_MARKERS__;
+      viewportManagerRef.current.reset();
+      if (typeof window !== 'undefined') {
+        if ('window.__KOGNISYNC_RENDERED_MARKERS__' in window) {
+          delete window.__KOGNISYNC_RENDERED_MARKERS__;
+        }
+        if ('__KOGNISYNC_VIEWPORT_TELEMETRY__' in window) {
+          delete (window as any).__KOGNISYNC_VIEWPORT_TELEMETRY__;
+        }
       }
     };
   }, []);
@@ -443,7 +457,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           (mapInstanceRef.current as any)._loaded &&
           mapInstanceRef.current.getContainer()
         ) {
-          mapInstanceRef.current.invalidateSize({ pan: false });
+          viewportManagerRef.current.onResize(mapInstanceRef.current);
         }
       }, 75);
     });
@@ -866,36 +880,31 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       }
     }
 
-    // 5. Fit Bounds with comfortable padding on valid points (Findings B & D)
+    // 5. Fit Bounds via Viewport Persistence Manager (Findings B & D)
+    // Automatically fit bounds strictly ONCE when loading a genuinely new journey identity.
+    // Ordinary re-renders, route geometry enrichment, marker updates, active segment clicks,
+    // and guidance ticks NEVER override user zoom/pan.
+    const isInitialFit = isInitialFitRef.current;
+    const shouldAnimate = !isInitialFit && prevJourneyIdRef.current !== null && prevJourneyIdRef.current !== targetJourney.id;
+
     const validBoundsPoints = allLatLangs.filter((pt) => {
       const [lat, lng] = pt as [number, number];
       return isValidCoordinate(lat, lng);
     });
-    if (validBoundsPoints.length > 0) {
-      const boundsObj = L.latLngBounds(validBoundsPoints as L.LatLngTuple[]);
-      if (boundsObj.isValid()) {
-        const isInitialFit = isInitialFitRef.current;
-        const shouldAnimate = !isInitialFit && prevJourneyIdRef.current === targetJourney.id;
 
-        if (fitDebounceTimerRef.current) {
-          clearTimeout(fitDebounceTimerRef.current);
-          fitDebounceTimerRef.current = null;
-        }
+    viewportManagerRef.current.onJourneyRender(
+      targetJourney.id,
+      validBoundsPoints as [number, number][],
+      map,
+      shouldAnimate
+    );
 
-        // Cancel any in-flight animations to avoid competing animations (Finding B)
-        map.stop();
+    isInitialFitRef.current = false;
+    prevJourneyIdRef.current = targetJourney.id;
 
-        // Asymmetric padding: 75px bottom padding ensures clear margin above bottom legend and attribution
-        map.fitBounds(boundsObj, {
-          paddingTopLeft: [45, 45],
-          paddingBottomRight: [45, 75],
-          maxZoom: 14,
-          animate: shouldAnimate,
-        });
-
-        isInitialFitRef.current = false;
-        prevJourneyIdRef.current = targetJourney.id;
-      }
+    // Record viewport telemetry
+    if (typeof window !== 'undefined') {
+      (window as any).__KOGNISYNC_VIEWPORT_TELEMETRY__ = viewportManagerRef.current.getSnapshot(targetJourney.id);
     }
 
     return () => {
@@ -924,40 +933,35 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
   // Map control callbacks
   const handleZoomIn = () => {
-    mapInstanceRef.current?.zoomIn();
+    if (mapInstanceRef.current) {
+      viewportManagerRef.current.onUserZoom(mapInstanceRef.current, 'in');
+    }
   };
 
   const handleZoomOut = () => {
-    mapInstanceRef.current?.zoomOut();
+    if (mapInstanceRef.current) {
+      viewportManagerRef.current.onUserZoom(mapInstanceRef.current, 'out');
+    }
   };
 
   const handleFitRoute = () => {
     if (layersGroupRef.current && mapInstanceRef.current) {
-      mapInstanceRef.current.stop();
-      mapInstanceRef.current.invalidateSize({ pan: false });
       const b = layersGroupRef.current.getBounds();
-      if (b.isValid()) {
-        mapInstanceRef.current.fitBounds(b, {
-          paddingTopLeft: [45, 45],
-          paddingBottomRight: [45, 75],
-          maxZoom: 14,
-          animate: true,
-        });
-      }
+      viewportManagerRef.current.onExplicitFitRoute(mapInstanceRef.current, b);
     }
   };
 
   const handleRecenterOrigin = () => {
     if (mapInstanceRef.current && segments[0]) {
       const { lat, lng } = segments[0].origin.coordinates;
-      mapInstanceRef.current.setView([lat, lng], 13, { animate: true });
+      viewportManagerRef.current.onUserRecenter(mapInstanceRef.current, lat, lng, 13);
     }
   };
 
   const handleRecenterDestination = () => {
     if (mapInstanceRef.current && segments[segments.length - 1]) {
       const { lat, lng } = segments[segments.length - 1].destination.coordinates;
-      mapInstanceRef.current.setView([lat, lng], 13, { animate: true });
+      viewportManagerRef.current.onUserRecenter(mapInstanceRef.current, lat, lng, 13);
     }
   };
 
