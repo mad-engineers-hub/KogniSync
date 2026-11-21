@@ -40,5 +40,5 @@ def ephemeral_test_jwt_secret():
 
 @pytest.fixture
 def anyio_backend():
-    """Ensure anyio tests run exclusively against asyncio."""
+    """Pin AnyIO test runner to standard asyncio backend."""
     return "asyncio"

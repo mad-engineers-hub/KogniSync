@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 from app.services.journey.schemas import JourneySchema, JourneySegmentSchema
+from app.services.journey.timezone_utils import ist_to_utc_instant
 
 # Documented planning buffer assumptions (minutes)
 # Note: These values are transparent planning assumptions for multimodal coordination,
@@ -117,9 +118,24 @@ def validate_journey_connections(
         try:
             arr_str = str(journey.arrival_time)
             pref_str = str(preferred_arrival_before)
+
+            arr_date = arr_str.split("T")[0] if "T" in arr_str else ""
             arr_time_hhmm = arr_str.split("T")[1][:5] if "T" in arr_str else arr_str[:5]
-            pref_time_hhmm = pref_str.split("T")[1][:5] if "T" in pref_str else pref_str[:5]
-            if arr_time_hhmm > pref_time_hhmm:
+
+            if "T" in pref_str:
+                pref_date = pref_str.split("T")[0]
+                pref_time_hhmm = pref_str.split("T")[1][:5]
+            else:
+                dep_date = str(journey.departure_time).split("T")[0] if journey.departure_time else arr_date
+                pref_date = dep_date
+                pref_time_hhmm = pref_str[:5]
+
+            # If arrival date is after deadline date, or arrival time is after deadline time on the same date
+            if arr_date and pref_date and arr_date > pref_date:
+                reasons.append(
+                    f"Journey arrival date ({arr_date}) exceeds requested arrival deadline date ({pref_date})."
+                )
+            elif arr_time_hhmm > pref_time_hhmm:
                 reasons.append(
                     f"Journey arrival time ({arr_time_hhmm}) exceeds requested arrival deadline ({pref_time_hhmm})."
                 )

@@ -49,7 +49,7 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         city="Bangalore",
         lat=12.9716,
         lng=77.5946,
-        railway_name="Bangalore Railway Station (KSR / Cantt)",
+        railway_name="KSR Bengaluru City Railway Station",
         railway_code="SBC",
         railway_lat=12.9781,
         railway_lng=77.5694,
@@ -337,6 +337,7 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
 
 LOCALITY_TO_CITY_MAP: dict[str, str] = {
     # Bangalore
+    "udayapura": "bangalore",
     "udayapalya": "bangalore",
     "kanakapura": "bangalore",
     "kanakapura road": "bangalore",
@@ -409,6 +410,10 @@ CORRIDOR_DISTANCES: dict[str, int] = {
     "udupi-bangalore": 410,
     "delhi-mumbai": 1385,
     "mumbai-delhi": 1385,
+    "bangalore-delhi": 2406,
+    "delhi-bangalore": 2406,
+    "bangalore-delhi-rajdhani": 2365,
+    "delhi-bangalore-rajdhani": 2365,
     "mumbai-pune": 150,
     "pune-mumbai": 150,
     "delhi-jaipur": 280,
@@ -613,6 +618,10 @@ def resolve_hub_context(
         if custom_coordinates and not is_stale_collision:
             # Rule 1 & 4: Preserve intentional custom/GPS coordinates
             user_coords = custom_coordinates
+        elif "udayapura" in lower:
+            user_coords = CoordinatesSchema(lat=12.7915, lng=77.5147)
+        elif "udayapalya" in lower:
+            user_coords = CoordinatesSchema(lat=12.8750, lng=77.5450)
         else:
             # Rule 3: Stale collision or missing custom coords -> use canonical centroid
             user_coords = CoordinatesSchema(
@@ -821,6 +830,7 @@ def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
             "rapido": {"provider": "Rapido QuickSync Bangalore", "vehicle_name": "Rapido Auto / Bike Express"},
             "bus": {"provider": "BMTC City Feeder (Route 215)", "vehicle_name": "Electric City Bus"},
             "metro": {"provider": "Namma Metro Green Line", "vehicle_name": "Metro Electric Transit"},
+            "shuttle": {"provider": "BMTC Electric Feeder EV Shuttle", "vehicle_name": "BMTC Metro Feeder Shuttle"},
         }
     if "chennai" in c:
         return {
@@ -841,7 +851,9 @@ def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
             "cab": {"provider": "KogniSync Express Cab (Delhi NCR)", "vehicle_name": "Premier EV Sedan"},
             "rapido": {"provider": "Rapido QuickSync Delhi", "vehicle_name": "Rapido Auto / Bike Express"},
             "bus": {"provider": "DTC Electric Feeder", "vehicle_name": "Low-Floor Electric Bus"},
-            "metro": {"provider": "Delhi Metro Airport Express", "vehicle_name": "Rapid Metro Line"},
+            "metro": {"provider": "Delhi Metro (Yellow Line)", "vehicle_name": "DMRC Rapid Transit"},
+            "airport_express": {"provider": "Delhi Metro Airport Express", "vehicle_name": "Airport Express Orange Line"},
+            "shuttle": {"provider": "Delhi Metro Feeder EV Shuttle", "vehicle_name": "DMRC Electric Feeder"},
         }
     if "goa" in c:
         return {

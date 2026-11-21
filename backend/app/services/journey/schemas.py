@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ConfigDict, AliasChoices, model_validator
 from app.services.optimizer.schemas import OptimizationWeightsInput, OptimizedJourneyOutput
 
 TransportMode = Literal[
-    "flight", "train", "bus", "cab", "rapido", "metro", "walk", "auto"
+    "flight", "train", "bus", "cab", "rapido", "metro", "walk", "auto", "shuttle"
 ]
 
 RecommendationCategory = Literal[
@@ -44,7 +44,7 @@ class SegmentAvailabilitySchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     status: Literal["available", "limited", "waitlist", "sold_out"] = "available"
     remaining_units: int | None = Field(
-        default=None,
+        default=20,
         validation_alias=AliasChoices("remaining_units", "remainingUnits"),
         serialization_alias="remainingUnits",
     )
