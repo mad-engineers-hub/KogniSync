@@ -184,15 +184,15 @@ Screenshots were captured using Microsoft Edge via Playwright on the running dev
 
 ### Screenshot 1: Infeasible Deadline Scenario (`ui_refinement_01_2_2_infeasible_deadline.png`)
 *Shows that for a same-day deadline (Nov 15 20:00), the optimizer prioritizes the feasible flight corridor (`fastest`), while Karnataka Express is not promoted as #1 due to the deadline violation.*  
-![Infeasible Deadline Scenario](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_2_infeasible_deadline.png)
+![Infeasible Deadline Scenario](demo/screenshots/ui_refinement_01_2_2_infeasible_deadline.png)
 
 ### Screenshot 2: Karnataka Express Timetable & Infeasibility Breakdown (`ui_refinement_01_2_2_karnataka_timetable.png`)
 *Detailed view of the Karnataka Express card showing fixed published departure at 19:20 IST, Day 3 arrival at 09:21 IST, and the explicit warning note explaining that the deadline was missed.*  
-![Karnataka Express Timetable](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_2_karnataka_timetable.png)
+![Karnataka Express Timetable](demo/screenshots/ui_refinement_01_2_2_karnataka_timetable.png)
 
 ### Screenshot 3: Feasible Train Schedule Scenario (`ui_refinement_01_2_2_feasible_scenario.png`)
 *Displays the feasible schedule when departing on Nov 13 at 18:15 IST and arriving in Delhi on Nov 15 at 09:21 IST before the 20:00 deadline.*  
-![Feasible Train Scenario](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_2_feasible_scenario.png)
+![Feasible Train Scenario](demo/screenshots/ui_refinement_01_2_2_feasible_scenario.png)
 
 ---
 

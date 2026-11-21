@@ -202,23 +202,23 @@ Five full-resolution screenshots were re-captured via Playwright on Microsoft Ed
 
 ### Screenshot 1: National Corridor Overview (`ui_refinement_01_2_national_corridor.png`)
 *Displays the complete 2,431.5 km corridor connecting Udayapura in South Bengaluru across Maharashtra, Madhya Pradesh, and Uttar Pradesh into New Delhi.*  
-![Screenshot 1: National Corridor](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_national_corridor.png)
+![Screenshot 1: National Corridor](demo/screenshots/ui_refinement_01_2_national_corridor.png)
 
 ### Screenshot 2: Udayapura Feeder Leg (`ui_refinement_01_2_feeder_leg.png`)
 *Close-up view of Leg 1 (24.0 km, 45 min) showing the road shuttle corridor along Kanakapura Road (NH 948) to KSR Bengaluru City Railway Station.*  
-![Screenshot 2: Feeder Leg](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_feeder_leg.png)
+![Screenshot 2: Feeder Leg](demo/screenshots/ui_refinement_01_2_feeder_leg.png)
 
 ### Screenshot 3: Intercity Rail Corridor (`ui_refinement_01_2_railway_corridor.png`)
 *Detailed view of Leg 2: Karnataka Express (12627) spanning 2,406 km between SBC and NDLS with explicit deterministic corridor provenance badging.*  
-![Screenshot 3: Railway Corridor](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_railway_corridor.png)
+![Screenshot 3: Railway Corridor](demo/screenshots/ui_refinement_01_2_railway_corridor.png)
 
 ### Screenshot 4: Delhi Destination Leg (`ui_refinement_01_2_delhi_destination.png`)
 *View of the final 1.5 km leg on Delhi Metro Yellow Line connecting New Delhi Station to Rajiv Chowk (6 min).*  
-![Screenshot 4: Delhi Destination](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_delhi_destination.png)
+![Screenshot 4: Delhi Destination](demo/screenshots/ui_refinement_01_2_delhi_destination.png)
 
 ### Screenshot 5: Summary Card & Telemetry Reconciliation (`ui_refinement_01_2_summary_reconciliation.png`)
 *Card view confirming telemetry figures: 2,431.5 km total distance, 2,356 min (~39h 16m) duration, and exact leg breakdown.*  
-![Screenshot 5: Summary Reconciliation](file:///C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_summary_reconciliation.png)
+![Screenshot 5: Summary Reconciliation](demo/screenshots/ui_refinement_01_2_summary_reconciliation.png)
 
 ---
 

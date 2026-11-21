@@ -125,7 +125,7 @@ The Pareto optimizer automatically filters out expired departures by default, wh
 
 ### 5.1 Backend Test Environment
 
-- **Python Interpreter:** Python 3.13.12 (`C:\Users\deeks\AppData\Local\Programs\Python\Python313\python.exe`).
+- **Python Interpreter:** Python 3.13.12 (`python`).
 - **Pinned Packages:** `fastapi`, `uvicorn`, `pydantic`, `pydantic-settings`, `PyJWT`, `pytest`, `pytest-asyncio`, `anyio`, `httpx`, `aiosqlite`.
 - **Environment Fix:** Pinned `anyio_backend` fixture to `"asyncio"` in `backend/tests/conftest.py`, eliminating spurious event-loop conflicts caused by the optional `trio` package.
 
@@ -211,17 +211,17 @@ npm test
 ### Screenshot 1: Planned Operational Regulation Banner & Schedule State
 High-visibility amber banner displaying SWR PR No. 1404 / NR PR No. 1568, 130 min en-route regulation details, official press release links, and unverified telemetry disclaimer.
 
-![Operational Regulation Banner](C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_3_operational_regulation.png)
+![Operational Regulation Banner](demo/screenshots/ui_refinement_01_2_3_operational_regulation.png)
 
 ### Screenshot 2: Infeasible Deadline Advisory & Past-Departure Elimination
 Pill breakdown (`Dep: 19:20 IST`, `Arr: 10:30 IST Day 3`, `⚠ En Route Regulated: +130m`, `Live status unverified`) and Operational Scheduling Advisory explicitly stating that the 13 November train has already passed and promoting the 15 November flight.
 
-![Infeasible Deadline Advisory](C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_3_past_departure_elimination.png)
+![Infeasible Deadline Advisory](demo/screenshots/ui_refinement_01_2_3_past_departure_elimination.png)
 
 ### Screenshot 3: Actionable Future Alternative (Fastest Commercial Flight Option)
 The Pareto optimizer promotes the actionable future alternative (SyncAir Multi-Modal Link) arriving on 15 November before the 20:00 deadline (6h 17m duration), while the expired 13 November departure is omitted from the Pareto routes.
 
-![Actionable Future Alternative](C:/Users/deeks/.gemini/antigravity/brain/9b5a137c-314e-48a7-90a3-3db3f30932a6/ui_refinement_01_2_3_actionable_alternatives.png)
+![Actionable Future Alternative](demo/screenshots/ui_refinement_01_2_3_actionable_alternatives.png)
 
 ---
 

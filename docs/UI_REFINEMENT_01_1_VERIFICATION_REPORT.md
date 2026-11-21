@@ -179,27 +179,27 @@ All screenshots were captured from the live application running on `http://127.0
 
 ### Screenshot 1: Full Journey at National Scale
 - **File:** `ui_refinement_01_1_national_corridor.png`
-- **Location:** `C:\Users\deeks\.gemini\antigravity\brain\9b5a137c-314e-48a7-90a3-3db3f30932a6\ui_refinement_01_1_national_corridor.png`
+- **Location:** `demo/screenshots/ui_refinement_01_1_national_corridor.png`
 - **Verification:** Shows the complete trans-India corridor from Udayapura (South Bangalore, 12.82°N) to Delhi (28.65°N) spanning >15° latitude (~1,757 km direct line). All transfer points and intermediate regions (Karnataka, Telangana/Maharashtra border corridor, Madhya Pradesh, Uttar Pradesh, Delhi NCR) are visible without clipping.
 
 ### Screenshot 2: Close-up Around Origin (Udayapura)
 - **File:** `ui_refinement_01_1_origin_closeup.png`
-- **Location:** `C:\Users\deeks\.gemini\antigravity\brain\9b5a137c-314e-48a7-90a3-3db3f30932a6\ui_refinement_01_1_origin_closeup.png`
+- **Location:** `demo/screenshots/ui_refinement_01_1_origin_closeup.png`
 - **Verification:** Centered on Udayapura (Kanakapura Road) at zoom level 13. Displays the Udayapura Rapid EV Shuttle leg (11 km) connecting the origin locality to KSR Bengaluru Railway Station.
 
 ### Screenshot 3: Railway / Intercity Corridor Portion
 - **File:** `ui_refinement_01_1_railway_intercity.png`
-- **Location:** `C:\Users\deeks\.gemini\antigravity\brain\9b5a137c-314e-48a7-90a3-3db3f30932a6\ui_refinement_01_1_railway_intercity.png`
+- **Location:** `demo/screenshots/ui_refinement_01_1_railway_intercity.png`
 - **Verification:** Highlights the long-distance Indian Railways leg (2,150 km) spanning the central spine of the subcontinent with distinct indigo rail dash styling and clear provenance declaration.
 
 ### Screenshot 4: Destination & Final Metro Leg (Delhi)
 - **File:** `ui_refinement_01_1_destination_metro.png`
-- **Location:** `C:\Users\deeks\.gemini\antigravity\brain\9b5a137c-314e-48a7-90a3-3db3f30932a6\ui_refinement_01_1_destination_metro.png`
+- **Location:** `demo/screenshots/ui_refinement_01_1_destination_metro.png`
 - **Verification:** Focused on Delhi NCR showing the transfer from New Delhi Railway Station (NDLS) to the Delhi Metro Airport Express leg (9 km) arriving at Delhi Central.
 
 ### Screenshot 5: Alternative Route Switching
 - **File:** `ui_refinement_01_1_alternative_switching.png`
-- **Location:** `C:\Users\deeks\.gemini\antigravity\brain\9b5a137c-314e-48a7-90a3-3db3f30932a6\ui_refinement_01_1_alternative_switching.png`
+- **Location:** `demo/screenshots/ui_refinement_01_1_alternative_switching.png`
 - **Verification:** Demonstrates interactive switching between Pareto alternatives (e.g. Greenest vs Fastest flight corridor). The map smoothly recalculates bounding boxes and updates route geometry dynamically.
 
 ---
