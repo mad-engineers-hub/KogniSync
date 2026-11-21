@@ -64,6 +64,8 @@ export const ResultsPage: React.FC = () => {
     preferredArrivalBefore: arrivalBefore,
     budgetMax,
     passengersCount: passengers,
+    referenceNowInstant: searchParams.get('refNow') || searchParams.get('referenceNowInstant') || undefined,
+    allowHistoricalFixtures: searchParams.get('allowHistorical') === 'true' || undefined,
     weights: {
       cost: costWeight,
       duration: durationWeight,

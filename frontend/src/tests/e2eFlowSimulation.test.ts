@@ -29,6 +29,7 @@ const initialPlannerState: TravelRequestState = {
     metro: true,
     rapido: true,
     auto: true,
+    shuttle: true,
     walk: false,
   },
   naturalLanguageQuery: '',

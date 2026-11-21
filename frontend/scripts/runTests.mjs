@@ -18,6 +18,7 @@ const tests = [
   'src/tests/nullIslandAvoidance.test.ts',
   'src/tests/mapViewportMarkerSync.test.ts',
   'src/tests/mapViewportPersistence.test.ts',
+  'src/tests/timetableFeasibility.test.ts',
 ];
 
 for (const testPath of tests) {

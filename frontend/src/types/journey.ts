@@ -8,7 +8,8 @@ export type TransportMode =
   | 'rapido'
   | 'metro'
   | 'walk'
-  | 'auto';
+  | 'auto'
+  | 'shuttle';
 
 export interface Location {
   id: string;
@@ -20,6 +21,8 @@ export interface Location {
     lat: number;
     lng: number;
   };
+  airportGatewayCity?: string;
+  airportCity?: string;
 }
 
 export interface Money {
@@ -96,6 +99,7 @@ export interface JourneySegment {
   seatClass?: string;
   notes?: string;
   transferBufferMinutes?: number;
+  scheduleState?: SegmentScheduleState;
   provenance?: SegmentProvenance;
   encodedPolyline?: string;
   geojsonGeometry?: {
@@ -113,6 +117,64 @@ export type RecommendationCategory =
   | 'comfortable'
   | 'all';
 
+export interface PlannedOperationalRegulation {
+  eventId: string;
+  trainNumber: string;
+  trainName: string;
+  departureDate: string; // 'YYYY-MM-DD' (e.g. '2026-11-15')
+  affectedSection: string; // 'Daund - Manmad section'
+  regulationMinutes: number; // 130 (2h 10m)
+  reason: string;
+  sourceAuthority: string; // 'South Western Railway (SWR) & Northern Railway (NR)'
+  sourceUrls: {
+    swr: string;
+    nr: string;
+  };
+  noticePublicationDate: string; // '2026-11-10'
+  retrievalTimestamp: string; // '2026-11-14T08:30:00+05:30'
+  impactType: 'en_route_regulation';
+  terminalDelayGuaranteed: false;
+}
+
+export interface TimeWindowIST {
+  earliestIST: string;        // 'HH:mm'
+  latestIST: string;          // 'HH:mm'
+  earliestInstantUTC?: string;// ISO string
+  latestInstantUTC?: string;  // ISO string
+  earliestDurationMin?: number;
+  latestDurationMin?: number;
+  dateStr?: string;           // 'YYYY-MM-DD'
+}
+
+export interface SegmentScheduleState {
+  scheduledDeparture: string; // e.g. "19:20 IST" or "09:15 – 10:50 IST (Estimated)"
+  scheduledArrival: string;   // e.g. "10:30 IST (Day 3)" or "09:21 – 10:56 IST (Estimated)"
+  departureWindow?: TimeWindowIST;
+  arrivalWindow?: TimeWindowIST;
+  connectionType?: 'scheduled' | 'frequency_based_estimate' | 'feeder_shuttle';
+  connectionStatus?: 'feasible' | 'infeasible' | 'uncertain';
+  connectionNotes?: string;
+  transferBufferMinutes?: number;
+  passengerReadinessWindowIST?: string; // e.g. "09:15 – 10:45 IST"
+  waitingMinutesRange?: { min: number; max: number }; // e.g. { min: 0, max: 5 }
+  waitingTimeNotes?: string; // e.g. "Estimated platform wait: 0–5m (based on ~3–5m headway)"
+  rideDurationMinutes?: number; // e.g. 6 (pure travel time after boarding)
+  plannedRegulation?: PlannedOperationalRegulation;
+  estimatedArrival?: string;
+  liveRunningStatus: 'unavailable' | 'on_time' | 'delayed' | 'diverted';
+  liveRunningStatusMessage?: string;
+}
+
+export interface OperationalNotice {
+  headline: string;
+  details: string;
+  plannedRegulation?: PlannedOperationalRegulation;
+  sourceAuthority: string;
+  sourceUrl: string;
+  secondarySourceUrl?: string;
+  publishedAt: string;
+}
+
 export interface Journey {
   id: string;
   title: string;
@@ -120,6 +182,11 @@ export interface Journey {
   destination: Location;
   departureTime: string;
   arrivalTime: string;
+  departureWindow?: TimeWindowIST;
+  arrivalWindow?: TimeWindowIST;
+  isArrivalUncertain?: boolean;
+  arrivalWindowIST?: string;
+  waitingMinutesRange?: { min: number; max: number };
   totalDurationMinutes: number;
   travelDurationMinutes?: number;
   waitingDurationMinutes?: number;
@@ -127,6 +194,8 @@ export interface Journey {
   walkingDurationMinutes?: number;
   isConnectionFeasible?: boolean;
   connectionFeasibilityNotes?: string[];
+  operationalNotice?: OperationalNotice;
+  isExpiredDeparture?: boolean;
   totalPrice: number;
   currency: string;
   totalTransfers: number;
@@ -178,6 +247,8 @@ export interface TravelRequest {
   weights: OptimizationWeights;
   originCoordinates?: { lat: number; lng: number };
   destinationCoordinates?: { lat: number; lng: number };
+  referenceNowInstant?: string; // Optional frozen reference time for deterministic testing
+  allowHistoricalFixtures?: boolean; // When true, historical past departures are not excluded
 }
 
 export interface JourneySearchResponse {

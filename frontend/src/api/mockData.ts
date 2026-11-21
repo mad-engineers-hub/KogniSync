@@ -204,6 +204,7 @@ export const MOCK_JOURNEYS: Journey[] = composeMultiModalJourneys({
   preferredArrivalBefore: '14:00',
   budgetMax: 5000,
   passengersCount: 1,
+  allowHistoricalFixtures: true,
   weights: { cost: 0.4, duration: 0.3, comfort: 0.2, carbon: 0.1 },
 });
 
@@ -224,7 +225,7 @@ export const MOCK_CONFIRMED_TRIP: Trip = {
       idNumber: 'XXXX-XXXX-4321',
     },
   ],
-  tickets: MOCK_JOURNEYS[0].segments.map((seg, idx) => ({
+  tickets: (MOCK_JOURNEYS[0]?.segments || []).map((seg, idx) => ({
     segmentId: seg.segmentId,
     mode: seg.mode,
     provider: seg.provider,

@@ -415,9 +415,15 @@ export function generateDeterministicExplanation(
   };
 }
 
+export interface OptimizationOptions {
+  referenceNowInstant?: Date | string;
+  allowHistorical?: boolean;
+}
+
 /**
  * Optimizes a list of Journey candidate models deterministically.
  * Enforces hard budget constraints first.
+ * Filters expired past departures unless historical fixtures are explicitly permitted.
  * Assigns metrics, scores, Pareto status, and deterministic explanations.
  * Returns sorted journeys with highest score first.
  */
@@ -425,14 +431,24 @@ export function optimizeCandidateJourneys(
   candidateJourneys: Journey[],
   weightsInput?: Partial<OptimizationWeights>,
   budgetMax?: number,
-  naturalLanguageQuery?: string
+  naturalLanguageQuery?: string,
+  options?: OptimizationOptions
 ): Journey[] {
   if (candidateJourneys.length === 0) return [];
 
+  // 0. Filter expired departures before Pareto ranking and presentation
+  let activeJourneys = candidateJourneys;
+  if (!options?.allowHistorical) {
+    activeJourneys = candidateJourneys.filter((j) => !j.isExpiredDeparture);
+    if (activeJourneys.length === 0) {
+      return [];
+    }
+  }
+
   // 1. Enforce Hard Constraints First (budgetMax)
-  let eligibleJourneys = candidateJourneys;
+  let eligibleJourneys = activeJourneys;
   if (budgetMax !== undefined && budgetMax > 0) {
-    eligibleJourneys = candidateJourneys.filter((j) => j.totalPrice <= budgetMax);
+    eligibleJourneys = activeJourneys.filter((j) => j.totalPrice <= budgetMax);
     if (eligibleJourneys.length === 0) {
       return [];
     }
@@ -469,7 +485,8 @@ export function optimizeCandidateJourneys(
 
   const optimizedJourneys: Journey[] = eligibleJourneys.map((j, idx) => {
     const metrics = allMetrics[idx];
-    const isPareto = isParetoList[idx];
+    const isFeasible = j.isConnectionFeasible !== false;
+    const isPareto = isParetoList[idx] && isFeasible;
     const normDict = normalizeMetrics(metrics, bounds);
     const scoreBreakdown = computeJourneyScore(metrics, normDict, weights);
 
@@ -483,12 +500,14 @@ export function optimizeCandidateJourneys(
       budgetMax
     );
 
-    const scaledScore = Math.round(scoreBreakdown.totalScore * 100);
+    // If journey is infeasible (e.g. misses arrival deadline), apply severe penalty
+    const effectiveScore = isFeasible ? scoreBreakdown.totalScore : scoreBreakdown.totalScore * 0.35;
+    const scaledScore = Math.max(10, Math.round(effectiveScore * 100));
 
     const optOutput: OptimizedJourneyOutput = {
       id: j.id,
       title: j.title,
-      score: scoreBreakdown.totalScore,
+      score: effectiveScore,
       scaledScore,
       category: j.recommendationCategory,
       isParetoOptimal: isPareto,
@@ -498,6 +517,10 @@ export function optimizeCandidateJourneys(
       explanation,
     };
 
+    const headline = isFeasible
+      ? explanation.headline
+      : `[Infeasible: Deadline Exceeded] ${explanation.headline}`;
+
     return {
       ...j,
       isParetoOptimal: isPareto,
@@ -505,14 +528,19 @@ export function optimizeCandidateJourneys(
       aiExplanation: {
         ...j.aiExplanation,
         score: scaledScore,
-        rankReason: explanation.headline,
+        rankReason: headline,
         tradeOffs: explanation.tradeoffs.length > 0 ? explanation.tradeoffs : j.aiExplanation.tradeOffs,
       },
     };
   });
 
-  // 7. Sort by score descending (tie-breaking: lowest cost, lowest duration)
+  // 7. Sort: Feasible journeys rank strictly ahead of infeasible journeys, then by score descending
   optimizedJourneys.sort((a, b) => {
+    const feasibleA = a.isConnectionFeasible !== false;
+    const feasibleB = b.isConnectionFeasible !== false;
+    if (feasibleA !== feasibleB) {
+      return feasibleA ? -1 : 1;
+    }
     const scoreA = a.optimization?.score ?? 0;
     const scoreB = b.optimization?.score ?? 0;
     if (Math.abs(scoreB - scoreA) > 1e-4) {

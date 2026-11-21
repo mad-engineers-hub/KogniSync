@@ -34,6 +34,8 @@ export const ModeIcon: React.FC<ModeIconProps> = ({
         return <Car size={size} />;
       case 'metro':
         return <TrainFront size={size} />;
+      case 'shuttle':
+        return <Bus size={size} />;
       case 'walk':
         return <Footprints size={size} />;
     }
