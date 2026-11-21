@@ -129,7 +129,7 @@ class FallbackMapsProvider(MapsProvider):
                 if segment.distance_km
                 else int(direct_meters * 1.15)
             )
-        elif mode_lower in ("cab", "rapido", "auto", "bus", "car", "taxi"):
+        elif mode_lower in ("cab", "rapido", "auto", "bus", "car", "taxi", "shuttle", "feeder"):
             # Road network with slight path curvature
             coords = generate_road_waypoints(p1, p2, num_steps=10)
             distance_meters = (

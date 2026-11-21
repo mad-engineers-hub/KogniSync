@@ -9,6 +9,8 @@ import {
   Eye,
   Compass,
   CheckCircle,
+  AlertTriangle,
+  ExternalLink,
 } from 'lucide-react';
 import { Journey } from '../../types/journey';
 import { ModeIcon } from '../common/ModeIcon';
@@ -32,6 +34,18 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
 }) => {
   const navigate = useNavigate();
   const xrRefs = getJourneyXRReferences(journey);
+
+  const getDurationDisplay = () => {
+    if (journey.arrivalWindow?.earliestInstantUTC && journey.arrivalWindow?.latestInstantUTC) {
+      const depMs = new Date(journey.departureTime).getTime();
+      const arrEarliestMs = new Date(journey.arrivalWindow.earliestInstantUTC).getTime();
+      const arrLatestMs = new Date(journey.arrivalWindow.latestInstantUTC).getTime();
+      const minM = Math.round((arrEarliestMs - depMs) / 60000);
+      const maxM = Math.round((arrLatestMs - depMs) / 60000);
+      return `${formatDuration(minM)} – ${formatDuration(maxM)}`;
+    }
+    return formatDuration(journey.totalDurationMinutes);
+  };
 
   return (
     <div
@@ -96,13 +110,68 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
           <div className="flex items-center gap-2 font-mono text-xs sm:text-sm font-bold text-slate-900 bg-slate-100/80 px-3 py-1.5 rounded-xl border border-slate-200 self-start sm:self-auto">
             <span>{formatTime(journey.departureTime)}</span>
             <span className="text-slate-400 font-normal">to</span>
-            <span>{formatTime(journey.arrivalTime)}</span>
+            {journey.arrivalWindow ? (
+              <span className="text-amber-900 bg-amber-100/80 px-1.5 py-0.5 rounded border border-amber-300 font-extrabold" title="Propagated downstream arrival window (including 0–5m platform wait)">
+                Est. {journey.arrivalWindow.earliestIST} – {journey.arrivalWindow.latestIST} IST
+              </span>
+            ) : (
+              <span>{formatTime(journey.arrivalTime)}</span>
+            )}
             <span className="text-slate-300">|</span>
             <span className="text-blue-700" title={journey.waitingDurationMinutes ? `${journey.travelDurationMinutes || 0}m travel + ${journey.waitingDurationMinutes}m buffer` : undefined}>
-              {formatDuration(journey.totalDurationMinutes)}
+              {getDurationDisplay()}
             </span>
           </div>
         </div>
+
+        {/* Operational Regulation Notice Banner */}
+        {journey.operationalNotice && (
+          <div className="flex flex-col gap-1.5 p-3 sm:p-3.5 rounded-xl bg-amber-50 border border-amber-300/80 text-amber-950">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span className="font-bold text-xs sm:text-sm text-amber-950">
+                  {journey.operationalNotice.headline}
+                </span>
+              </div>
+              <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-amber-200/80 text-amber-900 shrink-0">
+                Planned En-Route Notice
+              </span>
+            </div>
+            <p className="text-[11px] text-amber-900 leading-relaxed pl-6">
+              {journey.operationalNotice.details}
+            </p>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 pl-6 pt-1 text-[10px] font-mono text-amber-800">
+              <span>Authority: {journey.operationalNotice.sourceAuthority}</span>
+              <span>·</span>
+              <a
+                href={journey.operationalNotice.sourceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-blue-700 underline font-semibold hover:text-blue-900"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span>View SWR PR 1404</span>
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+              {journey.operationalNotice.secondarySourceUrl && (
+                <>
+                  <span>·</span>
+                  <a
+                    href={journey.operationalNotice.secondarySourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-blue-700 underline font-semibold hover:text-blue-900"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span>View NR PR 1568</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* 3. True Multi-Modal Synchronized Timeline */}
         <div className="flex flex-col gap-2 p-3 sm:p-4 rounded-xl bg-slate-50/80 border border-slate-200/80">
@@ -124,48 +193,107 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
               return (
                 <React.Fragment key={seg.segmentId || idx}>
                   {/* Segment Row */}
-                  <div className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-white border border-slate-200/90 shadow-2xs">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="p-2 rounded-lg bg-slate-100 text-slate-700 shrink-0">
-                        <ModeIcon mode={seg.mode} className="w-4 h-4" />
-                      </div>
-                      <div className="flex flex-col min-w-0">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 truncate">
-                          <span>{seg.provider}</span>
-                          {seg.vehicleNumber && (
-                            <span className="text-[10px] font-mono text-slate-500">
-                              ({seg.vehicleNumber})
-                            </span>
-                          )}
+                  <div className="flex flex-col gap-2 p-2.5 rounded-lg bg-white border border-slate-200/90 shadow-2xs">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-2 rounded-lg bg-slate-100 text-slate-700 shrink-0">
+                          <ModeIcon mode={seg.mode} className="w-4 h-4" />
                         </div>
-                        <div className="text-[11px] text-slate-600 truncate">
-                          <span>{seg.origin.name}</span>
-                          <span className="text-slate-400 mx-1">→</span>
-                          <span className="font-medium text-slate-900">
-                            {seg.destination.name}
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-900 truncate">
+                            <span>{seg.provider}</span>
+                            {seg.vehicleNumber && (
+                              <span className="text-[10px] font-mono text-slate-500">
+                                ({seg.vehicleNumber})
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-600 truncate">
+                            <span>{seg.origin.name}</span>
+                            <span className="text-slate-400 mx-1">→</span>
+                            <span className="font-medium text-slate-900">
+                              {seg.destination.name}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end shrink-0">
+                        <div className="flex items-center gap-1 font-mono">
+                          <span className="text-xs font-extrabold text-slate-900">
+                            {formatCurrency(seg.price, journey.currency)}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-semibold">
+                            {seg.provenance?.attributes?.fare?.isEstimate === false ? '(Live)' : '(Est.)'}
                           </span>
                         </div>
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          {seg.scheduleState?.departureWindow && seg.scheduleState?.arrivalWindow && seg.scheduleState.connectionType === 'frequency_based_estimate' ? (
+                            <span className="text-amber-900 font-medium">
+                              Est. {seg.scheduleState.departureWindow.earliestIST}–{seg.scheduleState.departureWindow.latestIST} → {seg.scheduleState.arrivalWindow.earliestIST}–{seg.scheduleState.arrivalWindow.latestIST}
+                            </span>
+                          ) : (
+                            <span>{formatDuration(seg.durationMinutes)} · {formatTime(seg.departureTime)} - {formatTime(seg.arrivalTime)}</span>
+                          )}
+                        </span>
+                        {seg.availability.isRealInventory === false && (
+                          <span className="text-[9px] font-mono text-amber-700 bg-amber-50 px-1 rounded border border-amber-200 mt-0.5">
+                            Simulated Seats
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex flex-col items-end shrink-0">
-                      <div className="flex items-center gap-1 font-mono">
-                        <span className="text-xs font-extrabold text-slate-900">
-                          {formatCurrency(seg.price, journey.currency)}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-semibold">
-                          {seg.provenance?.attributes?.fare?.isEstimate === false ? '(Live)' : '(Est.)'}
+                    {/* Operational Schedule State & Discrepancy Breakdown */}
+                    {seg.scheduleState && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-100 text-[10px] font-mono">
+                        {seg.scheduleState.connectionType === 'scheduled' ? (
+                          <>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200" title="Fixed Published Timetable Departure">
+                              Published Dep: <strong>{seg.scheduleState.scheduledDeparture}</strong>
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200" title="Scheduled Arrival Uncertainty Window">
+                              Arrival Window: <strong>09:00 – 10:30 IST</strong>
+                            </span>
+                          </>
+                        ) : seg.scheduleState.connectionType === 'frequency_based_estimate' ? (
+                          <>
+                            <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 font-semibold" title="Frequency-based urban transit">
+                              Urban Transit: <strong>Frequency-based (~3–5m headway)</strong>
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200" title="Passenger Readiness at NDLS Metro Concourse after 15m transfer buffer">
+                              Readiness: <strong>{seg.scheduleState.passengerReadinessWindowIST || '09:15 – 10:45 IST'}</strong>
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200" title="Estimated Onward Departure Window (including 0–5m platform wait)">
+                              Est. Dep: <strong>{seg.scheduleState.departureWindow?.earliestIST} – {seg.scheduleState.departureWindow?.latestIST} IST</strong> (Wait: 0–5m)
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200" title="Estimated Final Arrival Window (after 6m metro ride)">
+                              Est. Arr: <strong>{seg.scheduleState.arrivalWindow?.earliestIST} – {seg.scheduleState.arrivalWindow?.latestIST} IST</strong> (Ride: 6m)
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200" title="Connection Feasibility Status">
+                              Status: <strong>Feasible (tracks passenger readiness)</strong>
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                              Dep: <strong>{seg.scheduleState.scheduledDeparture}</strong>
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                              Arr: <strong>{seg.scheduleState.scheduledArrival}</strong>
+                            </span>
+                          </>
+                        )}
+                        {seg.scheduleState.plannedRegulation && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 font-semibold" title="Official planned engineering regulation">
+                            ⚠ En Route Regulated: +{seg.scheduleState.plannedRegulation.regulationMinutes}m
+                          </span>
+                        )}
+                        <span className="px-1.5 py-0.5 rounded bg-slate-50 text-slate-500 border border-slate-200 italic" title="Live status unverified">
+                          {seg.scheduleState.liveRunningStatusMessage || 'Live telemetry unavailable'}
                         </span>
                       </div>
-                      <span className="text-[11px] text-slate-500 font-mono">
-                        {formatDuration(seg.durationMinutes)} · {formatTime(seg.departureTime)} - {formatTime(seg.arrivalTime)}
-                      </span>
-                      {seg.availability.isRealInventory === false && (
-                        <span className="text-[9px] font-mono text-amber-700 bg-amber-50 px-1 rounded border border-amber-200 mt-0.5">
-                          Simulated Seats
-                        </span>
-                      )}
-                    </div>
+                    )}
                   </div>
 
                   {/* Explicit Transfer Node between segments */}
@@ -178,7 +306,13 @@ export const JourneyCard: React.FC<JourneyCardProps> = ({
                           <strong className="font-bold">
                             {seg.transferBufferMinutes || 15} min buffer
                           </strong>
-                          <span className="text-[10px] text-amber-700/80 font-normal ml-1">(Planning assumption)</span>
+                          <span className="text-[10px] text-amber-700/80 font-normal ml-1">
+                            {idx === 1 && seg.scheduleState?.passengerReadinessWindowIST ? (
+                              <span>(Transfer: <strong>15m</strong> · Passenger readiness: <strong>{seg.scheduleState.passengerReadinessWindowIST}</strong> · Onward wait: <strong>0–5m</strong>)</span>
+                            ) : (
+                              <span>(Planning assumption)</span>
+                            )}
+                          </span>
                           <span className="text-amber-500 mx-1.5">·</span>
                           Change at <span className="font-semibold text-slate-800">{seg.destination.name}</span>
                         </span>

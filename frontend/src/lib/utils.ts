@@ -120,6 +120,14 @@ export function getModeMeta(mode: TransportMode): ModeMeta {
         borderColor: 'border-yellow-300',
         accentColor: '#ca8a04',
       };
+    case 'shuttle':
+      return {
+        label: 'EV Shuttle',
+        badgeBg: 'bg-emerald-50',
+        badgeText: 'text-emerald-800',
+        borderColor: 'border-emerald-200',
+        accentColor: '#059669',
+      };
     case 'walk':
       return {
         label: 'Walk',

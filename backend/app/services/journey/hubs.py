@@ -9,13 +9,12 @@ import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from app.services.journey.schemas import CoordinatesSchema, LocationSchema
-
+from app.services.journey.timezone_utils import ist_to_utc_instant
 
 def slugify(text: str) -> str:
     cleaned = (text or "").lower()
     cleaned = re.sub(r"[^a-z0-9]+", "-", cleaned)
     return cleaned.strip("-")
-
 
 @dataclass
 class HubProfile:
@@ -44,7 +43,7 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
         city="Bangalore",
         lat=12.9716,
         lng=77.5946,
-        railway_name="Bangalore Railway Station (KSR / Cantt)",
+        railway_name="KSR Bengaluru City Railway Station",
         railway_code="SBC",
         railway_lat=12.9781,
         railway_lng=77.5694,
@@ -324,6 +323,7 @@ CITY_HUB_REGISTRY: dict[str, HubProfile] = {
 
 LOCALITY_TO_CITY_MAP: dict[str, str] = {
     # Bangalore
+    "udayapura": "bangalore",
     "udayapalya": "bangalore",
     "kanakapura": "bangalore",
     "kanakapura road": "bangalore",
@@ -396,6 +396,10 @@ CORRIDOR_DISTANCES: dict[str, int] = {
     "udupi-bangalore": 410,
     "delhi-mumbai": 1385,
     "mumbai-delhi": 1385,
+    "bangalore-delhi": 2406,
+    "delhi-bangalore": 2406,
+    "bangalore-delhi-rajdhani": 2365,
+    "delhi-bangalore-rajdhani": 2365,
     "mumbai-pune": 150,
     "pune-mumbai": 150,
     "delhi-jaipur": 280,
@@ -506,19 +510,35 @@ def resolve_hub_context(
         )
         is_locality = False
 
-    user_coords = (
-        custom_coordinates
-        if custom_coordinates
-        else CoordinatesSchema(
+    is_udayapura = "udayapura" in lower
+    is_udayapalya = "udayapalya" in lower and not is_udayapura
+
+    if custom_coordinates:
+        user_coords = custom_coordinates
+    elif is_udayapura:
+        user_coords = CoordinatesSchema(lat=12.8250, lng=77.5100)
+    elif is_udayapalya:
+        user_coords = CoordinatesSchema(lat=12.8120, lng=77.5020)
+    else:
+        user_coords = CoordinatesSchema(
             lat=round(profile.lat + (-0.04 if is_origin else 0.04), 4),
             lng=round(profile.lng + (-0.03 if is_origin else 0.03), 4),
         )
+
+    resolved_name = (
+        "Udayapura, South Bengaluru"
+        if is_udayapura
+        else "Udayapalya, South Bengaluru"
+        if is_udayapalya
+        else f"{capitalized_raw}"
+        if is_locality
+        else f"{profile.city} City Hub"
     )
 
     user_node = LocationSchema(
         id=f"loc-usr-{'orig' if is_origin else 'dest'}-{slugify(raw or profile.city)}",
-        name=f"{capitalized_raw}" if is_locality else f"{profile.city} City Hub",
-        city=f"{capitalized_raw} ({profile.city})" if is_locality else profile.city,
+        name=resolved_name,
+        city=f"{resolved_name} ({profile.city})" if is_locality else profile.city,
         type="address" if is_locality else "landmark",
         coordinates=user_coords,
     )
@@ -569,7 +589,12 @@ def resolve_hub_context(
     )
 
 
-def estimate_corridor_distance_km(origin_city: str, dest_city: str) -> int:
+def estimate_corridor_distance_km(
+    origin_city: str,
+    dest_city: str,
+    origin_coords: CoordinatesSchema | None = None,
+    dest_coords: CoordinatesSchema | None = None,
+) -> int:
     o = slugify(origin_city)
     d = slugify(dest_city)
     key = f"{o}-{d}"
@@ -578,16 +603,21 @@ def estimate_corridor_distance_km(origin_city: str, dest_city: str) -> int:
 
     p1 = CITY_HUB_REGISTRY.get(o)
     p2 = CITY_HUB_REGISTRY.get(d)
-    if p1 and p2:
+    lat1 = p1.lat if p1 else (origin_coords.lat if origin_coords else None)
+    lng1 = p1.lng if p1 else (origin_coords.lng if origin_coords else None)
+    lat2 = p2.lat if p2 else (dest_coords.lat if dest_coords else None)
+    lng2 = p2.lng if p2 else (dest_coords.lng if dest_coords else None)
+
+    if lat1 is not None and lng1 is not None and lat2 is not None and lng2 is not None:
         R = 6371.0
-        d_lat = math.radians(p2.lat - p1.lat)
-        d_lon = math.radians(p2.lng - p1.lng)
+        d_lat = math.radians(lat2 - lat1)
+        d_lon = math.radians(lng2 - lng1)
         a = (
             math.sin(d_lat / 2.0) ** 2
-            + math.cos(math.radians(p1.lat)) * math.cos(math.radians(p2.lat)) * math.sin(d_lon / 2.0) ** 2
+            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon / 2.0) ** 2
         )
         c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
-        return max(90, int(round(R * c * 1.25)))
+        return max(50, int(round(R * c * 1.25)))
 
     return 450
 
@@ -615,13 +645,8 @@ def parse_target_arrival(deadline_str: str | None) -> tuple[int, int]:
 
 
 def build_iso_date(base_date_str: str, hour: int, minute: int) -> datetime:
-    try:
-        parts = [int(p) for p in base_date_str.split("-")]
-        if len(parts) == 3:
-            return datetime(parts[0], parts[1], parts[2], hour, minute, 0, tzinfo=timezone.utc)
-    except Exception:
-        pass
-    return datetime(2026, 10, 30, hour, minute, 0, tzinfo=timezone.utc)
+    time_str = f"{hour:02d}:{minute:02d}"
+    return ist_to_utc_instant(base_date_str, time_str)
 
 
 def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
@@ -632,6 +657,7 @@ def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
             "rapido": {"provider": "Rapido QuickSync Bangalore", "vehicle_name": "Rapido Auto / Bike Express"},
             "bus": {"provider": "BMTC City Feeder (Route 215)", "vehicle_name": "Electric City Bus"},
             "metro": {"provider": "Namma Metro Green Line", "vehicle_name": "Metro Electric Transit"},
+            "shuttle": {"provider": "Bangalore Rapid EV Shuttle", "vehicle_name": "Zero-Emission Feeder Shuttle"},
         }
     if "chennai" in c:
         return {
@@ -652,7 +678,9 @@ def get_local_transit_operators(city_name: str) -> dict[str, dict[str, str]]:
             "cab": {"provider": "KogniSync Express Cab (Delhi NCR)", "vehicle_name": "Premier EV Sedan"},
             "rapido": {"provider": "Rapido QuickSync Delhi", "vehicle_name": "Rapido Auto / Bike Express"},
             "bus": {"provider": "DTC Electric Feeder", "vehicle_name": "Low-Floor Electric Bus"},
-            "metro": {"provider": "Delhi Metro Airport Express", "vehicle_name": "Rapid Metro Line"},
+            "metro": {"provider": "Delhi Metro (Yellow Line)", "vehicle_name": "DMRC Rapid Transit"},
+            "airport_express": {"provider": "Delhi Metro Airport Express", "vehicle_name": "Airport Express Orange Line"},
+            "shuttle": {"provider": "Delhi Metro Feeder EV Shuttle", "vehicle_name": "DMRC Electric Feeder"},
         }
     if "goa" in c:
         return {

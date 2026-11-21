@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ConfigDict, AliasChoices, model_validator
 from app.services.optimizer.schemas import OptimizationWeightsInput, OptimizedJourneyOutput
 
 TransportMode = Literal[
-    "flight", "train", "bus", "cab", "rapido", "metro", "walk", "auto"
+    "flight", "train", "bus", "cab", "rapido", "metro", "walk", "auto", "shuttle"
 ]
 
 RecommendationCategory = Literal[

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 from app.services.journey.schemas import JourneySchema, JourneySegmentSchema
+from app.services.journey.timezone_utils import ist_to_utc_instant
 
 # Documented planning buffer assumptions (minutes)
 # Note: These values are transparent planning assumptions for multimodal coordination,
@@ -112,16 +113,31 @@ def validate_journey_connections(
                 f"Total journey fare (₹{journey.total_price:.2f}) exceeds specified budget cap (₹{budget_max:.2f})."
             )
 
-    # 2. Hard Arrival Deadline Constraint
+    # 2. Hard Arrival Deadline Constraint (Evaluated as exact UTC instants)
     if preferred_arrival_before and journey.arrival_time:
         try:
-            arr_str = str(journey.arrival_time)
+            arr_iso = str(journey.arrival_time).replace("Z", "+00:00")
+            arr_dt = datetime.fromisoformat(arr_iso)
+            if arr_dt.tzinfo is None:
+                arr_dt = arr_dt.replace(tzinfo=timezone.utc)
+            else:
+                arr_dt = arr_dt.astimezone(timezone.utc)
+
             pref_str = str(preferred_arrival_before)
-            arr_time_hhmm = arr_str.split("T")[1][:5] if "T" in arr_str else arr_str[:5]
-            pref_time_hhmm = pref_str.split("T")[1][:5] if "T" in pref_str else pref_str[:5]
-            if arr_time_hhmm > pref_time_hhmm:
+            if "T" in pref_str:
+                pref_iso = pref_str.replace("Z", "+00:00")
+                pref_dt = datetime.fromisoformat(pref_iso)
+                if pref_dt.tzinfo is None:
+                    pref_dt = pref_dt.replace(tzinfo=timezone.utc)
+                else:
+                    pref_dt = pref_dt.astimezone(timezone.utc)
+            else:
+                dep_date = str(journey.departure_time).split("T")[0] if journey.departure_time else "2026-11-15"
+                pref_dt = ist_to_utc_instant(dep_date, pref_str)
+
+            if arr_dt > pref_dt:
                 reasons.append(
-                    f"Journey arrival time ({arr_time_hhmm}) exceeds requested arrival deadline ({pref_time_hhmm})."
+                    f"Journey arrival instant ({arr_dt.isoformat()}) exceeds requested arrival deadline instant ({pref_dt.isoformat()})."
                 )
         except Exception:
             pass

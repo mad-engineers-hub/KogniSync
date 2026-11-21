@@ -46,6 +46,7 @@ const DEFAULT_MODES: Record<TransportMode, boolean> = {
   bus: true,
   cab: true,
   metro: true,
+  shuttle: true,
   rapido: true,
   auto: true,
   walk: false,

@@ -36,3 +36,9 @@ def ephemeral_test_jwt_secret():
     """Provide a fresh per-test-session random JWT signing key when none is configured."""
     generated = _ensure_ephemeral_test_jwt_secret()
     yield generated
+
+
+@pytest.fixture
+def anyio_backend():
+    """Pin AnyIO test runner to standard asyncio backend."""
+    return "asyncio"

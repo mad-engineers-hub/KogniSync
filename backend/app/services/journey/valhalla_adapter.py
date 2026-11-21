@@ -96,8 +96,8 @@ class ValhallaTransportAdapter(TransportProvider):
         elif mode_lower == "rapido":
             # Valhalla supports motorcycle costing for two-wheelers
             return "motorcycle"
-        elif mode_lower in ("cab", "auto", "bus"):
-            # Note: 'bus' uses Valhalla 'auto' costing to compute physical road network distance
+        elif mode_lower in ("cab", "auto", "bus", "shuttle"):
+            # Note: 'bus' and 'shuttle' use Valhalla 'auto' costing to compute physical road network distance
             # and travel time along road corridors. This models vehicular road routing,
             # NOT public-transit routing, fixed bus routes, or scheduled bus timetables.
             return "auto"

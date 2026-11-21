@@ -25,11 +25,31 @@ import {
   Route as RouteIcon,
   CheckCircle2,
   AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 
 import { useJourneyGuidance } from '../../hooks/useJourneyGuidance';
 import { NavigationGuidanceDrawer } from '../navigation/NavigationGuidanceDrawer';
 import { DisruptionEvent, JourneyDisruptionAssessment } from '../../types/disruption';
+import {
+  decodePolyline,
+  normalizeLeafletCoord,
+  MODE_COLORS,
+  getModeStyle,
+  DEFAULT_TILE_URL,
+  DEFAULT_TILE_SUBDOMAINS,
+  DEFAULT_TILE_ATTRIBUTION,
+} from '../../utils/mapCoordinates';
+
+export {
+  decodePolyline,
+  normalizeLeafletCoord,
+  MODE_COLORS,
+  getModeStyle,
+  DEFAULT_TILE_URL,
+  DEFAULT_TILE_SUBDOMAINS,
+  DEFAULT_TILE_ATTRIBUTION,
+};
 
 export interface JourneyMapProps {
   segments: JourneySegment[];
@@ -59,22 +79,6 @@ interface ProjectedWaypoint {
   xrSceneId?: string | null;
   transferBufferMinutes?: number;
   segmentIndex?: number;
-}
-
-// Mode color palette
-const MODE_COLORS: Record<string, { stroke: string; glow: string; weight: number; dashArray?: string }> = {
-  walk: { stroke: '#059669', glow: '#34d399', weight: 4, dashArray: '4, 8' },
-  cab: { stroke: '#2563eb', glow: '#60a5fa', weight: 5 },
-  auto: { stroke: '#2563eb', glow: '#60a5fa', weight: 5 },
-  rapido: { stroke: '#7c3aed', glow: '#a78bfa', weight: 5 },
-  bus: { stroke: '#d97706', glow: '#fbbf24', weight: 5 },
-  train: { stroke: '#9333ea', glow: '#c084fc', weight: 6 },
-  flight: { stroke: '#4f46e5', glow: '#818cf8', weight: 4, dashArray: '8, 8' },
-  metro: { stroke: '#0d9488', glow: '#2dd4bf', weight: 5 },
-};
-
-function getModeStyle(mode: string) {
-  return MODE_COLORS[mode] || { stroke: '#2563eb', glow: '#60a5fa', weight: 5 };
 }
 
 export const JourneyMap: React.FC<JourneyMapProps> = ({
@@ -120,11 +124,13 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     }
   }, [location.search, initialGuidanceOpen]);
   const [leafletError, setLeafletError] = useState<boolean>(false);
+  const [tileLoading, setTileLoading] = useState<boolean>(false);
   const [tileError, setTileError] = useState<boolean>(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const layersGroupRef = useRef<L.FeatureGroup | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
 
   // Synthesize or use real Journey object for backend route enrichment
   const targetJourney: Journey = useMemo(() => {
@@ -255,23 +261,38 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         // Initialize Leaflet map
         const map = L.map(mapContainerRef.current, {
           zoomControl: false,
-          attributionControl: false,
+          attributionControl: true,
           minZoom: 3,
           maxZoom: 19,
         });
 
-        // Configurable Basemap Tile Layer (defaulting to CARTO Positron with OSM attribution)
-        const tileUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_URL) ||
-          'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-        const tileSubdomains = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_SUBDOMAINS) || 'abcd';
+        // Configurable Basemap Tile Layer (defaulting to OpenStreetMap standard tiles with OSM attribution)
+        const tileUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_URL) || DEFAULT_TILE_URL;
+        const tileSubdomains = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_SUBDOMAINS) || DEFAULT_TILE_SUBDOMAINS;
 
-        const tileLayer = L.tileLayer(tileUrl, {
-          subdomains: tileSubdomains,
+        const tileOptions: L.TileLayerOptions = {
           maxZoom: 19,
-        }).addTo(map);
+          attribution: DEFAULT_TILE_ATTRIBUTION,
+        };
+        if (tileSubdomains) {
+          tileOptions.subdomains = tileSubdomains;
+        }
+
+        const tileLayer = L.tileLayer(tileUrl, tileOptions).addTo(map);
+        tileLayerRef.current = tileLayer;
+
+        tileLayer.on('loading', () => {
+          setTileLoading(true);
+        });
+
+        tileLayer.on('load', () => {
+          setTileLoading(false);
+          setTileError(false);
+        });
 
         tileLayer.on('tileerror', () => {
           setTileError(true);
+          setTileLoading(false);
         });
 
         const featureGroup = L.featureGroup().addTo(map);
@@ -325,8 +346,10 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         if (alt.id === targetJourney.id) return;
         const altPoints: [number, number][] = [];
         alt.segments.forEach((s) => {
-          altPoints.push([s.origin.coordinates.lat, s.origin.coordinates.lng]);
-          altPoints.push([s.destination.coordinates.lat, s.destination.coordinates.lng]);
+          const o = normalizeLeafletCoord([s.origin.coordinates.lat, s.origin.coordinates.lng]);
+          const d = normalizeLeafletCoord([s.destination.coordinates.lat, s.destination.coordinates.lng]);
+          if (o) altPoints.push(o);
+          if (d) altPoints.push(d);
         });
 
         if (altPoints.length >= 2) {
@@ -349,7 +372,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       });
     }
 
-    // 2. Draw Active Journey Segments (Real Valhalla / Geo Geometry)
+    // 2. Draw Active Journey Segments (Independent Leg Rendering)
     const disruptedSegmentMap = new Map(
       (disruptionAssessment?.segmentImpacts || [])
         .filter((imp) => imp.impactLevel !== 'none')
@@ -357,98 +380,146 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     );
 
     segments.forEach((seg, idx) => {
-      const enrichedSeg = effectiveRoute.segments?.[idx];
+      const enrichedSeg = effectiveRoute?.segments?.[idx];
       const style = getModeStyle(seg.mode);
       const isActive = effectiveActiveSegmentIndex === idx;
 
       let latlngs: [number, number][] = [];
 
-      // Prefer GeoJSON geometry LineString coordinates [lng, lat]
+      // Priority 1: GeoJSON geometry LineString coordinates [lng, lat]
       if (enrichedSeg?.geojson_geometry?.coordinates?.length) {
-        latlngs = enrichedSeg.geojson_geometry.coordinates.map((c) => [c[1], c[0]]);
+        latlngs = enrichedSeg.geojson_geometry.coordinates
+          .map((c) => normalizeLeafletCoord(c as [number, number], true))
+          .filter((c): c is [number, number] => c !== null);
       } else if (seg.geojsonGeometry?.coordinates?.length) {
-        latlngs = seg.geojsonGeometry.coordinates.map((c) => [c[1], c[0]]);
+        latlngs = seg.geojsonGeometry.coordinates
+          .map((c) => normalizeLeafletCoord(c as [number, number], true))
+          .filter((c): c is [number, number] => c !== null);
+      } else if (enrichedSeg?.encoded_polyline) {
+        latlngs = decodePolyline(enrichedSeg.encoded_polyline, 6)
+          .map((c) => normalizeLeafletCoord(c, false))
+          .filter((c): c is [number, number] => c !== null);
+      } else if (seg.encodedPolyline) {
+        latlngs = decodePolyline(seg.encodedPolyline, 5)
+          .map((c) => normalizeLeafletCoord(c, false))
+          .filter((c): c is [number, number] => c !== null);
       } else if (enrichedSeg?.coordinates?.length) {
-        latlngs = enrichedSeg.coordinates.map((c) => [c.latitude, c.longitude]);
-      } else {
-        latlngs = [
-          [seg.origin.coordinates.lat, seg.origin.coordinates.lng],
-          [seg.destination.coordinates.lat, seg.destination.coordinates.lng],
-        ];
+        latlngs = enrichedSeg.coordinates
+          .map((c) => normalizeLeafletCoord([c.latitude, c.longitude], false))
+          .filter((c): c is [number, number] => c !== null);
+      }
+
+      // Fallback: segment origin and destination endpoints
+      if (latlngs.length < 2) {
+        const o = normalizeLeafletCoord([seg.origin.coordinates.lat, seg.origin.coordinates.lng]);
+        const d = normalizeLeafletCoord([seg.destination.coordinates.lat, seg.destination.coordinates.lng]);
+        if (o && d) {
+          latlngs = [o, d];
+        }
       }
 
       latlngs.forEach((pt) => allLatLangs.push(pt));
 
-      // Active casing / halo glow
-      if (isActive) {
-        L.polyline(latlngs, {
-          color: style.glow,
-          weight: style.weight + 8,
-          opacity: 0.45,
+      if (latlngs.length >= 2) {
+        // Active casing / halo glow
+        if (isActive) {
+          L.polyline(latlngs, {
+            color: style.glow,
+            weight: style.weight + 8,
+            opacity: 0.5,
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(featureGroup);
+        }
+
+        // Disrupted segment hazard casing
+        if (disruptedSegmentMap.has(seg.segmentId)) {
+          const imp = disruptedSegmentMap.get(seg.segmentId)!;
+          L.polyline(latlngs, {
+            color: imp.impactLevel === 'critical' ? '#e11d48' : '#d97706',
+            weight: style.weight + 4,
+            dashArray: '8, 8',
+            opacity: 0.95,
+            lineCap: 'round',
+          }).addTo(featureGroup);
+        }
+
+        // Main route polyline
+        const isCompleted = guidance.isSegmentCompleted(seg.segmentId);
+        const line = L.polyline(latlngs, {
+          color: isCompleted ? '#10b981' : style.stroke,
+          weight: isActive ? style.weight + 2 : style.weight,
+          dashArray: isCompleted ? '6, 6' : style.dashArray,
+          opacity: isActive ? 1.0 : isCompleted ? 0.65 : 0.85,
           lineCap: 'round',
           lineJoin: 'round',
         }).addTo(featureGroup);
+
+        const isLive = enrichedSeg?.is_live_geometry ?? seg.isLiveGeometry ?? false;
+        const dist = Math.round((enrichedSeg?.distance_meters ?? (seg.distanceKm * 1000)) / 1000);
+        const dur = Math.round((enrichedSeg?.duration_seconds ?? (seg.durationMinutes * 60)) / 60);
+
+        const provenanceLabel = isLive
+          ? '✓ Verified OSM Road Routing'
+          : seg.mode === 'train'
+          ? 'Deterministic Rail Corridor (Indian Railways)'
+          : seg.mode === 'metro'
+          ? 'Urban Metro Transit Corridor'
+          : seg.mode === 'shuttle'
+          ? 'Feeder Road Corridor (Zero-Emission EV)'
+          : seg.mode === 'flight'
+          ? 'Geodesic Flight Corridor'
+          : 'Corridor Transit Estimate';
+
+        const scheduleStateHtml = seg.scheduleState?.departureWindow && seg.scheduleState?.arrivalWindow
+          ? `<div style="font-size: 10px; font-family: monospace; color: #0f172a; margin-bottom: 6px; padding: 3px 6px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px;">
+               <div><strong>Est. Dep:</strong> ${seg.scheduleState.departureWindow.earliestIST} – ${seg.scheduleState.departureWindow.latestIST} IST</div>
+               <div><strong>Est. Arr:</strong> ${seg.scheduleState.arrivalWindow.earliestIST} – ${seg.scheduleState.arrivalWindow.latestIST} IST</div>
+             </div>`
+          : '';
+
+        const popupContent = `
+          <div style="font-family: sans-serif; min-width: 190px; padding: 2px;">
+            <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">
+              ${seg.provider} <span style="font-size: 11px; text-transform: uppercase; color: #64748b;">(${seg.mode})</span>
+            </div>
+            <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
+              ${seg.origin.city} → ${seg.destination.city}
+            </div>
+            <div style="font-size: 11px; font-family: monospace; color: #0f172a; display: flex; gap: 8px; margin-bottom: 6px;">
+              <span><strong>${dist}</strong> km</span>
+              <span>·</span>
+              <span><strong>${dur}</strong> min</span>
+            </div>
+            ${scheduleStateHtml}
+            <div style="display: inline-block; font-size: 10px; font-family: monospace; padding: 2px 6px; border-radius: 4px; ${
+              isLive
+                ? 'background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;'
+                : 'background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;'
+            }">
+              ${provenanceLabel}
+            </div>
+          </div>
+        `;
+
+        line.bindPopup(popupContent);
+        if (seg.scheduleState?.departureWindow && seg.scheduleState?.arrivalWindow) {
+          line.bindTooltip(`${seg.provider}: Est. Dep ${seg.scheduleState.departureWindow.earliestIST}–${seg.scheduleState.departureWindow.latestIST} → Arr ${seg.scheduleState.arrivalWindow.earliestIST}–${seg.scheduleState.arrivalWindow.latestIST} IST`);
+        }
+        line.on('click', () => {
+          setActiveSegmentIndex(idx);
+          if (onSegmentClick) onSegmentClick(seg.segmentId);
+        });
       }
-
-      // Disrupted segment hazard casing
-      if (disruptedSegmentMap.has(seg.segmentId)) {
-        const imp = disruptedSegmentMap.get(seg.segmentId)!;
-        L.polyline(latlngs, {
-          color: imp.impactLevel === 'critical' ? '#e11d48' : '#d97706',
-          weight: style.weight + 4,
-          dashArray: '8, 8',
-          opacity: 0.95,
-          lineCap: 'round',
-        }).addTo(featureGroup);
-      }
-
-      // Main route polyline
-      const isCompleted = guidance.isSegmentCompleted(seg.segmentId);
-      const line = L.polyline(latlngs, {
-        color: isCompleted ? '#10b981' : style.stroke,
-        weight: isActive ? style.weight + 2 : style.weight,
-        dashArray: isCompleted ? '6, 6' : style.dashArray,
-        opacity: isActive ? 1.0 : isCompleted ? 0.65 : 0.85,
-        lineCap: 'round',
-        lineJoin: 'round',
-      }).addTo(featureGroup);
-
-      const isLive = enrichedSeg?.is_live_geometry ?? seg.isLiveGeometry ?? false;
-      const dist = Math.round((enrichedSeg?.distance_meters ?? (seg.distanceKm * 1000)) / 1000);
-      const dur = Math.round((enrichedSeg?.duration_seconds ?? (seg.durationMinutes * 60)) / 60);
-
-      const popupContent = `
-        <div style="font-family: sans-serif; min-width: 180px; padding: 2px;">
-          <div style="font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 2px;">
-            ${seg.provider} <span style="font-size: 11px; text-transform: uppercase; color: #64748b;">(${seg.mode})</span>
-          </div>
-          <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
-            ${seg.origin.city} → ${seg.destination.city}
-          </div>
-          <div style="font-size: 11px; font-family: monospace; color: #0f172a; display: flex; gap: 8px; margin-bottom: 6px;">
-            <span><strong>${dist}</strong> km</span>
-            <span>·</span>
-            <span><strong>${dur}</strong> min</span>
-          </div>
-          <div style="display: inline-block; font-size: 10px; font-family: monospace; padding: 2px 6px; border-radius: 4px; ${
-            isLive
-              ? 'background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;'
-              : 'background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;'
-          }">
-            ${isLive ? '✓ Verified Valhalla OSM Route' : 'Corridor Transit Estimate'}
-          </div>
-        </div>
-      `;
-
-      line.bindPopup(popupContent);
-      line.on('click', () => {
-        setActiveSegmentIndex(idx);
-        if (onSegmentClick) onSegmentClick(seg.segmentId);
-      });
     });
 
     // 3. Draw Grounded Markers (Origin, Destination, Transfer Hubs)
     waypoints.forEach((wp) => {
+      const normWp = normalizeLeafletCoord([wp.lat, wp.lng]);
+      if (!normWp) return;
+      allLatLangs.push(normWp);
+      const [wpLat, wpLng] = normWp;
+
       const isOrigin = wp.hubType === 'origin';
       const isDest = wp.hubType === 'destination';
       const hasXR = !!wp.xrSceneId;
@@ -495,12 +566,18 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
         popupAnchor: [0, -14],
       });
 
-      const marker = L.marker([wp.lat, wp.lng], { icon: customIcon }).addTo(featureGroup);
+      const marker = L.marker([wpLat, wpLng], { icon: customIcon }).addTo(featureGroup);
 
       const xrButtonHtml = hasXR
         ? `<button id="xr-btn-${wp.xrSceneId}" style="margin-top: 8px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 10px; background: #2563eb; color: #ffffff; font-weight: 700; font-size: 11px; border: none; border-radius: 8px; cursor: pointer;">
              <span>Explore 360° Concourse</span>
            </button>`
+        : '';
+
+      const destArrivalHtml = isDest && targetJourney?.arrivalWindow
+        ? `<div style="margin-top: 6px; padding: 4px 6px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; font-size: 10px; font-family: monospace; color: #92400e;">
+             <strong>Estimated Arrival:</strong> ${targetJourney.arrivalWindow.earliestIST} – ${targetJourney.arrivalWindow.latestIST} IST
+           </div>`
         : '';
 
       const markerPopup = `
@@ -513,18 +590,31 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
           <div style="font-weight: 700; font-size: 13px; color: #0f172a;">${wp.title}</div>
           <div style="font-size: 11px; color: #64748b; margin-bottom: 4px;">${wp.city} · ${wp.type}</div>
           <div style="font-size: 10px; font-family: monospace; color: #64748b;">
-            ${wp.lat.toFixed(4)}°N, ${wp.lng.toFixed(4)}°E
+            ${wpLat.toFixed(4)}°N, ${wpLng.toFixed(4)}°E
           </div>
           ${
             wp.transferBufferMinutes
               ? `<div style="margin-top: 4px; font-size: 11px; font-weight: 600; color: #d97706;">Transfer Buffer: +${wp.transferBufferMinutes} min</div>`
               : ''
           }
+          ${destArrivalHtml}
           ${xrButtonHtml}
         </div>
       `;
 
       marker.bindPopup(markerPopup);
+
+      if (isDest && targetJourney?.arrivalWindow) {
+        marker.bindTooltip(`Destination: ${wp.title} (Est. Arrival: ${targetJourney.arrivalWindow.earliestIST} – ${targetJourney.arrivalWindow.latestIST} IST)`, {
+          direction: 'top',
+          offset: [0, -14],
+        });
+      } else {
+        marker.bindTooltip(`${wp.title} (${wp.city})`, {
+          direction: 'top',
+          offset: [0, -14],
+        });
+      }
 
       // Attach XR click listener on popup open
       if (hasXR) {
@@ -641,14 +731,18 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
       }
     }
 
-    // 5. Fit Bounds with comfortable padding
+    // 5. Fit Bounds with comfortable padding across complete corridor
     if (allLatLangs.length > 0) {
       const boundsObj = L.latLngBounds(allLatLangs as L.LatLngTuple[]);
-      map.fitBounds(boundsObj, {
-        padding: [45, 45],
-        maxZoom: 14,
-        animate: true,
-      });
+      if (boundsObj.isValid()) {
+        const latSpan = boundsObj.getNorth() - boundsObj.getSouth();
+        const maxZoom = latSpan > 5 ? 11 : 14;
+        map.fitBounds(boundsObj, {
+          padding: [45, 45],
+          maxZoom,
+          animate: true,
+        });
+      }
     }
   }, [
     effectiveRoute,
@@ -663,6 +757,7 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     navigate,
     guidance.locationState.coords,
     guidance.locationState.status,
+    guidance.locationState.accuracyMeters,
     guidance.progress.completedSegmentIds,
     disruptions,
     disruptionAssessment,
@@ -681,22 +776,70 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
     if (layersGroupRef.current && mapInstanceRef.current) {
       const b = layersGroupRef.current.getBounds();
       if (b.isValid()) {
-        mapInstanceRef.current.fitBounds(b, { padding: [45, 45], maxZoom: 14, animate: true });
+        const latSpan = b.getNorth() - b.getSouth();
+        const maxZoom = latSpan > 5 ? 11 : 14;
+        mapInstanceRef.current.fitBounds(b, { padding: [45, 45], maxZoom, animate: true });
       }
+    }
+  };
+
+  const handleZoomToLeg = () => {
+    if (!mapInstanceRef.current || !segments[effectiveActiveSegmentIndex]) return;
+    const seg = segments[effectiveActiveSegmentIndex];
+    const enrichedSeg = effectiveRoute?.segments?.[effectiveActiveSegmentIndex];
+    const legCoords: [number, number][] = [];
+
+    if (enrichedSeg?.geojson_geometry?.coordinates?.length) {
+      enrichedSeg.geojson_geometry.coordinates.forEach((c) => {
+        const norm = normalizeLeafletCoord(c as [number, number], true);
+        if (norm) legCoords.push(norm);
+      });
+    } else if (seg.geojsonGeometry?.coordinates?.length) {
+      seg.geojsonGeometry.coordinates.forEach((c) => {
+        const norm = normalizeLeafletCoord(c as [number, number], true);
+        if (norm) legCoords.push(norm);
+      });
+    }
+
+    const o = normalizeLeafletCoord([seg.origin.coordinates.lat, seg.origin.coordinates.lng]);
+    const d = normalizeLeafletCoord([seg.destination.coordinates.lat, seg.destination.coordinates.lng]);
+    if (o) legCoords.push(o);
+    if (d) legCoords.push(d);
+
+    if (legCoords.length >= 2) {
+      const b = L.latLngBounds(legCoords);
+      if (b.isValid()) {
+        mapInstanceRef.current.fitBounds(b, { padding: [50, 50], maxZoom: 15, animate: true });
+      }
+    }
+  };
+
+  const handleRetryTiles = () => {
+    setTileError(false);
+    setTileLoading(true);
+    if (tileLayerRef.current) {
+      tileLayerRef.current.redraw();
     }
   };
 
   const handleRecenterOrigin = () => {
     if (mapInstanceRef.current && segments[0]) {
-      const { lat, lng } = segments[0].origin.coordinates;
-      mapInstanceRef.current.setView([lat, lng], 13, { animate: true });
+      const o = normalizeLeafletCoord([segments[0].origin.coordinates.lat, segments[0].origin.coordinates.lng]);
+      if (o) {
+        mapInstanceRef.current.setView(o, 13, { animate: true });
+      }
     }
   };
 
   const handleRecenterDestination = () => {
     if (mapInstanceRef.current && segments[segments.length - 1]) {
-      const { lat, lng } = segments[segments.length - 1].destination.coordinates;
-      mapInstanceRef.current.setView([lat, lng], 13, { animate: true });
+      const d = normalizeLeafletCoord([
+        segments[segments.length - 1].destination.coordinates.lat,
+        segments[segments.length - 1].destination.coordinates.lng,
+      ]);
+      if (d) {
+        mapInstanceRef.current.setView(d, 13, { animate: true });
+      }
     }
   };
 
@@ -704,17 +847,12 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
   const activeSegment = segments[effectiveActiveSegmentIndex] || segments[0];
   const activeEnrichedSeg = effectiveRoute?.segments?.[effectiveActiveSegmentIndex];
 
-  // Total summary telemetry
-  const totalKm = effectiveRoute
-    ? Math.round(effectiveRoute.total_distance_meters / 1000)
-    : segments.reduce((sum, s) => sum + (s.distanceKm || 0), 0);
-
-  const totalMin = effectiveRoute
-    ? Math.round(effectiveRoute.total_duration_seconds / 60)
-    : segments.reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
+  // Total summary telemetry from canonical journey data
+  const totalKm = targetJourney.segments.reduce((sum, s) => sum + (s.distanceKm || 0), 0);
+  const totalMin = targetJourney.totalDurationMinutes || segments.reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
 
   const providerSource = effectiveRoute?.source || 'deterministic_geo';
-  const hasLiveGeometry = effectiveRoute?.has_live_geometry || effectiveRoute.segments?.some((s) => s.is_live_geometry);
+  const hasLiveGeometry = effectiveRoute?.has_live_geometry || effectiveRoute?.segments?.some((s) => s.is_live_geometry);
   const isValhallaSource = providerSource.includes('valhalla');
   const isGoogleSource = providerSource.includes('google');
 
@@ -876,6 +1014,14 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
                 </button>
                 <button
                   type="button"
+                  onClick={handleZoomToLeg}
+                  className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-700 transition-colors cursor-pointer"
+                  title="Focus Active Leg"
+                >
+                  <RouteIcon className="w-4 h-4 text-blue-600" />
+                </button>
+                <button
+                  type="button"
                   onClick={handleRecenterOrigin}
                   className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700 transition-colors cursor-pointer"
                   title="Focus Origin"
@@ -895,21 +1041,29 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
 
             {/* Tile Error Resilience Banner */}
             {tileError && (
-              <div className="absolute top-3 left-3 z-[1000] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-50/95 border border-amber-200 text-[10px] text-amber-800 shadow-sm backdrop-blur-xs font-mono">
-                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                <span>Basemap tiles temporarily unavailable.</span>
+              <div className="absolute top-3 left-3 z-[1000] flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50/95 border border-amber-200 text-xs text-amber-800 shadow-md backdrop-blur-xs font-mono">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Basemap tiles temporarily unavailable. Geographic vectors & route topology are active.</span>
+                <button
+                  type="button"
+                  onClick={handleRetryTiles}
+                  className="px-2 py-0.5 rounded bg-amber-200 hover:bg-amber-300 text-amber-900 font-bold text-[10px] cursor-pointer flex items-center gap-1"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Retry</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setViewMode('schematic')}
                   className="font-bold underline ml-1 text-amber-900 hover:text-amber-950 cursor-pointer"
                 >
-                  Switch to Waypoints View
+                  Switch to Waypoints
                 </button>
               </div>
             )}
 
             {/* Route Legend Indicator */}
-            <div className="absolute bottom-2 left-2 z-[1000] bg-white/95 px-3 py-1.5 rounded-lg border border-slate-200 shadow-xs backdrop-blur-xs flex items-center gap-3 text-[10px] font-mono text-slate-600">
+            <div className="absolute bottom-2 left-2 z-[1000] bg-white/95 px-3 py-1.5 rounded-lg border border-slate-200 shadow-xs backdrop-blur-xs flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-600 max-w-[80%]">
               <div className="flex items-center gap-1.5">
                 <div className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
                 <span>Origin</span>
@@ -922,12 +1076,30 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
                 <div className="w-2.5 h-2.5 rounded-full bg-rose-600" />
                 <span>Destination</span>
               </div>
+              <div className="h-3 w-px bg-slate-200 mx-0.5" />
+              {targetJourney.modes.map((m) => {
+                const s = getModeStyle(m);
+                return (
+                  <div key={m} className="flex items-center gap-1">
+                    <span
+                      className="inline-block w-3.5 h-1 rounded-sm"
+                      style={{ backgroundColor: s.stroke }}
+                    />
+                    <span className="capitalize">{m}</span>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Basemap Tile Attribution */}
-            <div className="absolute bottom-1 right-2 z-[1000] px-2 py-0.5 rounded bg-white/90 backdrop-blur-xs text-[9px] text-slate-500 border border-slate-200 shadow-2xs pointer-events-auto select-none">
-              &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="hover:underline text-slate-700 font-medium">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer" className="hover:underline text-slate-700 font-medium">CARTO</a>
-            </div>
+            <div
+              className="absolute bottom-1 right-2 z-[1000] px-2 py-0.5 rounded bg-white/90 backdrop-blur-xs text-[9px] text-slate-500 border border-slate-200 shadow-2xs pointer-events-auto select-none"
+              dangerouslySetInnerHTML={{
+                __html:
+                  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAP_TILE_ATTRIBUTION) ||
+                  DEFAULT_TILE_ATTRIBUTION,
+              }}
+            />
           </div>
         ) : (
           /* =========================================================================
@@ -1123,6 +1295,17 @@ export const JourneyMap: React.FC<JourneyMapProps> = ({
             <span>
               Legs: <strong className="text-slate-800">{segments.length}</strong>
             </span>
+            {targetJourney.arrivalWindow && (
+              <>
+                <span>·</span>
+                <span>
+                  Est. Arrival:{' '}
+                  <strong className="text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                    {targetJourney.arrivalWindow.earliestIST} – {targetJourney.arrivalWindow.latestIST} IST
+                  </strong>
+                </span>
+              </>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 text-slate-400">
